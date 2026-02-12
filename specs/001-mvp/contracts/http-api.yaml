@@ -1,0 +1,364 @@
+openapi: 3.1.0
+info:
+  title: NotebookLM Controller Daemon API
+  version: 1.0.0
+  description: |
+    Daemon HTTP API exposed on 127.0.0.1:19224.
+    All responses are JSON. Errors also return JSON with `success: false`.
+
+    Operations that touch the browser (exec, use) are queued and serialized.
+    Read-only operations (health, list, status) respond immediately.
+
+servers:
+  - url: http://127.0.0.1:19224
+    description: Local daemon
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: getHealth
+      tags: [daemon]
+      responses:
+        '200':
+          description: Daemon is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /status:
+    get:
+      summary: Daemon status
+      operationId: getStatus
+      tags: [daemon]
+      responses:
+        '200':
+          description: Current daemon state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+
+  /notebooks:
+    get:
+      summary: List all registered notebooks
+      operationId: listNotebooks
+      tags: [notebook]
+      responses:
+        '200':
+          description: Notebook list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NotebookEntry'
+
+  /notebooks/open:
+    post:
+      summary: Register and open a new notebook
+      operationId: openNotebook
+      tags: [notebook]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, name]
+              properties:
+                url:
+                  type: string
+                  description: NotebookLM notebook URL
+                name:
+                  type: string
+                  description: User-assigned alias
+      responses:
+        '200':
+          description: Notebook opened
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessWithNotebook'
+        '400':
+          description: Invalid URL or name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /notebooks/add:
+    post:
+      summary: Add an existing notebook to management
+      operationId: addNotebook
+      tags: [notebook]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, name]
+              properties:
+                url:
+                  type: string
+                name:
+                  type: string
+      responses:
+        '200':
+          description: Notebook added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddNotebookResponse'
+        '400':
+          description: Invalid URL or name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /notebooks/{id}/use:
+    post:
+      summary: Switch active notebook
+      operationId: useNotebook
+      tags: [notebook]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Switched to notebook
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  active:
+                    type: string
+        '404':
+          description: Notebook not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /notebooks/{id}/close:
+    post:
+      summary: Unregister a notebook
+      operationId: closeNotebook
+      tags: [notebook]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Notebook closed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Notebook not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /exec:
+    post:
+      summary: Execute natural language command on active notebook
+      operationId: execCommand
+      tags: [agent]
+      description: |
+        Queued operation. If another exec/use is in progress, this request
+        waits in the operation queue.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [command]
+              properties:
+                command:
+                  type: string
+                  description: Natural language command for the agent
+      responses:
+        '200':
+          description: Command executed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecResponse'
+        '400':
+          description: No active notebook or invalid command
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '408':
+          description: Operation timed out
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TimeoutErrorResponse'
+
+  /stop:
+    post:
+      summary: Stop the daemon
+      operationId: stopDaemon
+      tags: [daemon]
+      responses:
+        '200':
+          description: Daemon stopping
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+components:
+  schemas:
+    SuccessResponse:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+          const: true
+        message:
+          type: string
+
+    ErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          const: false
+        error:
+          type: string
+
+    TimeoutErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          const: false
+        error:
+          type: string
+        screenshot:
+          type: string
+          description: Base64-encoded screenshot for debugging
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        uptime:
+          type: number
+          description: Daemon uptime in seconds
+
+    StatusResponse:
+      type: object
+      properties:
+        running:
+          type: boolean
+        browserConnected:
+          type: boolean
+        activeNotebook:
+          type: string
+          nullable: true
+        notebookCount:
+          type: integer
+
+    NotebookEntry:
+      type: object
+      required: [id, url, title, description, status, active]
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [registering, ready, stale]
+        active:
+          type: boolean
+        sourceCount:
+          type: integer
+
+    SuccessWithNotebook:
+      type: object
+      properties:
+        success:
+          type: boolean
+        id:
+          type: string
+        url:
+          type: string
+        active:
+          type: boolean
+
+    AddNotebookResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        id:
+          type: string
+        sources:
+          type: array
+          items:
+            type: object
+        title:
+          type: string
+        description:
+          type: string
+
+    ExecResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        answer:
+          type: string
+          description: Agent response text (for queries)
+        citations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Citation'
+          description: Source citations (for queries)
+        sourceAdded:
+          type: string
+          description: Name of added source (for add operations)
+        screenshot:
+          type: string
+          description: Base64 screenshot (for screenshot requests)
+        data:
+          type: object
+          description: Generic structured data (for status/list queries)
+
+    Citation:
+      type: object
+      properties:
+        source:
+          type: string
+        excerpt:
+          type: string
