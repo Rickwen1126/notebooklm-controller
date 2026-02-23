@@ -1,26 +1,33 @@
 <!--
   Sync Impact Report
   ==================
-  Version change: 1.0.0 → 1.1.0
+  Version change: 1.3.0 → 1.4.0
   Modified principles:
-    - III. Agent 程式本質 → 更新為 1 agent : 1 browser instance 模型
+    - III. Agent 程式本質 → 從「BrowserPool 中央集權管理 + 全權委派操作」
+      改回「Single Browser Multi-tab」模型。
+      理由：實驗驗證（Spike 0, 2026-02-23）證實 background tab 操作不可靠
+      是 Puppeteer page.click() 高層 API 的問題，非 Chrome/CDP 限制。
+      CDP Input.dispatchMouseEvent + page.screenshot() 在 background tab
+      完全可靠（5 tabs 並行，15/15 成功）。
+      Multi-tab 優勢：(1) 省記憶體（~500MB vs ~900MB）；
+      (2) 認證簡化（一個 userDataDir 即可，不需 cookie extraction/injection）；
+      (3) 程序管理簡化（一個 Chrome process）。
+      Agent 仍透過 CDP 底層操作（非 Puppeteer 高層 API）擁有完整操作能力。
   Modified sections:
-    - 並行與資料流設計約束 — 移除 Page Pool multi-tab 約束，
-      改為 Browser Instance Isolation（1 agent : 1 browser）
+    - III. Agent 程式本質 — BrowserPool → Single Browser Multi-tab
+    - 並行與資料流設計約束 — BrowserPool → TabManager 模型
   Added sections: None
   Removed sections: None
   Templates requiring updates:
     - .specify/templates/plan-template.md — ✅ no update needed
-      (template is generic; constitution check section derives from principles)
     - .specify/templates/spec-template.md — ✅ no update needed
-      (spec template is principle-agnostic)
-    - .specify/templates/tasks-template.md — ⚠ pending
-      (checkpoint commit + code review + codetour gates not yet reflected;
-       carried over from 1.0.0)
+    - .specify/templates/tasks-template.md — ⚠ pending (carried over)
     - .specify/templates/agent-file-template.md — ✅ no update needed
   Follow-up TODOs:
-    - specs/001-mvp/spec.md 中 Key Entities 的 Page Pool 描述需同步更新
-      為 Browser Instance Pool
+    - spec.md: FR-140~147 BrowserPool → TabManager
+    - plan.md: 模組結構 browser-pool → tab-manager
+    - research.md: 更新 Browser Automation section
+    - data-model.md: BrowserInstance → Tab model
 -->
 
 # NotebookLM Controller Constitution
@@ -46,13 +53,18 @@
 - 所有設計決策 MUST 以「agent 能否自主完成操作」為核心考量。
 - Agent session、tool 呼叫、vision model 互動是一等公民，
   非附加功能。
-- **瀏覽器隔離原則**：每個 agent MUST 使用獨立的瀏覽器實例
-  （browser instance），而非同一瀏覽器的不同分頁。
-  理由：vision-based agent 依賴瀏覽器的 active tab 進行截圖
-  與 UI 操作，同一瀏覽器一次只能有一個 active tab，因此
-  多 tab 共用一個瀏覽器在 vision 模型下無法真正並行。
-- MVP 階段可先以「1 daemon : 1 browser : 序列化操作」實作，
-  但架構 MUST 預留擴展為「1 agent : 1 browser instance」的空間。
+- **Single Browser Multi-tab 架構**：
+  - Daemon 管理一個 Chrome instance（headless），每個 notebook 一個 tab。
+  - Agent session 透過 TabManager 取得 tab handle（CDP session），
+    操作完畢歸還。Agent 不能自行啟動/關閉 Chrome。
+  - Agent 透過 CDP 底層 API（`Input.dispatchMouseEvent`、
+    `Page.captureScreenshot`）操作 tab，不依賴 Puppeteer 高層 API。
+    背景 tab 操作完全可靠（實驗驗證）。
+  - 認證：一個 `userDataDir` 即可，首次 headed 登入後
+    後續 headless 直接複用 session。
+  - NetworkGate 集中式流量閘門：agent 操作前 MUST `acquirePermit()`，
+    異常時觸發全域 backoff。
+  - Tab 超時未歸還 → daemon 強制關閉 tab。
 
 ### IV. 測試先行，通過才推進 (Test-First, Pass-Before-Proceed)
 
@@ -117,14 +129,14 @@
 本專案架構核心為 daemon 管理多個 agent session，天然涉及並行處理。
 以下約束補充 Principle III 與 Principle VII 的具體實施規則：
 
-- **Agent ↔ Browser 隔離**：每個 agent MUST 使用獨立的瀏覽器實例。
-  同一瀏覽器一次只能有一個 active tab，vision-based agent 依賴
-  active tab 進行截圖與操作，因此「多 tab 共用一個瀏覽器」
-  在 vision 模型下無法並行。
-  - MVP 階段：1 daemon : 1 browser instance，所有 notebook 操作
-    序列化執行（同一時間只操作一個 notebook）。
-  - 擴展階段：1 agent : 1 browser instance，可真正並行處理
-    多個 notebook。
+- **Agent ↔ Browser（Single Browser Multi-tab 模型）**：Daemon 管理
+  一個 Chrome instance，每個 agent session 取得獨立的 tab（CDP session）。
+  Agent 透過 CDP 底層 API 操作，background tab 截圖/點擊完全可靠，
+  支援真正的跨 notebook parallel 操作。
+  - Chrome 生命週期完全由 daemon 管理（agent 不能啟動/關閉 Chrome）。
+  - Tab 超時未歸還 → daemon 強制關閉。
+- **NetworkGate（集中式流量閘門）**：不在 data path，只管「能不能做」。
+  Agent 操作前 MUST `acquirePermit()`。異常（429/timeout）觸發全域 backoff。
 - **Agent Pool ↔ State Store**：透過事件或訊息傳遞同步狀態，
   禁止 agent 直接寫入 store 內部結構。
 - **HTTP Router ↔ Agent Pool**：request handler MUST 透過
@@ -171,4 +183,4 @@
 - 合規審查：每次 checkpoint code review MUST 包含 Constitution
   合規性檢查。
 
-**Version**: 1.1.0 | **Ratified**: 2026-02-02 | **Last Amended**: 2026-02-06
+**Version**: 1.4.0 | **Ratified**: 2026-02-02 | **Last Amended**: 2026-02-23

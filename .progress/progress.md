@@ -1,64 +1,134 @@
-## 2026-02-12 15:14 — Architecture pivot + deep design: multi-tab, notify adapter, connection manager
+## 2026-02-22 10:23 — GitHub remote setup
 
-**Goal**: Pivot architecture from MCP to CLI + Skill + Notify, then deep-dive concurrency and notification routing design
+**Goal**: Set up remote repository and push all branches
 
 **Done**:
-- Research: Patchright, curl-cffi, community projects, MCP async limitations, Claude Code hooks
-- Architecture decision: Drop MCP, use CLI + Skill + Inbox + Hook pattern
-- New spec written: `specs/002-abstract-cli-notify/spec.md` (branch `002-abstract-cli-notify`)
-- Checklist: `specs/002-abstract-cli-notify/checklists/requirements.md` — 16/16 PASS
-- Deep design discussion: multi-notebook parallelism, inbox concurrency, notification routing
-- Research: Claude Code hook stdin JSON includes `session_id` (not env var, parsed from stdin)
-- Spec v2 update: rewrote `specs/002-abstract-cli-notify/spec.md` with all new FRs (FR-105, FR-115, FR-120~127, FR-140~144, FR-170~175, FR-180~184) and updated Key Entities, Clarifications, Success Metrics
+- Created private GitHub repo: `Rickwen1126/notebooklm-controller`
+- Pushed `001-mvp` and `main` branches with upstream tracking
 
-**Decisions**:
-- MCP removed entirely — blocking tool calls + no server-push = worse than CLI
-- **Multi-tab broker**: 1 daemon, 1 Chrome (headless), N tabs. Each notebook = 1 tab. Cross-notebook parallel, intra-notebook serial.
-- **Connection Manager** replaces Browser Strategy: abstraction at connection manager layer, not strategy pattern. Agent gets pageId + closure-bound tools, never sees Puppeteer.
-- **Headless + headed auth**: first login headed (user does Google auth), cookies persisted to `~/.nbctl/profiles/`, subsequent runs headless. `nbctl reauth` for session expiry.
-- **Notification Adapter** (per-tool best practice, NOT lowest-common-denominator): Claude Code adapter uses `session_id` from hook stdin for per-session inbox routing + full push. Generic adapter = pull-based fallback.
-- **Per-session inbox**: `~/.nbctl/inbox/<session-id>/<priority>/task-<taskId>.json`. No cross-session notification leakage.
-- **Consume = rename to consumed/** (not delete): atomic, preserves audit trail, daemon cleans consumed/ after 24h.
-- **Multi-layer anti-forget**: (1) CLI hint in async response, (2) hook push, (3) Stop hook blocks on urgent, (4) Skill template guidance.
-- Patchright: not needed now, but Connection Manager interface reserved for future swap
-- curl-cffi: rejected (no JS runtime, Python ecosystem mismatch)
-
-**State**: Branch `002-abstract-cli-notify`. Spec v2 complete with all design decisions integrated. Checklist may need re-run against v2 spec. 001-mvp plan artifacts need update for new modules (connection-manager, notify-adapter, multi-tab).
+**State**: Both branches on remote. All local changes still unstaged (9 modified + 2 untracked from spec/plan updates).
 
 **Next**:
-- [ ] Re-run checklist against v2 spec (new FRs added)
-- [ ] Run `/speckit.clarify` or `/speckit.plan` on updated 002 spec
-- [ ] Update 001-mvp plan to reflect new modules (connection-manager replaces browser, notify-adapter replaces mcp)
-- [ ] Consider merging 001+002 specs into unified implementation plan
+- [ ] Commit outstanding spec/plan changes when ready
+- [ ] Run `/speckit.tasks` to generate implementation tasks
+- [ ] Begin implementation
 
 ---
 
-## 2026-02-12 09:34 — Spec clarify + plan Phase 0-1 complete
+## 2026-02-12 23:58 — BrowserPool architecture update complete
 
-**Goal**: Complete speckit workflow: checklist → clarify → plan for 001-mvp feature
+**Goal**: Update all design artifacts from multi-tab to BrowserPool architecture
 
 **Done**:
-- Architecture checklist generated: `specs/001-mvp/checklists/architecture.md` (34 items)
-- Clarify session completed (5 questions): duplicate start, serialization scope, MCP coupling, HTTP API auth, agent session lifecycle
-- All clarifications integrated into `specs/001-mvp/spec.md` (Clarifications section + inline updates to FR-003, FR-025/026, FR-030, Key Entities §Agent, US1-AS5)
-- Phase 0 research: `specs/001-mvp/research.md` — Agent SDK V2, puppeteer-core CDP, MCP SDK stdio, repomix, Fastify, JSON file storage, Vitest
-- Phase 1 plan: `specs/001-mvp/plan.md` — 7-module structure (cli/daemon/agent/browser/content/state/mcp), constitution check all PASS
-- Phase 1 data model: `specs/001-mvp/data-model.md` — NotebookEntry, SourceRecord, ArtifactRecord, OperationLogEntry, DaemonState, OperationQueueItem
-- Phase 1 contracts: `specs/001-mvp/contracts/http-api.yaml` (OpenAPI), `specs/001-mvp/contracts/mcp-tools.md` (2 MCP tools)
-- Phase 1 quickstart: `specs/001-mvp/quickstart.md`
-- CLAUDE.md auto-updated with tech stack
-- Port migration: all specs/ files updated from 9223→19223, 9224→19224 (avoid iso-browser port collision)
+- `/speckit.plan` Phase 0-1 complete, all artifacts generated and **updated to BrowserPool architecture**
+- Constitution v1.2.0 → v1.3.0：BrowserPool 中央集權管理 + 全權委派操作
+- spec.md v3 → v4：FR-140~147（BrowserPool+AuthManager）、FR-170~175（multi-browser）、FR-190~194（NetworkGate）、Key Entities、Clarifications、Success Criteria 全部更新
+- plan.md：10 模組結構（+AuthManager）、dependency graph 重寫、constitution check ALL PASS
+- research.md v2 → v3：Browser Automation 全部重寫（BrowserPool 設計、cookie injection 可行性、agent 自我修復分析）、NetworkGate 設計
+- data-model.md：PageHandle → BrowserInstance、BoundTools 移除（agent 取得完整 Chrome）、NotebookEntry tabOpen → active、DaemonStatusResponse browserPool schema
+- contracts/http-api.yaml：NotebookEntry schema、DaemonStatus schema、endpoint descriptions
+- quickstart.md：open/close 指令描述更新
+- CLAUDE.md：10 模組結構更新
 
 **Decisions**:
-- `nbctl start` while daemon running → error, no second instance
-- Serialization: only browser-touching ops (`exec`, `use`) queued; `list`/`status` instant
-- MCP: embedded in daemon, stdio transport, closures share state
-- HTTP API: localhost-only (127.0.0.1), no token auth for MVP
-- Agent session: per-notebook lifecycle, isolated between notebooks
-- Ports: 19223 (Chrome CDP), 19224 (daemon HTTP API)
+- Constitution v1.3.0：BrowserPool 中央集權管理 + 全權委派操作
+- Cookie sharing：userDataDir SingletonLock → 改用 cookie injection（BrowserContext.setCookie）
+- Daemon 程序化：`child_process.fork` + PID file
+- BrowserPool max=3（~900MB，vs multi-tab ~500MB，差 400MB 可接受）
+- Agent 擁有完整 Chrome instance（非 BoundTools interface），自我修復能力大幅提升
+- NetworkGate permit-based 流量控制（不在 data path）
 
-**State**: Branch `001-mvp`. All Phase 0+1 artifacts generated. No code written yet. `docs/` files still reference old ports (intentionally — historical reference docs).
+**State**: Branch `001-mvp`. **所有設計 artifacts 已更新為 BrowserPool 架構**。Constitution v1.3.0。Spec v4。Plan 10 模組。No code written.
 
 **Next**:
-- [ ] Run `/speckit.tasks` to generate implementation tasks from the plan
-- [ ] Begin implementation with Phase 1 tasks
+- [ ] User review 更新後的架構（constitution → spec → plan → research → data-model）
+- [ ] Run `/speckit.tasks` to generate implementation tasks
+- [ ] Begin implementation
+
+**User Notes**:
+
+### 架構重大變更：Multi-tab → BrowserPool（中央集權 + 全權委派）✅ 已更新至所有 artifacts
+
+**問題 1 — 序列化讓 multi-tab 優勢消失**：
+Puppeteer research 確認 background tab 的 screenshot/click 不可靠（#3318, #12712），因此 MVP 必須序列化所有 vision 操作。但序列化後 multi-tab 的唯一好處只剩「省 navigate 時間」，不值得整個 ConnectionManager 抽象。
+
+**問題 2 — BoundTools interface 限制 agent 自我修復能力**：
+Multi-tab 架構下 session agent 拿到的是 bounded interface（`click(pageId, x, y)`），遇到意外（modal dialog、redirect、element 消失）只能回報錯誤。需要額外 repair agent + unsolved problem queue，上下文傳遞複雜。若 agent 有完整 Chrome instance，可自己截圖分析、retry、關 modal → 可靠度大幅提升。
+
+**問題 3 — 但需要集中管理防止濫用**：
+如果每個 agent 自行啟動 Chrome，daemon 無法統一管理流量、監控連線、控制 rate limit。Agent 可能不釋放 Chrome、跳過清理、甚至亂 kill process。
+
+**最終架構：中央集權管理 + 全權委派操作**：
+
+```
+Daemon（中央集權）
+├── AuthManager
+│   └── 管理 Google cookies（1 headed Chrome login → extract cookies → save）
+│
+├── BrowserPool (max N headless Chrome instances, e.g. N=3)
+│   ├── acquire(notebookUrl) → 啟動 headless Chrome + inject cookies + navigate
+│   ├── release(instanceId) → 歸還 pool
+│   ├── 超時沒歸還 → daemon 強制回收
+│   └── Chrome 生命週期完全由 daemon 管理（agent 不能啟動/關閉 Chrome）
+│
+├── NetworkGate (集中式流量閘門，不在 data path，只管「能不能做」)
+│   ├── acquirePermit(notebookId) → throttled 時等待
+│   ├── reportAnomaly(429/timeout) → 觸發全域 backoff
+│   └── getHealth() → healthy/throttled/disconnected
+│
+└── Agent Session (per notebook)
+    ├── 拿到：完整 Chrome instance（full self-repair 能力）
+    ├── 不能：啟動/關閉 Chrome（daemon 管）
+    ├── 必須：操作前 acquirePermit()
+    └── 靠：prompt + skill 定義約束行為
+```
+
+**Cookie sharing 機制**：
+- Chrome 對 `userDataDir` 有 SingletonLock，不能共享
+- 解法：headed Chrome 登入 → 擷取 Google cookies（SID, HSID, SSID, APISID, __Secure-* on .google.com）→ 儲存到 `~/.nbctl/profiles/cookies.json`
+- 每個 headless Chrome instance 啟動後注入 cookies via `BrowserContext.setCookie()`
+- 需實測 NotebookLM 是否只靠 cookies（可能有 localStorage/IndexedDB auth state）
+
+**資源管理**：
+- Pool max=3 → ~900MB（vs multi-tab ~500MB，差 400MB 可接受）
+- 不是每個 notebook 常駐一個 Chrome，需要操作時才 acquire
+- Agent 超時未歸還 → daemon 強制回收（防 agent 發瘋不釋放）
+
+**Agent 防線（防 agent 發瘋）**：
+1. Skill prompt — 明確操作範圍和禁止事項
+2. BrowserPool timeout — agent 超時沒歸還 → daemon 強制回收
+3. NetworkGate — 即使 agent 瘋狂操作，gate 擋住異常流量
+4. Operation timeout — 單一操作超時直接 kill
+
+**此架構同時解決**：
+- Parallel 問題：多個 Chrome instance 天然支援真正 parallel
+- Self-repair 問題：agent 有完整 Chrome，可自主診斷修復
+- 流量控制問題：NetworkGate 集中管理 rate limit
+- 資源控制問題：BrowserPool 管理 Chrome 生命週期，agent 無權自行啟停
+
+**對照 spec 需要更新的 FR**：
+- FR-140~144：ConnectionManager → BrowserPool + AuthManager + NetworkGate
+- FR-170~175：multi-tab daemon → multi-browser-instance daemon
+- FR-171：「跨 notebook parallel」→ BrowserPool 天然支援
+- FR-172：「每 tab 獨立 agent session」→ 「每 Chrome instance 獨立 agent session」
+
+---
+
+## 2026-02-12 19:25 — Spec merge complete, branch consolidated to 001-mvp
+
+**Goal**: Merge 002-abstract-cli-notify into 001-mvp as a single unified spec, consolidate branches
+
+**Done**:
+- Committed all uncommitted design artifacts on 002-abstract-cli-notify branch (a449f1b)
+- Merged 002 spec into 001-mvp/spec.md as unified v3 (7386643): 756 insertions, 533 deletions
+- Removed superseded artifacts: `specs/002-abstract-cli-notify/`, `contracts/mcp-tools.md` (f9abd70)
+- Moved `001-mvp` branch to current HEAD, deleted `002-abstract-cli-notify` branch
+- User reviewed unified spec — approved
+
+**Decisions**:
+- Merge (not patch) because no code written yet — single spec is cleaner
+- US renumbering: US13=async, US14=notify, US15=skill, US16=adapter, US17=connmgr, US18=skill-param, US19=smart-select (was US14), US20-24=naming (was US15-19)
+- FR numbering: keep both ranges (FR-001~051 from 001 + FR-100~184 from 002) for traceability
+- Old plan.md / data-model.md kept on disk but considered stale — will be regenerated by speckit
+
+**State**: Branch `001-mvp` at `f9abd70`. Unified spec v3 ready. Old plan/data-model/contracts stale. Ready for speckit pipeline.
