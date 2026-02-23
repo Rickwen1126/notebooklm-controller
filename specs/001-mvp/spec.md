@@ -2,24 +2,25 @@
 
 **Feature Branch**: `001-mvp`
 **Created**: 2026-02-06
-**Status**: Draft (v3 — 整併 002-abstract-cli-notify)
+**Status**: Draft (v4 — BrowserPool 架構)
 **Input**: PRD 文件 `docs/prd.md` + 架構重構討論
 
 <!--
   v1 初始規格（2026-02-06）
   v2 對齊 Constitution v1.1.0，簡化指令模式（2026-02-07）
   v3 整併 002-abstract-cli-notify（2026-02-12）：
-  1. 移除 MCP 整合（舊 FR-025~FR-027、舊 US13），
-     改以 CLI + AI Skill + Notification Adapter 取代。
-  2. 瀏覽器控制抽象化：Connection Manager 取代直連 iso-browser，
-     底層自動化程式庫可替換（Puppeteer → Patchright）。
-  3. 單一 browser + multi-tab 架構：1 daemon, 1 Chrome, N tabs。
-     每個 notebook = 1 tab，跨 notebook parallel，同 notebook serial。
-  4. Headless / headed 雙模式：daemon 自行管理 Chrome 生命週期，
-     首次登入 headed，之後 headless。不再依賴外部 iso-browser。
-  5. 非同步操作 + Notification Inbox + per-session routing。
-  6. Notification Adapter（per-tool best practice, NOT lowest-common-denominator）。
-  7. Agent Skill 參數化：操作技能以外部檔案定義，可調整不重編譯。
+  1. 移除 MCP 整合，改以 CLI + AI Skill + Notification Adapter 取代。
+  2. 瀏覽器控制抽象化：Connection Manager + multi-tab 架構。
+  3. 非同步操作 + Notification Inbox + per-session routing。
+  v4 BrowserPool 架構 pivot（2026-02-12）：
+  1. multi-tab → BrowserPool：每個 agent session 取得獨立 headless Chrome
+     instance（非 tab），天然支援真正 parallel 操作。
+  2. ConnectionManager → BrowserPool + AuthManager + NetworkGate 三模組。
+  3. BoundTools interface → agent 取得完整 Chrome instance，
+     具備完整自我修復能力（截圖分析、retry、關 modal）。
+  4. Cookie injection：headed Chrome 登入 → 擷取 cookies → 注入 headless。
+  5. NetworkGate 集中式流量閘門：permit-based，不在 data path。
+  6. Chrome 生命週期完全由 daemon 管理，agent 不能啟動/關閉 Chrome。
 -->
 
 ## 使用者情境與測試 *(mandatory)*
@@ -31,24 +32,34 @@
   - Part C: 輔助功能 (US8-US9)：截圖除錯、狀態持久化
   - Part D: 查詢與使用 (US10-US12)：向 NotebookLM 查詢並使用知識
   - Part E: CLI + Skill + Notify 整合 (US13-US16)：非同步操作與通知
-  - Part F: 瀏覽器抽象化 (US17-US18)：Connection Manager、Skill 參數化
+  - Part F: 瀏覽器抽象化 (US17-US18)：BrowserPool、Skill 參數化
   - Part G: 智慧選擇 (US19)：自動選擇最相關的 notebook
   - Part H: 命名與資源管理 (US20-US24)：命名、索引、歷程紀錄
 
   完整工作流：啟動 → 認證 → 納管 → 餵入 → 命名 → 查詢 → 使用
   即使只完成 US1-US3 + US10 + US13，就能完成核心流程。
 
-  架構概要：
-  - 1 daemon : 1 Chrome instance（headless/headed）: N tabs
-  - Connection Manager 管理 Chrome 生命週期與 multi-tab
-  - 每個 notebook 對應一個 tab + 獨立的 agent session
-  - 跨 notebook parallel 執行，同 notebook 內 serial 執行
+  架構概要（BrowserPool 中央集權管理 + 全權委派操作）：
+  - Daemon 管理 BrowserPool（max N headless Chrome instances，如 N=3）
+  - AuthManager 管理 Google cookies（headed Chrome 登入 → 擷取 → 注入 headless）
+  - NetworkGate 集中式流量閘門（permit-based，不在 data path）
+  - 每個 agent session 透過 acquire() 取得完整 Chrome instance + 獨立 agent session
+  - 跨 notebook 天然 parallel（獨立 Chrome instance），同 notebook serial
+  - Agent 擁有完整 Chrome instance，可自主截圖分析/retry/關 modal（自我修復）
+  - Chrome 生命週期由 daemon 管理，agent 不能啟動/關閉 Chrome
   - 透過 `--nb <id>` 指定操作目標，或 `nbctl use` 設定預設 notebook
   - 非同步操作：`--async` 立即返回 taskId，結果透過 Notification Inbox 送達
   - Notification Adapter：per-tool 最佳實作（Claude Code adapter = full push）
 
   指令模式：
-  - 管理指令（結構化）：start/stop/status/list/open/close/use/add/add-all/reauth/skills
+  - 管理指令（結構化）：start/stop/status/list/open/close/use/add/add-all/rename/remove/cancel/reauth/skills
+    - `add <url> --name <alias>`：納管既有 notebook（使用者已知 URL）
+    - `open <alias>`：標記已註冊 notebook 為 active（不接受 URL）
+    - `rename <old> <new>`：變更 notebook 別名
+    - `remove <alias>`：從管理中移除 notebook（不刪除 NotebookLM 上的筆記本）
+    - `cancel <taskId>`：取消排隊中或執行中的非同步任務
+    - `status`：無參數=daemon 狀態；`<taskId>`=任務狀態；`--all`=所有任務
+    - 建立新 notebook：透過 exec 自然語言完成（URL 由 NotebookLM 動態產生）
   - 操作指令（自然語言）：nbctl exec "<自然語言>" --nb <id> [--async]
   - 非同步管理：nbctl status <taskId> / nbctl status --all
   - Adapter 管理：nbctl install-hooks / uninstall-hooks / export-skill
@@ -91,12 +102,19 @@ Chrome 啟動、API 可存取；執行 `nbctl stop` 確認乾淨關閉。
    使用者完成登入後 cookies 自動持久化。
 
 3. **Given** daemon 正在執行，
-   **When** 使用者執行 `nbctl status`，
-   **Then** 輸出 JSON 包含 `{ "running": true, "browserConnected": true, "openNotebooks": [...], "defaultNotebook": null }`.
+   **When** 使用者執行 `nbctl status`（不帶任何參數），
+   **Then** 輸出 daemon 級別狀態 JSON：
+   ```json
+   { "running": true, "browserConnected": true,
+     "network": "healthy",
+     "openNotebooks": [...], "defaultNotebook": null,
+     "pendingTasks": 2, "runningTasks": 1 }
+   ```
+   （`nbctl status <taskId>` 查詢單一任務；`nbctl status --all` 列出所有近期任務。）
 
 4. **Given** daemon 正在執行，
    **When** 使用者執行 `nbctl stop`，
-   **Then** daemon 關閉所有 notebook tab、關閉 Chrome、釋放資源、程序結束，
+   **Then** daemon 回收所有 Chrome instance、關閉 BrowserPool、釋放資源、程序結束，
    輸出 JSON `{ "success": true, "message": "Daemon stopped" }`。
 
 5. **Given** Chrome 無法啟動（如 chromium 未安裝），
@@ -121,19 +139,24 @@ Chrome 啟動、API 可存取；執行 `nbctl stop` 確認乾淨關閉。
 
 ---
 
-### User Story 2 - Notebook 管理與 Multi-tab 操作 (Priority: P2)
+### User Story 2 - Notebook 管理與 BrowserPool 操作 (Priority: P2)
 
-身為開發者，我希望能透過 CLI 註冊 NotebookLM notebook，
-為其指派別名，並在 daemon 中同時開啟多個 notebook（各自一個 tab），
-讓我能同時對不同 notebook 發出操作。
+身為開發者，我希望能透過 CLI 管理 NotebookLM notebook，
+包括納管既有 notebook、為已註冊的 notebook 分配 Chrome instance、
+以及透過自然語言指令建立全新的 notebook。
 
-Daemon 採用 multi-tab 架構：每個 notebook 對應一個 Chrome tab，
-跨 notebook 的操作可 parallel 執行，同一 notebook 內的操作 serial 執行。
+Daemon 採用 BrowserPool 架構：操作時透過 `acquire()` 從 pool 取得
+獨立的 headless Chrome instance，操作完畢 `release()` 歸還。
+跨 notebook 天然支援 parallel（獨立 Chrome instance），
+同一 notebook 內的操作 serial 執行。
 使用 `--nb <id>` 指定操作目標，或用 `nbctl use` 設定預設 notebook。
 
-對於我在 NotebookLM 中已有的大量 notebook，系統不主動處理，
-而是提供 `add` 指令讓我選擇性地將想管理的 notebook 納入，
-或使用 `add-all` 以交互式方式批次納管。
+指令語意：
+- `add <url> --name <alias>`：將既有 NotebookLM notebook 納入管理（使用者已知 URL）。
+- `add-all`：以交互式方式批次納管使用者帳號中的所有既有 notebook。
+- `open <alias>`：標記 notebook 為 active，下次操作時從 BrowserPool 取得 Chrome instance。
+- `close <alias>`：標記 notebook 為 closed，釋放 Chrome instance（如有），保留註冊資訊。
+- 建立新 notebook：透過 `nbctl exec` 自然語言指令完成（URL 由 NotebookLM 在瀏覽器中動態產生，使用者事先不知道）。
 
 **Why this priority**: 必須能管理 notebook 才能執行任何 notebook 內操作。
 依賴 US1 的 daemon 已啟動。既有 notebook 的納管是使用者的第一步操作，
@@ -145,42 +168,42 @@ Daemon 採用 multi-tab 架構：每個 notebook 對應一個 Chrome tab，
 
 **Acceptance Scenarios**:
 
-1. **Given** daemon 執行中且 Chrome 已連線，
-   **When** 使用者執行 `nbctl open https://notebooklm.google.com/notebook/xxx --name research`，
-   **Then** daemon 在 Chrome 中開啟新 tab 並導航至該 URL，
-   將 notebook 註冊為受管理 notebook，建立 agent session，
+1. **Given** daemon 執行中且 notebook "research" 已註冊但非 active（`active: false`），
+   **When** 使用者執行 `nbctl open research`，
+   **Then** daemon 標記 notebook 為 active，下次操作時從 BrowserPool acquire
+   Chrome instance + inject cookies + navigate 至該 notebook URL，
    輸出 JSON `{ "success": true, "id": "research", "url": "...", "status": "ready" }`。
 
-2. **Given** 使用者已開啟 notebook "research" 和 "ml-papers"，
+2. **Given** 使用者已註冊 notebook "research" 和 "ml-papers"，
    **When** 使用者同時執行：
    ```
    nbctl exec "加來源" --nb research --async
    nbctl exec "問問題" --nb ml-papers --async
    ```
-   **Then** 兩個操作在不同 tab 上 parallel 執行，各自獨立返回 taskId。
+   **Then** 兩個操作取得獨立 Chrome instance，parallel 執行，各自獨立返回 taskId。
 
-3. **Given** 已開啟多個 notebook，
+3. **Given** 已註冊多個 notebook，
    **When** 使用者執行 `nbctl list`，
-   **Then** 輸出 JSON 陣列，每個 notebook 包含 description 與 tab 狀態：
+   **Then** 輸出 JSON 陣列，每個 notebook 包含 description 與活躍狀態：
    ```json
    [
-     { "id": "research", "url": "...", "status": "ready", "tabOpen": true,
+     { "id": "research", "url": "...", "status": "ready", "active": true,
        "description": "包含專案認證模組與 API 文件的開發筆記" },
-     { "id": "ml-papers", "url": "...", "status": "ready", "tabOpen": true,
+     { "id": "ml-papers", "url": "...", "status": "ready", "active": true,
        "description": "..." }
    ]
    ```
 
-4. **Given** 已開啟 notebook "research"，
+4. **Given** notebook "research" 正在使用 Chrome instance，
    **When** 使用者執行 `nbctl close research`，
-   **Then** daemon 關閉該 notebook 的 tab 與 agent session，
+   **Then** daemon 釋放該 notebook 的 Chrome instance（歸還 BrowserPool）與 agent session，
    但保留 Notebook Registry 中的註冊資訊，
    輸出 JSON `{ "success": true }`,
-   `nbctl list` 中該 notebook 顯示 `"tabOpen": false`。
+   `nbctl list` 中該 notebook 顯示 `"active": false`。
 
 5. **Given** daemon 執行中，
-   **When** 使用者執行 `nbctl open <invalid-url> --name test`，
-   **Then** 輸出錯誤 JSON `{ "success": false, "error": "Invalid NotebookLM URL" }`。
+   **When** 使用者執行 `nbctl add <invalid-url> --name test`，
+   **Then** 輸出錯誤 JSON `{ "success": false, "error": "Invalid NotebookLM URL. Expected format: https://notebooklm.google.com/notebook/<id>" }`。
 
 6. **Given** 使用者想設定預設 notebook 避免每次都帶 `--nb`，
    **When** 使用者執行 `nbctl use research`，
@@ -189,7 +212,7 @@ Daemon 採用 multi-tab 架構：每個 notebook 對應一個 Chrome tab，
 
 7. **Given** 使用者的 NotebookLM 帳號中有多個既有 notebook，
    **When** 使用者執行 `nbctl add https://notebooklm.google.com/notebook/yyy --name ml-papers`，
-   **Then** daemon 開啟 tab、導航至該 URL、掃描 notebook 狀態、
+   **Then** daemon 從 BrowserPool acquire Chrome instance、inject cookies、導航至該 URL、掃描 notebook 狀態、
    將其納入管理並同步到 local cache，
    輸出 JSON `{ "success": true, "id": "ml-papers", "sources": [...], "title": "...", "description": "..." }`。
 
@@ -207,9 +230,49 @@ Daemon 採用 multi-tab 架構：每個 notebook 對應一個 Chrome tab，
     **When** daemon 找不到該 notebook，
     **Then** 輸出錯誤 JSON `{ "success": false, "error": "Notebook '<id>' not found. Use 'nbctl list' to see registered notebooks." }`。
 
-11. **Given** 已開啟的 notebook tab 數量達到上限（預設 10），
-    **When** 使用者嘗試開啟新 notebook，
-    **Then** 輸出錯誤 JSON `{ "success": false, "error": "Tab limit reached (10). Close an idle notebook with 'nbctl close <id>'." }`。
+11. **Given** BrowserPool 中所有 Chrome instance 已被佔用（預設上限 3），
+    **When** 使用者嘗試操作新 notebook，
+    **Then** 操作排入等待佇列，直到有 Chrome instance 歸還。
+    若等待超時，輸出錯誤 JSON `{ "success": false, "error": "BrowserPool exhausted (max 3). Wait for running operations or close idle notebooks with 'nbctl close <id>'." }`。
+
+12. **Given** daemon 執行中，使用者想建立全新的 NotebookLM 筆記本，
+    **When** 使用者執行 `nbctl exec "建立一本新的筆記本叫 my-research"`，
+    **Then** agent 導航至 NotebookLM 首頁，點擊「新增筆記本」按鈕，
+    等待 NotebookLM 建立新筆記本並取得動態產生的 URL，
+    自動將新筆記本註冊至 Notebook Registry 並指定別名，
+    輸出 JSON `{ "success": true, "id": "my-research", "url": "...", "status": "ready" }`。
+
+13. **Given** daemon 執行中，使用者想將某份資料直接變成一本新筆記本，
+    **When** 使用者執行 `nbctl exec "把 ~/code/my-project 變成一本新的筆記本" --async`，
+    **Then** agent 先建立新筆記本（同 AS12 流程），
+    再將資料轉換並新增為來源（同 US3 流程），
+    完成後筆記本已包含該來源且已自動命名。
+
+14. **Given** 使用者執行 `nbctl open <不存在的 alias>`，
+    **When** Notebook Registry 中找不到該 alias，
+    **Then** 輸出錯誤 JSON `{ "success": false, "error": "Notebook '<alias>' not registered. Use 'nbctl add <url> --name <alias>' to register, or 'nbctl exec \"建立新筆記本\"' to create one." }`。
+
+15. **Given** 使用者想變更已註冊 notebook 的別名，
+    **When** 使用者執行 `nbctl rename research my-research`，
+    **Then** Notebook Registry 更新別名，所有後續指令使用新別名，
+    輸出 JSON `{ "success": true, "oldAlias": "research", "newAlias": "my-research" }`。
+    若 notebook 有進行中的操作，rename 仍可執行。
+
+16. **Given** 使用者嘗試 rename 為已存在的別名，
+    **When** 使用者執行 `nbctl rename research ml-papers`（ml-papers 已被使用），
+    **Then** 輸出錯誤 JSON `{ "success": false, "error": "Alias 'ml-papers' already in use." }`。
+
+17. **Given** 使用者嘗試 add 一個已註冊的 URL，
+    **When** 使用者執行 `nbctl add https://notebooklm.google.com/notebook/yyy --name another-name`
+    且該 URL 已以 "ml-papers" 別名註冊，
+    **Then** 輸出錯誤 JSON `{ "success": false, "error": "URL already registered as 'ml-papers'" }`。
+
+18. **Given** 使用者想將 notebook 從管理中移除（不刪除 NotebookLM 上的筆記本），
+    **When** 使用者執行 `nbctl remove ml-papers`，
+    **Then** daemon 釋放該 notebook 的 Chrome instance（若有），從 Notebook Registry 移除，
+    清理 local cache 中的該 notebook 資料，
+    輸出 JSON `{ "success": true, "removed": "ml-papers" }`。
+    NotebookLM 上的筆記本不受影響。
 
 ---
 
@@ -265,6 +328,20 @@ $ nbctl exec "把 ~/code/my-project 的程式碼加入來源" --nb myproject --a
 3. **Given** repo 轉換後超過 NotebookLM 的 500K 字限制，
    **When** 使用者執行上述指令，
    **Then** 回應錯誤 JSON `{ "success": false, "error": "Content exceeds 500K word limit (actual: 650K). Please split manually." }`。
+
+4. **Given** notebook "myproject" 已有來源 "my-project (repo)"（先前已新增），
+   repo 有了新的 commits，使用者想更新該來源，
+   **When** 使用者執行 `nbctl exec "更新 my-project 的來源" --nb myproject`，
+   **Then** agent 刪除舊的 "my-project (repo)" 來源，
+   重新呼叫 repoToText 轉換最新內容，新增為新的 text source，
+   自動重命名，local cache 記錄更新紀錄，
+   回應 JSON `{ "success": true, "sourceUpdated": "my-project (repo)", "wordCount": 13000, "previousWordCount": 12345 }`。
+
+5. **Given** 使用者想從 notebook 中移除某個來源，
+   **When** 使用者執行 `nbctl exec "刪除來源 'my-project (repo)'" --nb myproject`，
+   **Then** agent 在 NotebookLM UI 中刪除該來源，
+   local cache 記錄刪除操作，
+   回應 JSON `{ "success": true, "sourceRemoved": "my-project (repo)" }`。
 
 ---
 
@@ -433,10 +510,10 @@ $ nbctl exec "下載 audio 到 ~/podcast/episode-draft.wav" --nb podcast-prep
 
 **Acceptance Scenarios**:
 
-1. **Given** daemon 執行中且註冊了 notebook "research"（tab 已開啟），
+1. **Given** daemon 執行中且註冊了 notebook "research"（正在使用 Chrome instance），
    **When** 執行 `nbctl stop` 後再執行 `nbctl start`，
-   **Then** `nbctl list` 仍包含 "research"（`tabOpen: false`），
-   使用者可透過 `nbctl open research` 重新開啟 tab。
+   **Then** `nbctl list` 仍包含 "research"（`active: false`），
+   使用者可透過 `nbctl open research` 恢復 active 狀態。
 
 2. **Given** 先前 session 有 notebook，但對應 URL 已不存在，
    **When** daemon 嘗試復原，
@@ -595,7 +672,22 @@ Agent 自動：
    nbctl exec "加來源" --nb alpha --async
    nbctl exec "問問題" --nb beta --async
    ```
-   **Then** 兩個操作在不同 tab 上 parallel 執行，各自獨立返回 taskId。
+   **Then** 兩個操作取得獨立 Chrome instance，parallel 執行，各自獨立返回 taskId。
+
+8. **Given** 操作 abc123 仍在 `queued` 狀態（agent 尚未取走），
+   **When** 使用者執行 `nbctl cancel abc123`，
+   **Then** 任務從 queue 移除，狀態變為 `cancelled`，
+   回應 JSON `{ "taskId": "abc123", "status": "cancelled", "cancelledAt": "..." }`。
+
+9. **Given** 操作 abc123 正在 `running` 狀態（agent 執行中），
+   **When** 使用者執行 `nbctl cancel abc123`，
+   **Then** 系統通知 agent 中止執行，agent 在安全點停止，
+   狀態變為 `cancelled`，
+   回應 JSON `{ "taskId": "abc123", "status": "cancelled", "cancelledAt": "...", "hint": "Agent will stop at next safe point." }`。
+
+10. **Given** 操作 abc123 已是終態（`completed` / `failed` / `cancelled`），
+    **When** 使用者執行 `nbctl cancel abc123`，
+    **Then** 回應錯誤 JSON `{ "success": false, "error": "Task already in terminal state: completed" }`。
 
 ---
 
@@ -705,23 +797,30 @@ per-tool adapter 能充分利用各工具的能力。自動安裝降低上手門
 
 ## Part F: 瀏覽器抽象化 Stories
 
-### User Story 17 - Connection Manager 與底層可替換 (Priority: P17)
+### User Story 17 - BrowserPool 與底層可替換 (Priority: P17)
 
 身為系統維護者，我希望 daemon 的瀏覽器控制層有統一的抽象介面，
 讓底層自動化程式庫能被替換（如從 Puppeteer 切到 Patchright），
 而不需要修改 agent 邏輯或 skill 定義。
 
-Connection Manager 是 daemon 與瀏覽器之間的唯一抽象層：
-- 管理 Chrome 生命週期（啟動、關閉、健康檢查）
-- 管理 tab（每個 notebook 一個 tab，建立與銷毀）
-- 為每個 tab 產生 pageId + closure-bound tools
-- Agent 只透過 pageId + tools 操作，不知道底層實作
+BrowserPool 是 daemon 管理 Chrome instance 的核心：
+- 管理 Chrome instance pool（max N，acquire/release lifecycle）
+- 為每個 agent session 提供獨立完整的 Chrome instance
+- Agent 擁有完整 Chrome，可自主操作（非 bounded tools interface）
+- 超時未歸還 → daemon 強制回收
 
-**Why this priority**: Connection Manager 抽象讓底層可替換，
+AuthManager 管理認證 cookies 的共享：
+- headed Chrome 登入 → 擷取 Google cookies → 儲存
+- 每個 headless Chrome 啟動後注入 cookies
+
+NetworkGate 集中管理流量：
+- agent 操作前 acquirePermit()，異常時全域 backoff
+
+**Why this priority**: BrowserPool 抽象讓底層可替換，
 確保當 NotebookLM 強化 bot 偵測時能快速因應。
 
 **Independent Test**:
-(a) 同時對兩個 notebook 發出操作，驗證 parallel 執行。
+(a) 同時對兩個 notebook 發出操作，驗證 parallel 執行（獨立 Chrome instance）。
 (b) 在設定檔中切換底層實作，重啟 daemon 後所有操作仍正常。
 
 **Acceptance Scenarios**:
@@ -738,10 +837,10 @@ Connection Manager 是 daemon 與瀏覽器之間的唯一抽象層：
    **When** agent 嘗試操作，
    **Then** 錯誤以統一的格式回報，不因底層差異而產生不同錯誤路徑。
 
-4. **Given** 單一 tab 崩潰或 unresponsive，
-   **When** Connection Manager 偵測到異常，
-   **Then** 只有該 tab 受影響，其他 tab 正常運作，
-   Connection Manager 回報健康狀態並支援單一 tab 重建。
+4. **Given** 單一 Chrome instance 崩潰或 unresponsive，
+   **When** BrowserPool 偵測到異常，
+   **Then** 只有該 instance 受影響，其他 instance 正常運作，
+   BrowserPool 回報健康狀態並支援重新 acquire。
 
 ---
 
@@ -921,13 +1020,13 @@ notebook 包含哪些來源是一種認知負擔。
 - **Headless mode 截圖正確性**：headless 下 `page.screenshot()` 渲染
   MUST 與 headed 一致（viewport size、DPI），確保 vision-based agent 準確。
 
-**Multi-tab**:
-- **Tab 崩潰隔離**：單一 tab 崩潰不影響其他 tab。
-  Connection Manager 偵測並回報，支援單一 tab 重建。
-- **Tab 數量上限**：同時開啟的 tab 數量 SHOULD 有可設定上限（預設 10），
-  超過時回報錯誤並建議關閉閒置 notebook。
+**BrowserPool**:
+- **Chrome instance 崩潰隔離**：單一 Chrome instance 崩潰不影響其他 instance。
+  BrowserPool 偵測並回報，支援重新 acquire。
+- **Pool 上限**：同時活躍的 Chrome instance MUST 有可設定上限（預設 3），
+  超過時 acquire() 等待直到有 instance 歸還。
 - **同 notebook 多個操作**：per-notebook queue 序列化。
-- **跨 notebook 操作**：parallel 執行，互不干擾。
+- **跨 notebook 操作**：parallel 執行（獨立 Chrome instance），互不干擾。
 
 **非同步與通知**:
 - **Inbox 檔案累積**：daemon 定期清理超過 24 小時的已消費通知。
@@ -937,13 +1036,17 @@ notebook 包含哪些來源是一種認知負擔。
 - **Hook 執行失敗**：hook 超時或錯誤不影響 AI 工具正常操作。
   通知保留在 Inbox，下次 hook 觸發時重試。
 - **daemon 未啟動時執行 CLI**：回報清楚錯誤訊息。
-- **非同步操作提交後 daemon 關閉**：未完成操作標記為 cancelled，
-  通知寫入 Inbox。
+- **非同步操作提交後 daemon 正常關閉（`nbctl stop`）**：`queued` 任務恢復為 `queued`
+  （下次啟動可繼續），`running` 任務標記為 `failed`（reason: "daemon stopped"）。
+- **Daemon 非正常關閉（crash/SIGKILL）**：重啟後 `queued` 恢復，
+  `running` 標記為 `failed`（reason: "daemon interrupted"）。
+- **使用者主動取消 `running` 任務**：agent 在安全點停止（不保證立即中止），
+  視覺操作可能已部分完成，不自動回滾。
 - **通知 consume 原子性**：使用 rename 而非 delete，保留 audit trail。
 - **通知優先級**：失敗操作（urgent）優先送達，Stop hook 中強制處理。
 
 **瀏覽器抽象**:
-- **底層實作切換後**：daemon 重建所有連線與 tab，
+- **底層實作切換後**：daemon 重建 BrowserPool，
   Notebook Registry 不受影響，agent session 重建。
 - **Skill 檔案格式錯誤**：daemon 啟動時驗證，格式錯誤的 skill 被跳過，
   記錄警告日誌，不阻塞 daemon 啟動。
@@ -966,6 +1069,15 @@ notebook 包含哪些來源是一種認知負擔。
 - **agent 無法理解指令**：回報解析失敗並附上支援的操作範例。
 - **AI 工具無專屬 adapter**：使用者可透過 `nbctl status` 手動查詢。
 
+**網路與 Rate Limiting**:
+- **NotebookLM rate limiting**：NetworkGate 偵測 429/503、異常延遲、CAPTCHA，
+  自動觸發全域 backoff，期間 acquirePermit() 等待。
+- **Bot 偵測（CAPTCHA）**：NetworkGate 偵測後暫停 permit 發放，
+  通知使用者可能需要 `nbctl reauth` 或手動介入。
+- **網路斷線**：NetworkGate 暫停所有 permit 發放，恢復後自動恢復。
+- **`add-all` 批次操作 throttling**：NetworkGate 在批次操作間
+  自動插入 backoff interval，避免觸發 rate limit。
+
 ---
 
 ## 需求 *(mandatory)*
@@ -975,22 +1087,23 @@ notebook 包含哪些來源是一種認知負擔。
 **Daemon & CLI**:
 - **FR-001**: 系統 MUST 提供 `nbctl` CLI，支援以下結構化管理指令：
   `start`、`stop`、`status`、`list`、`open`、`close`、`use`、`add`、`add-all`、
-  `reauth`、`skills`、`install-hooks`、`uninstall-hooks`、`export-skill`。
+  `rename`、`remove`、`cancel`、`reauth`、`skills`、`install-hooks`、`uninstall-hooks`、`export-skill`。
 - **FR-002**: 系統 MUST 提供 `nbctl exec "<自然語言>" --nb <notebook-id>` 指令，
   將自然語言指令傳送給該 notebook 的 agent session。
   未指定 `--nb` 時使用預設 notebook（由 `nbctl use` 設定）。
 - **FR-003**: 系統 MUST 將 daemon 作為背景程序執行，暴露 HTTP API 於 127.0.0.1:19224
   （僅 localhost binding，不加額外認證）。若 port 已被佔用，MUST 回報錯誤。
-- **FR-004**: Daemon MUST 自行管理單一 Chrome 實例的生命週期（啟動、關閉、健康檢查），
-  支援 multi-tab 架構：每個 notebook 對應一個 tab，由 Connection Manager 統一管理。
+- **FR-004**: Daemon MUST 透過 BrowserPool 管理多個 headless Chrome instance 的
+  生命週期（啟動、關閉、健康檢查、強制回收），每個 agent session 取得獨立 Chrome instance。
 - **FR-005**: 所有 CLI 輸出 MUST 為 JSON 格式（stdout），錯誤訊息亦為 JSON。
 - **FR-006**: 系統 MUST 支援 `nbctl use <notebook-id>` 指令設定預設 notebook，
   後續 `nbctl exec` 不帶 `--nb` 時自動使用此 notebook。
 
 **Agent 能力**:
 - **FR-007**: Agent MUST 能透過 vision model 理解 NotebookLM UI 狀態。
-- **FR-008**: Agent MUST 提供 browser tools（screenshot, click, type, scroll, paste, downloadFile），
-  透過 Connection Manager 的 pageId + bound tools 介面操作。
+- **FR-008**: Agent MUST 擁有完整的 Chrome instance，透過 browser tools
+  （screenshot, click, type, scroll, paste, downloadFile）自主操作，
+  具備截圖分析、retry、關 modal 等自我修復能力。
 - **FR-009**: Agent MUST 提供 content tools：
   - repoToText：將 git repo 轉換為單一文字
   - urlToText：將網頁轉換為 Markdown
@@ -1003,6 +1116,13 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-013**: 系統 MUST 支援觸發 Audio Overview 產生。
 - **FR-014**: 系統 MUST 支援下載已產生的 Audio Overview 到本機檔案。
 - **FR-015**: 系統 MUST 能擷取 notebook 當前來源清單與狀態。
+
+**來源更新與移除**:
+- **FR-060**: Agent MUST 能根據使用者指令更新已存在的來源
+  （刪除舊來源 → 重新轉換 → 新增為新來源 → 重命名）。
+  Local cache MUST 記錄更新紀錄（含前後 wordCount）。
+- **FR-061**: Agent MUST 能根據使用者指令在 NotebookLM UI 中刪除指定來源。
+  Local cache MUST 記錄刪除操作。
 
 **查詢功能**:
 - **FR-016**: Agent MUST 能在 NotebookLM UI 的對話區域輸入問題、
@@ -1026,9 +1146,9 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-029**: 智慧選擇 MUST 預設詢問使用者確認後再切換 notebook。
 
 **操作排隊與觀測**:
-- **FR-030**: 每個 notebook tab MUST 有獨立的 operation queue。
+- **FR-030**: 每個 notebook MUST 有獨立的 operation queue。
   同一 notebook 內的操作 MUST 序列化執行（serial），
-  不同 notebook 的操作 MUST 可 parallel 執行。
+  不同 notebook 的操作 MUST 可 parallel 執行（獨立 Chrome instance）。
   純讀取記憶體狀態的指令（`list`、`status`）MUST 即時回應，不進入佇列。
 - **FR-031**: 每個操作 MUST 有 timeout 機制避免無窮等待，
   超時回傳錯誤與截圖。具體 timeout 數值依操作類型於實測後決定。
@@ -1072,6 +1192,12 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-046**: 每次來源異動後，系統 MUST 自動更新 description。
 - **FR-047**: Agent MUST 能根據使用者 exec 指令手動覆寫 description。
 
+**檔案權限**:
+- **FR-054**: Daemon MUST 在建立 `~/.nbctl/` 及所有子目錄時設定權限為 `700`，
+  所有檔案設定為 `600`（同 `~/.ssh/` 慣例）。
+- **FR-055**: Daemon 啟動時 MUST 驗證 `~/.nbctl/` 權限，若權限過於寬鬆則
+  輸出警告日誌並自動修正為正確權限。
+
 **認證**:
 - **FR-048**: Daemon MUST 自行管理 Chrome 的 Google 認證。
   Cookies 持久化至 `~/.nbctl/profiles/`，支援跨 session 重用。
@@ -1085,17 +1211,67 @@ notebook 包含哪些來源是一種認知負擔。
   （進入/退出時間、tool 呼叫、截圖事件、錯誤），
   確保能事後診斷卡住或異常的操作。
 
+**建立新筆記本**:
+- **FR-052**: Agent MUST 能透過 NotebookLM UI 建立新的筆記本
+  （導航至首頁、點擊「新增筆記本」按鈕），取得動態產生的 URL，
+  並自動註冊至 Notebook Registry。
+- **FR-053**: `nbctl open <alias>` MUST 僅用於標記已註冊 notebook 為 active（by alias），
+  不接受 URL 參數。註冊新 notebook 使用 `nbctl add <url> --name <alias>`。
+
+**Notebook 別名與唯一性**:
+- **FR-056**: Notebook alias MUST 在 Notebook Registry 中全域唯一。
+  `nbctl add` 時若 alias 已存在，MUST 回報錯誤。
+- **FR-057**: 同一 NotebookLM URL MUST 只能註冊一次。
+  `nbctl add` 時若 URL 已註冊，MUST 回報警告並顯示既有 alias：
+  `{ "success": false, "error": "URL already registered as '<alias>'" }`。
+- **FR-058**: 系統 MUST 提供 `nbctl rename <old-alias> <new-alias>` 指令，
+  允許使用者變更已註冊 notebook 的別名。新 alias MUST 同樣全域唯一。
+  若 notebook 有進行中的操作，rename 仍可執行（alias 為邏輯標籤）。
+- **FR-059**: 系統 MUST 提供 `nbctl remove <alias>` 指令，
+  將 notebook 從 Notebook Registry 移除。釋放 Chrome instance（若有）、清理 local cache。
+  NotebookLM 上的筆記本不受影響。若有進行中的操作，MUST 先取消後再移除。
+
 **非同步 CLI 操作** (FR-100 series):
 - **FR-100**: 系統 MUST 支援 `nbctl exec "<自然語言>" --nb <notebook-id> --async` 模式，
   立即返回 `{ "taskId": "<id>", "status": "queued", "notebook": "<notebook-id>", "hint": "..." }`。
-- **FR-101**: 系統 MUST 支援 `nbctl status <taskId>` 查詢特定操作的狀態與結果。
-- **FR-102**: 系統 MUST 支援 `nbctl status --all` 列出所有近期操作（預設最近 20 筆）。
-  MUST 支援 `--nb <notebook-id>` 篩選。
+- **FR-101**: `nbctl status` 指令 MUST 依據參數區分三種模式：
+  - 無參數：回報 daemon 級別狀態（running、browser、network health、task 摘要）。
+  - `<taskId>`：查詢特定非同步操作的狀態與結果。
+  - `--all`：列出所有近期操作（預設最近 20 筆），MUST 支援 `--nb <notebook-id>` 篩選。
+  - `--recent`：列出近期已完成但未被通知消費的操作（generic adapter fallback）。
 - **FR-103**: `nbctl exec` 不帶 `--async` 時 MUST 維持同步行為。
 - **FR-104**: `nbctl exec --async` SHOULD 支援 `--context "<描述>"` 選項，
   附帶操作情境描述，出現在完成通知中。
 - **FR-105**: `nbctl exec --async` 的返回 JSON MUST 包含 `hint` 欄位，
   作為防遺忘的第一層提醒。
+
+**Async Task 生命週期** (FR-106 series):
+- **FR-106**: Async Task MUST 遵循以下狀態機，每個狀態兼具內部工程語意與外部顯示標籤：
+  ```
+  queued ──→ running ──→ completed
+    │           │
+    ↓           ↓
+  cancelled   failed
+              cancelled
+  ```
+  - `queued`：任務在 daemon 的 operation queue 中等待，session agent 尚未取走。
+  - `running`：session agent 已取走任務並開始執行，結果尚未產出。
+  - `completed`：執行完成，結果已回到 answer queue，可供查詢與通知。
+  - `cancelled`：使用者主動取消（`nbctl cancel <taskId>`）。
+    `queued` 狀態可直接移除；`running` 狀態需通知 agent 中止執行。
+  - `failed`：執行過程中發生非預期錯誤（agent 異常、Chrome 崩潰、超時等），
+    需要 debug。MUST 附帶錯誤訊息與截圖（若可取得）。
+- **FR-107**: 系統 MUST 提供 `nbctl cancel <taskId>` 指令，
+  允許使用者從外部取消 `queued` 或 `running` 狀態的任務。
+  - `queued` → `cancelled`：從 queue 移除，立即生效。
+  - `running` → `cancelled`：通知 agent 中止當前操作，
+    agent SHOULD 在安全點停止（不保證立即中止）。
+  - `completed` / `failed` / `cancelled`：回報錯誤「Task already in terminal state」。
+- **FR-108**: Daemon 非正常關閉時（crash、SIGKILL），
+  重啟後 MUST 將先前 `queued` 狀態的任務恢復為 `queued`，
+  `running` 狀態的任務標記為 `failed`（reason: "daemon interrupted"）。
+- **FR-109**: 所有狀態轉換 MUST 記錄 timestamp，
+  `nbctl status <taskId>` 回應中 MUST 包含完整的狀態歷程。
 
 **通知 Inbox** (FR-110 series):
 - **FR-110**: Daemon MUST 在非同步操作完成後，將結果寫入通知 Inbox 目錄。
@@ -1138,20 +1314,29 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-132**: Skill 模板 MUST 不綁定特定 AI CLI 工具。
 - **FR-133**: 系統 MUST 提供 `nbctl export-skill` 指令輸出 Skill 模板。
 
-**Connection Manager** (FR-140 series):
-- **FR-140**: 系統 MUST 實作 Connection Manager，作為 daemon 與瀏覽器之間的
-  唯一抽象層。負責：Chrome 生命週期、tab 建立/銷毀、
-  pageId + bound tools 產生、cookies 持久化。
-- **FR-141**: Connection Manager MUST 對外暴露以 pageId 為單位的操作介面：
-  `screenshot(pageId)`、`click(pageId, x, y)`、`type(pageId, text)`、
-  `navigate(pageId, url)`、`scroll(pageId, direction)`、`paste(pageId, content)`、
-  `download(pageId)`、`healthcheck(pageId)`。
-- **FR-142**: Connection Manager 底層實作 MUST 可替換。
+**BrowserPool** (FR-140 series):
+- **FR-140**: 系統 MUST 實作 BrowserPool，管理 headless Chrome instance pool。
+  負責：Chrome instance 啟動/銷毀、acquire/release lifecycle、
+  超時強制回收、健康檢查。Pool 上限可設定（預設 max=3）。
+- **FR-141**: BrowserPool MUST 提供 `acquire(notebookUrl)` → 啟動 headless
+  Chrome + 注入 cookies + navigate 到目標 URL，回傳完整 Chrome instance。
+  `release(instanceId)` 歸還 instance 到 pool。
+- **FR-142**: BrowserPool 底層自動化程式庫 MUST 可替換。
   預設為 Puppeteer（vision-based）。
 - **FR-143**: 底層實作 MUST 可透過設定檔指定。
 - **FR-144**: 所有底層實作 MUST 使用統一的錯誤格式回報，
-  包含錯誤類型（連線失敗、tab 崩潰、操作逾時、認證過期）
-  與建議動作（重試、重建 tab、截圖、重新認證）。
+  包含錯誤類型（連線失敗、Chrome 崩潰、操作逾時、認證過期）
+  與建議動作（重試、重建 instance、截圖、重新認證）。
+
+**AuthManager** (FR-145 series):
+- **FR-145**: 系統 MUST 實作 AuthManager，管理 Google 認證 cookies 的
+  擷取、儲存與注入。首次登入以 headed Chrome 完成認證，
+  擷取 Google cookies（SID, HSID, SSID, APISID, __Secure-* on .google.com）
+  儲存至 `~/.nbctl/profiles/cookies.json`。
+- **FR-146**: AuthManager MUST 能將儲存的 cookies 注入任意 headless Chrome
+  instance（透過 `BrowserContext.setCookie()`），使其具備有效 Google session。
+- **FR-147**: AuthManager MUST 偵測 session 過期（302 redirect to login），
+  通知使用者 `nbctl reauth` 重新認證。
 
 **Agent Skill 參數化** (FR-150 series):
 - **FR-150**: Agent 操作技能 MUST 以外部化的 skill 定義描述，
@@ -1164,14 +1349,31 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-160**: 系統 SHOULD 在非同步操作完成時發送 OS 通知（macOS notification）。
 - **FR-161**: OS 通知 MUST 可透過設定檔開關，預設開啟。
 
-**Multi-tab Daemon** (FR-170 series):
-- **FR-170**: Daemon MUST 支援在單一 Chrome 中管理多個 notebook tab。
-- **FR-171**: 每個 notebook tab MUST 有獨立的 operation queue。
-  同 notebook serial，跨 notebook parallel。
-- **FR-172**: 每個 notebook tab MUST 對應一個獨立的 AI agent session。
-- **FR-173**: 同時開啟的 tab 數量 MUST 有可設定上限（預設 10）。
-- **FR-174**: 單一 tab 崩潰不影響其他 tab，支援單一 tab 重建。
-- **FR-175**: Daemon MUST 支援 `nbctl open` 開啟 tab、`nbctl close` 關閉 tab。
+**Multi-browser Daemon** (FR-170 series):
+- **FR-170**: Daemon MUST 透過 BrowserPool 管理多個 headless Chrome instance，
+  每個 agent session 取得獨立 Chrome instance。
+- **FR-171**: 每個 notebook MUST 有獨立的 operation queue。
+  同 notebook serial，跨 notebook parallel（天然支援，獨立 Chrome instance）。
+- **FR-172**: 每個 notebook 操作 MUST 對應一個獨立的 AI agent session +
+  獨立的 Chrome instance。Agent 擁有完整 Chrome，可自主操作與自我修復。
+- **FR-173**: 同時活躍的 Chrome instance 數量 MUST 有可設定上限（預設 3）。
+- **FR-174**: 單一 Chrome instance 崩潰不影響其他 instance，支援重新 acquire。
+- **FR-175**: Daemon MUST 支援 `nbctl open`（標記 active）、`nbctl close`（釋放 Chrome instance）。
+
+**NetworkGate** (FR-190 series):
+- **FR-190**: 系統 MUST 實作 NetworkGate，作為集中式流量閘門。
+  不在 data path（不 proxy 請求），只管「能不能做」。
+  Agent 操作前 MUST `acquirePermit(notebookId)` 取得許可。
+- **FR-191**: NetworkGate MUST 偵測 rate limiting 與 throttling 信號
+  （HTTP 429/503、異常延遲、CAPTCHA / bot 偵測頁面），
+  偵測後 `reportAnomaly()` 觸發全域 backoff，所有 agent 暫停操作。
+- **FR-192**: 偵測到 throttling 時 MUST 套用 exponential backoff（初始 5s，
+  上限 5 min），backoff 期間 `acquirePermit()` 等待直到 backoff 結束。
+- **FR-193**: NetworkGate MUST 監控網路斷線與恢復，
+  斷線時暫停所有操作並通知使用者，恢復後自動恢復 permit 發放。
+- **FR-194**: NetworkGate MUST 透過 `getHealth()` 和 `nbctl status` 回報
+  當前網路健康狀態（`healthy` / `throttled` / `disconnected`），
+  包含 backoff 剩餘時間（若適用）。
 
 **Headless / Headed 雙模式** (FR-180 series):
 - **FR-180**: Daemon MUST 支援 headless 與 headed 兩種 Chrome 啟動模式。
@@ -1184,20 +1386,31 @@ notebook 包含哪些來源是一種認知負擔。
 ### Key Entities
 
 - **Daemon**：常駐背景程序，管理所有已註冊 notebook，暴露 HTTP API，
-  維護狀態快取。自行管理 Chrome 實例（透過 Connection Manager）。
+  維護狀態快取。透過 BrowserPool 管理 Chrome instance pool。
 
-- **Connection Manager**：daemon 與瀏覽器之間的唯一抽象層。
-  管理 Chrome 生命週期、multi-tab、cookies 持久化、headed/headless 模式切換。
-  對外以 pageId 為單位暴露操作介面。Agent 只透過 pageId + tools 操作。
-  底層實作可替換（預設 Puppeteer）。
+- **BrowserPool**：管理 headless Chrome instance pool（max N，預設 3）。
+  負責 Chrome instance 啟動/銷毀、acquire/release lifecycle、
+  超時強制回收、健康檢查。底層實作可替換（預設 Puppeteer）。
+  Agent 透過 acquire() 取得完整 Chrome instance，release() 歸還。
+
+- **AuthManager**：管理 Google 認證 cookies 的擷取、儲存與注入。
+  首次登入以 headed Chrome 完成認證，擷取 Google cookies
+  儲存至 `~/.nbctl/profiles/cookies.json`。每個 headless Chrome instance
+  啟動後透過 `BrowserContext.setCookie()` 注入 cookies。
+
+- **NetworkGate**：集中式流量閘門（不在 data path，只管「能不能做」）。
+  Agent 操作前 MUST `acquirePermit()`。偵測 429/timeout 觸發全域 backoff。
+  提供 `getHealth()` 回報 healthy/throttled/disconnected。
 
 - **Notebook Registry**：所有已註冊 notebook 的元資料清單
-  （ID/別名、URL、標題、description、tab 狀態、來源清單摘要），持久化於磁碟。
+  （alias、URL、標題、description、active 狀態、來源清單摘要），持久化於磁碟。
+  Alias 全域唯一，URL 全域唯一（不可重複註冊），alias 可透過 `rename` 變更。
   `description` 由 agent 自動產生，每次來源異動後更新。使用者可覆寫。
 
-- **Agent Session**：Per-notebook 的 AI agent。透過 Connection Manager
-  取得專屬的 pageId + bound tools，不知道其他 session 的存在。
-  具備 vision model 能力與 browser/content tools。
+- **Agent Session**：Per-notebook 的 AI agent。透過 BrowserPool acquire()
+  取得完整 Chrome instance，具備自主截圖分析、retry、關 modal 的
+  完整自我修復能力。操作前 MUST 透過 NetworkGate acquirePermit()。
+  不能自行啟動/關閉 Chrome（由 daemon 管理）。
 
 - **Agent Skill**：參數化的 agent 操作技能定義。
   包含 prompt template、所需 tool 清單、操作依賴宣告。
@@ -1213,6 +1426,9 @@ notebook 包含哪些來源是一種認知負擔。
 
 - **Async Task**：非同步操作的追蹤紀錄。
   包含 taskId、status、notebook、sessionId、內容摘要、時間、結果。
+  狀態機：`queued`（等待 agent 取走）→ `running`（agent 執行中）→
+  `completed`（成功）| `failed`（異常，需 debug）| `cancelled`（使用者取消）。
+  所有狀態轉換記錄 timestamp。
 
 - **AI Skill Template**：提供給外部 AI 工具的 nbctl 使用指南。
   與 Agent Skill 不同：Agent Skill 控制 daemon 內部 agent，
@@ -1238,7 +1454,7 @@ notebook 包含哪些來源是一種認知負擔。
 - **Operation Log**：操作歷程紀錄。
 
 - **Operation Queue**：per-notebook 的 exec 請求等待佇列。
-  同 notebook serial，跨 notebook parallel。
+  同 notebook serial，跨 notebook parallel（獨立 Chrome instance）。
 
 ---
 
@@ -1247,21 +1463,30 @@ notebook 包含哪些來源是一種認知負擔。
 ### Session 2026-02-07
 
 - Q: 當 daemon 已在執行中，使用者再執行 `nbctl start` 時應如何處理？ → A: 回報 JSON 錯誤，不啟動第二個實例。
-- Q: 序列化執行的範圍？ → A: 每個 notebook tab 有獨立的 operation queue，同 notebook serial，跨 notebook parallel。純讀取狀態的指令即時回應，不進佇列。
+- Q: 序列化執行的範圍？ → A: 每個 notebook 有獨立的 operation queue，同 notebook serial，跨 notebook parallel（獨立 Chrome instance）。純讀取狀態的指令即時回應，不進佇列。
 - Q: HTTP API 是否需要認證？ → A: MVP 只靠 localhost binding，不加 token。Port 衝突時回報錯誤。
-- Q: Agent session 的生命週期？ → A: Per-notebook session。每個 notebook 有獨立的 agent session，與 tab 同生命週期。不同 notebook 的 session 互相隔離。
+- Q: Agent session 的生命週期？ → A: Per-notebook session。每個 notebook 有獨立的 agent session + 獨立 Chrome instance。不同 notebook 的 session 互相隔離。Chrome instance 操作完畢歸還 BrowserPool。
 - Q: Notebook Registry 的 description 欄位？ → A: Agent 自動摘要 + 使用者可覆寫。
 - Q: Google 帳號認證？ → A: Daemon 自行管理 Chrome。首次以 headed mode 登入，cookies 持久化至 `~/.nbctl/profiles/`，後續 headless 運作。Session 過期提供 `nbctl reauth`。
 - Q: `nbctl exec` 的 timeout？ → A: 不硬編碼。各操作合理 timeout 實測後決定。Spec 只要求有 timeout 機制 + 充分日誌。
 - Q: `nbctl list` 輸出是否含 description？ → A: 是。
 
+### Session 2026-02-12
+
+- Q: `open` 與 `add` 的指令語意區分？ → A: `add <url> --name <alias>` 納管既有 notebook（使用者已知 URL）；`open <alias>` 標記已註冊 notebook 為 active（不接受 URL）；建立全新 notebook 透過 `nbctl exec` 自然語言完成（URL 由 NotebookLM 在瀏覽器中動態產生，使用者事先不知道）。新增 US2-AS12/AS13 覆蓋建立新筆記本的工作流。
+- Q: 如何處理 NotebookLM rate limiting / throttling？ → A: NetworkGate 集中式流量閘門（FR-190 series）。Agent 操作前 acquirePermit()，異常時 reportAnomaly() 觸發全域 backoff。不在 data path，只管「能不能做」。BrowserPool 管理 Chrome，NetworkGate 管理流量許可。
+- Q: `~/.nbctl/` 的檔案權限模型？ → A: 目錄 `700`、檔案 `600`（同 `~/.ssh/` 慣例）。Daemon 建立時設定，啟動時驗證並自動修正。新增 FR-054/FR-055。
+- Q: Async Task 生命週期狀態機？ → A: `queued`（daemon queue 中等待 agent 取走）→ `running`（agent 執行中）→ `completed`（結果回到 answer queue）| `failed`（非預期異常，需 debug）| `cancelled`（使用者主動取消 `nbctl cancel`）。新增 `cancel` 指令（FR-107）。Daemon crash 後 `queued` 恢復、`running` 標記 `failed`。所有狀態轉換記錄 timestamp。
+- Q: Notebook alias 的唯一性約束？ → A: Alias 全域唯一 + URL 全域唯一（不可重複註冊）。新增 `nbctl rename <old> <new>` 指令（FR-058）允許變更別名。重複 URL 時警告並顯示既有 alias。
+
 ### Session 2026-02-12 (架構重構)
 
 - Q: 為什麼不用 MCP？ → A: MCP tool call 在主流 AI CLI 中是 blocking 的，server-push 未被 client 實作。CLI + Skill + Hook 更通用、支援非同步。
-- Q: 多 notebook 並行怎麼做？ → A: 1 daemon, 1 Chrome (headless), N tabs。每個 notebook 一個 tab，由 Connection Manager 管理。跨 notebook parallel，同 notebook serial。不需要多個 Chrome process。
-- Q: 10 本 notebook 會開 10 個瀏覽器嗎？ → A: 不會。單一 Chrome，多個 tab。各 tab 渲染互不干擾。
-- Q: Agent 如何各自操控瀏覽器？ → A: Connection Manager 為每個 tab 產生 pageId + closure-bound tools。Agent 只拿到 pageId + tools，不知道 Puppeteer。
-- Q: 抽象層在哪裡？ → A: Connection Manager 本身。比 Browser Strategy pattern 更乾淨。
+- Q: 多 notebook 並行怎麼做？ → A: BrowserPool 管理 max N headless Chrome instances（預設 3）。每個 agent session 取得獨立 Chrome instance，天然 parallel。Cookie injection 共享認證。
+- Q: 10 本 notebook 會開 10 個瀏覽器嗎？ → A: 不會同時 10 個。BrowserPool 上限 N=3，操作完畢歸還。需要操作時 acquire，非常駐。
+- Q: Agent 如何操控瀏覽器？ → A: Agent 透過 BrowserPool acquire() 取得完整 Chrome instance，擁有完整自我修復能力（截圖分析、retry、關 modal）。不是 bounded tools interface。
+- Q: 抽象層在哪裡？ → A: BrowserPool 管理 Chrome lifecycle，AuthManager 管理認證，NetworkGate 管理流量。三者協作提供 agent 完整 Chrome instance。
+- Q: 為什麼從 multi-tab 改為 BrowserPool？ → A: (1) 序列化讓 multi-tab 優勢消失（background tab 不可靠，只剩省 navigate）；(2) BoundTools interface 限制 agent 自我修復能力；(3) BrowserPool 天然 parallel + agent 完整 Chrome = 更高可靠度。
 - Q: 瀏覽器必須可見嗎？ → A: 不必。Headless 截圖仍可正常渲染。首次登入需 headed。
 - Q: 多 CLI session 通知如何 routing？ → A: Notification Adapter，per-tool best practice。Claude Code adapter 用 session_id 做 per-session inbox routing。
 - Q: 為什麼不追求跨平台 general solution？ → A: 每個 AI CLI 的 hook 機制不同，妥協到最低公約數犧牲體驗。Per-tool adapter 讓核心協議統一，delivery 各自最佳化。
@@ -1277,7 +1502,7 @@ notebook 包含哪些來源是一種認知負擔。
 **效能指標**:
 - **SC-001**: Daemon 啟動至 ready 狀態在 10 秒內完成（含 Chrome 啟動，不含首次登入）。
 - **SC-002**: `nbctl list`、`nbctl status` 等管理指令在 100ms 內回應。
-- **SC-003**: 開啟新 notebook tab（含導航）在 10 秒內完成。
+- **SC-003**: acquire Chrome instance + cookie injection + navigate 在 10 秒內完成。
 - **SC-004**: Agent 簡單操作（如截圖、查詢來源清單）在 15 秒內完成。
 - **SC-005**: Agent 多步驟操作（如新增來源含重命名）在 60 秒內完成。
 
@@ -1287,7 +1512,7 @@ notebook 包含哪些來源是一種認知負擔。
 - **SC-008**: Content 轉換（repo/URL/PDF → text）成功率 > 95%。
 
 **容量指標**:
-- **SC-009**: 支援註冊至少 20 個 notebook，同時開啟至少 10 個 tab。
+- **SC-009**: 支援註冊至少 20 個 notebook，同時活躍至多 3 個 Chrome instance。
 - **SC-010**: Daemon 記憶體使用量 < 500MB（不含 Chrome）。
 
 **查詢效能指標**:
@@ -1325,7 +1550,7 @@ notebook 包含哪些來源是一種認知負擔。
 - **SC-106**: Skill Template 能被至少 2 種 AI CLI 工具正確使用。
 - **SC-107**: 不安裝 adapter 也能透過 `nbctl status` 完成所有查詢。
 
-**Connection Manager 穩定性**:
+**BrowserPool 穩定性**:
 - **SC-108**: 切換底層實作後，所有操作成功率不低於原實作。
 - **SC-109**: 統一錯誤格式，agent 正確處理所有錯誤類型。
 
@@ -1336,10 +1561,15 @@ notebook 包含哪些來源是一種認知負擔。
 **Skill 參數化**:
 - **SC-112**: 修改 agent skill prompt 後重啟，agent 使用新 prompt。
 
-**Multi-tab 並行**:
-- **SC-113**: N 個 notebook（N ≤ 10）操作互不阻塞。
-- **SC-114**: 單一 tab 崩潰後 5 秒內偵測，其他 tab 不受影響。
+**BrowserPool 並行**:
+- **SC-113**: N 個 notebook（N ≤ pool max）操作互不阻塞。
+- **SC-114**: 單一 Chrome instance 崩潰後 5 秒內偵測，其他 instance 不受影響。
 
 **Headless 模式**:
 - **SC-115**: Headless vision-based agent 成功率與 headed 無顯著差異（< 5%）。
 - **SC-116**: 首次登入後，後續 daemon 重啟自動 headless。
+
+**NetworkGate**:
+- **SC-117**: Throttling 偵測後 3 秒內 acquirePermit() 開始等待（全域 backoff）。
+- **SC-118**: 網路斷線偵測後 5 秒內暫停 permit 發放，恢復後自動恢復。
+- **SC-119**: `nbctl status` 回報網路健康狀態延遲 < 200ms。

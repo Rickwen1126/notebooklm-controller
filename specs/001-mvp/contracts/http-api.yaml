@@ -1,13 +1,11 @@
-openapi: 3.1.0
+openapi: "3.1.0"
 info:
   title: NotebookLM Controller Daemon API
-  version: 1.0.0
+  version: "1.0.0"
   description: |
-    Daemon HTTP API exposed on 127.0.0.1:19224.
-    All responses are JSON. Errors also return JSON with `success: false`.
-
-    Operations that touch the browser (exec, use) are queued and serialized.
-    Read-only operations (health, list, status) respond immediately.
+    Daemon HTTP API，僅綁定 127.0.0.1:19224（FR-003）。
+    所有回應為 JSON（FR-005）。
+    管理指令（list/status）即時回應，不進操作佇列（FR-030）。
 
 servers:
   - url: http://127.0.0.1:19224
@@ -16,123 +14,101 @@ servers:
 paths:
   /health:
     get:
-      summary: Health check
-      operationId: getHealth
-      tags: [daemon]
+      operationId: healthCheck
+      summary: Daemon 健康檢查
+      description: 回應 200 表示 daemon 運行中（US1-AS1）。
       responses:
-        '200':
-          description: Daemon is healthy
+        "200":
+          description: Daemon healthy
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HealthResponse'
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+                required: [status]
 
   /status:
     get:
-      summary: Daemon status
-      operationId: getStatus
-      tags: [daemon]
+      operationId: getDaemonStatus
+      summary: Daemon 級別狀態（FR-101 無參數模式）
+      description: |
+        回報 daemon 運行狀態、Chrome 連線、網路健康、
+        開啟的 notebook 列表、任務統計。
       responses:
-        '200':
-          description: Current daemon state
+        "200":
+          description: Daemon status
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StatusResponse'
+                $ref: "#/components/schemas/DaemonStatus"
 
   /notebooks:
     get:
-      summary: List all registered notebooks
       operationId: listNotebooks
-      tags: [notebook]
+      summary: 列出所有已註冊 notebook（FR-001 list）
+      description: 回傳 Notebook Registry 中所有已註冊 notebook 的元資料陣列。
       responses:
-        '200':
+        "200":
           description: Notebook list
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/NotebookEntry'
+                  $ref: "#/components/schemas/NotebookEntry"
 
-  /notebooks/open:
     post:
-      summary: Register and open a new notebook
-      operationId: openNotebook
-      tags: [notebook]
+      operationId: addNotebook
+      summary: 納管既有 notebook（FR-032 add）
+      description: |
+        導航至 URL、掃描狀態、同步到 local cache。
+        alias 和 URL 必須全域唯一（FR-056/057）。
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [url, name]
               properties:
                 url:
                   type: string
                   description: NotebookLM notebook URL
-                name:
+                alias:
                   type: string
-                  description: User-assigned alias
+                  description: 使用者指定的別名
+              required: [url, alias]
       responses:
-        '200':
-          description: Notebook opened
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SuccessWithNotebook'
-        '400':
-          description: Invalid URL or name
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /notebooks/add:
-    post:
-      summary: Add an existing notebook to management
-      operationId: addNotebook
-      tags: [notebook]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [url, name]
-              properties:
-                url:
-                  type: string
-                name:
-                  type: string
-      responses:
-        '200':
+        "200":
           description: Notebook added
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AddNotebookResponse'
-        '400':
-          description: Invalid URL or name
+                $ref: "#/components/schemas/SuccessWithNotebook"
+        "400":
+          description: Invalid URL or alias conflict
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
 
-  /notebooks/{id}/use:
-    post:
-      summary: Switch active notebook
-      operationId: useNotebook
-      tags: [notebook]
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+  /notebooks/{alias}:
+    parameters:
+      - name: alias
+        in: path
+        required: true
+        schema:
+          type: string
+
+    delete:
+      operationId: removeNotebook
+      summary: 從管理中移除 notebook（FR-059 remove）
+      description: 釋放 Chrome instance、從 registry 移除、清理 local cache。NotebookLM 上不受影響。
       responses:
-        '200':
-          description: Switched to notebook
+        "200":
+          description: Notebook removed
           content:
             application/json:
               schema:
@@ -140,156 +116,427 @@ paths:
                 properties:
                   success:
                     type: boolean
-                  active:
+                    const: true
+                  removed:
                     type: string
-        '404':
+                required: [success, removed]
+        "404":
           description: Notebook not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
 
-  /notebooks/{id}/close:
+  /notebooks/{alias}/open:
+    parameters:
+      - name: alias
+        in: path
+        required: true
+        schema:
+          type: string
     post:
-      summary: Unregister a notebook
-      operationId: closeNotebook
-      tags: [notebook]
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+      operationId: openNotebook
+      summary: 標記已註冊 notebook 為 active（FR-053 open）
       responses:
-        '200':
-          description: Notebook closed
+        "200":
+          description: Notebook activated
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SuccessResponse'
-        '404':
-          description: Notebook not found
+                $ref: "#/components/schemas/SuccessWithNotebook"
+        "404":
+          description: Notebook not registered
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: BrowserPool exhausted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
-  /exec:
+  /notebooks/{alias}/close:
+    parameters:
+      - name: alias
+        in: path
+        required: true
+        schema:
+          type: string
     post:
-      summary: Execute natural language command on active notebook
-      operationId: execCommand
-      tags: [agent]
-      description: |
-        Queued operation. If another exec/use is in progress, this request
-        waits in the operation queue.
+      operationId: closeNotebook
+      summary: 釋放 Chrome instance，保留註冊（US2-AS4 close）
+      responses:
+        "200":
+          description: Chrome instance released
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                required: [success]
+
+  /notebooks/{alias}/rename:
+    parameters:
+      - name: alias
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: renameNotebook
+      summary: 變更 notebook 別名（FR-058 rename）
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [command]
+              properties:
+                newAlias:
+                  type: string
+              required: [newAlias]
+      responses:
+        "200":
+          description: Alias renamed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  oldAlias:
+                    type: string
+                  newAlias:
+                    type: string
+                required: [success, oldAlias, newAlias]
+        "409":
+          description: New alias already in use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /default-notebook:
+    put:
+      operationId: setDefaultNotebook
+      summary: 設定預設 notebook（FR-006 use）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                alias:
+                  type: string
+              required: [alias]
+      responses:
+        "200":
+          description: Default set
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  default:
+                    type: string
+                required: [success, default]
+
+  /exec:
+    post:
+      operationId: execCommand
+      summary: 執行自然語言指令（FR-002 exec / FR-100 async）
+      description: |
+        將自然語言指令傳送給 notebook 的 agent session。
+        帶 async=true 時立即返回 taskId（FR-100）。
+        不帶 async 時等待操作完成（FR-103）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
               properties:
                 command:
                   type: string
-                  description: Natural language command for the agent
+                  description: 自然語言指令
+                notebook:
+                  type: string
+                  description: 目標 notebook alias（未提供時使用 default）
+                async:
+                  type: boolean
+                  default: false
+                context:
+                  type: string
+                  description: 操作情境描述（FR-104，僅 async 模式）
+                sessionId:
+                  type: string
+                  description: CLI session ID（用於 notification routing）
+              required: [command]
       responses:
-        '200':
-          description: Command executed
+        "200":
+          description: |
+            同步模式：操作結果。
+            非同步模式：taskId + queued status。
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ExecResponse'
-        '400':
-          description: No active notebook or invalid command
+                oneOf:
+                  - $ref: "#/components/schemas/ExecResult"
+                  - $ref: "#/components/schemas/AsyncSubmitResponse"
+        "400":
+          description: No target notebook
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '408':
-          description: Operation timed out
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TimeoutErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
 
-  /stop:
-    post:
-      summary: Stop the daemon
-      operationId: stopDaemon
-      tags: [daemon]
+  /tasks/{taskId}:
+    parameters:
+      - name: taskId
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      operationId: getTaskStatus
+      summary: 查詢特定 task 狀態（FR-101 taskId 模式）
       responses:
-        '200':
-          description: Daemon stopping
+        "200":
+          description: Task status with full history
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SuccessResponse'
+                $ref: "#/components/schemas/AsyncTask"
+        "404":
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      operationId: cancelTask
+      summary: 取消任務（FR-107 cancel）
+      description: |
+        queued → 從 queue 移除。
+        running → 通知 agent 在安全點停止。
+        終態 → 回報錯誤。
+      responses:
+        "200":
+          description: Task cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  taskId:
+                    type: string
+                  status:
+                    type: string
+                    const: cancelled
+                  cancelledAt:
+                    type: string
+                    format: date-time
+                  hint:
+                    type: string
+                required: [taskId, status, cancelledAt]
+        "409":
+          description: Task already in terminal state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /tasks:
+    get:
+      operationId: listTasks
+      summary: 列出所有近期任務（FR-101 --all/--recent 模式）
+      parameters:
+        - name: notebook
+          in: query
+          schema:
+            type: string
+          description: 篩選特定 notebook 的任務
+        - name: recent
+          in: query
+          schema:
+            type: boolean
+          description: 僅列出近期已完成但未消費的任務（--recent）
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Task list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AsyncTaskSummary"
+
+  /reauth:
+    post:
+      operationId: reauth
+      summary: 重新認證 Google session（FR-183 reauth）
+      description: |
+        關閉 headless Chrome → 重新 launch headed →
+        使用者完成登入 → 切回 headless。
+      responses:
+        "200":
+          description: Re-authenticated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  message:
+                    type: string
+                required: [success, message]
+
+  /skills:
+    get:
+      operationId: listSkills
+      summary: 列出所有 agent skill（FR-152 skills）
+      responses:
+        "200":
+          description: Skill list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SkillSummary"
+
+  /hooks/install:
+    post:
+      operationId: installHooks
+      summary: 安裝 notification adapter hooks（FR-121）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tool:
+                  type: string
+                  description: AI CLI 工具名稱（claude-code / generic）
+              required: [tool]
+      responses:
+        "200":
+          description: Hooks installed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  tool:
+                    type: string
+                  adapter:
+                    type: string
+                  hooks:
+                    type: array
+                    items:
+                      type: string
+                required: [success, tool, adapter]
+
+  /hooks/uninstall:
+    post:
+      operationId: uninstallHooks
+      summary: 移除 notification adapter hooks（FR-122）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tool:
+                  type: string
+              required: [tool]
+      responses:
+        "200":
+          description: Hooks removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  removed:
+                    type: array
+                    items:
+                      type: string
+                required: [success, removed]
+
+  /skill-template:
+    get:
+      operationId: exportSkillTemplate
+      summary: 輸出 AI Skill Template（FR-133 export-skill）
+      responses:
+        "200":
+          description: Skill template content
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  template:
+                    type: string
+                    description: Markdown 格式的 skill template 內容
+                required: [template]
+
+  /shutdown:
+    post:
+      operationId: shutdown
+      summary: Graceful shutdown daemon（stop 指令）
+      description: 回收所有 Chrome instance、關閉 BrowserPool、釋放資源、程序結束。
+      responses:
+        "200":
+          description: Shutdown initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    const: true
+                  message:
+                    type: string
+                required: [success, message]
 
 components:
   schemas:
-    SuccessResponse:
-      type: object
-      required: [success]
-      properties:
-        success:
-          type: boolean
-          const: true
-        message:
-          type: string
-
-    ErrorResponse:
-      type: object
-      required: [success, error]
-      properties:
-        success:
-          type: boolean
-          const: false
-        error:
-          type: string
-
-    TimeoutErrorResponse:
-      type: object
-      required: [success, error]
-      properties:
-        success:
-          type: boolean
-          const: false
-        error:
-          type: string
-        screenshot:
-          type: string
-          description: Base64-encoded screenshot for debugging
-
-    HealthResponse:
-      type: object
-      properties:
-        status:
-          type: string
-          enum: [ok]
-        uptime:
-          type: number
-          description: Daemon uptime in seconds
-
-    StatusResponse:
-      type: object
-      properties:
-        running:
-          type: boolean
-        browserConnected:
-          type: boolean
-        activeNotebook:
-          type: string
-          nullable: true
-        notebookCount:
-          type: integer
-
     NotebookEntry:
       type: object
-      required: [id, url, title, description, status, active]
       properties:
         id:
           type: string
+          description: Notebook alias
         url:
           type: string
         title:
@@ -298,62 +545,48 @@ components:
           type: string
         status:
           type: string
-          enum: [registering, ready, stale]
+          enum: [ready, operating, closed, stale, error]
         active:
           type: boolean
         sourceCount:
           type: integer
+      required: [id, url, title, description, status, active]
 
     SuccessWithNotebook:
       type: object
       properties:
         success:
           type: boolean
+          const: true
         id:
           type: string
         url:
           type: string
-        active:
-          type: boolean
-
-    AddNotebookResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-        id:
+        status:
           type: string
-        sources:
-          type: array
-          items:
-            type: object
         title:
           type: string
         description:
           type: string
+        sources:
+          type: array
+          items:
+            type: string
+      required: [success, id, url, status]
 
-    ExecResponse:
+    ExecResult:
       type: object
       properties:
         success:
           type: boolean
         answer:
           type: string
-          description: Agent response text (for queries)
         citations:
           type: array
           items:
-            $ref: '#/components/schemas/Citation'
-          description: Source citations (for queries)
-        sourceAdded:
-          type: string
-          description: Name of added source (for add operations)
-        screenshot:
-          type: string
-          description: Base64 screenshot (for screenshot requests)
-        data:
-          type: object
-          description: Generic structured data (for status/list queries)
+            $ref: "#/components/schemas/Citation"
+      required: [success]
+      additionalProperties: true
 
     Citation:
       type: object
@@ -362,3 +595,141 @@ components:
           type: string
         excerpt:
           type: string
+      required: [source]
+
+    AsyncSubmitResponse:
+      type: object
+      properties:
+        taskId:
+          type: string
+        status:
+          type: string
+          const: queued
+        notebook:
+          type: string
+        hint:
+          type: string
+      required: [taskId, status, notebook, hint]
+
+    AsyncTask:
+      type: object
+      properties:
+        taskId:
+          type: string
+        notebookAlias:
+          type: string
+        command:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed, cancelled]
+        result:
+          type: object
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        history:
+          type: array
+          items:
+            type: object
+            properties:
+              from:
+                type: string
+                nullable: true
+              to:
+                type: string
+              timestamp:
+                type: string
+                format: date-time
+              reason:
+                type: string
+                nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [taskId, notebookAlias, command, status, history, createdAt]
+
+    AsyncTaskSummary:
+      type: object
+      properties:
+        taskId:
+          type: string
+        notebook:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed, cancelled]
+        command:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [taskId, notebook, status, command, createdAt]
+
+    SkillSummary:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+      required: [name, version, description]
+
+    DaemonStatus:
+      type: object
+      properties:
+        running:
+          type: boolean
+        browserPool:
+          type: object
+          properties:
+            maxInstances:
+              type: integer
+            activeInstances:
+              type: integer
+            availableSlots:
+              type: integer
+          required: [maxInstances, activeInstances, availableSlots]
+        network:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [healthy, throttled, disconnected]
+            backoffRemainingMs:
+              type: integer
+              nullable: true
+          required: [status]
+        activeNotebooks:
+          type: array
+          items:
+            type: string
+        defaultNotebook:
+          type: string
+          nullable: true
+        pendingTasks:
+          type: integer
+        runningTasks:
+          type: integer
+      required: [running, browserPool, network, activeNotebooks, pendingTasks, runningTasks]
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          const: false
+        error:
+          type: string
+      required: [success, error]
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          const: true
+      required: [success]

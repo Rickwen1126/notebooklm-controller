@@ -1,45 +1,77 @@
 # Implementation Plan: NotebookLM Controller MVP
 
-**Branch**: `001-mvp` | **Date**: 2026-02-07 | **Spec**: [spec.md](./spec.md)
-**Input**: Feature specification from `/specs/001-mvp/spec.md`
+**Branch**: `001-mvp` | **Date**: 2026-02-12 | **Spec**: [spec.md](./spec.md)
+**Input**: Feature specification from `/specs/001-mvp/spec.md` (v4 — BrowserPool 架構)
 
 ## Summary
 
-建構一個常駐 daemon 程式（`nbctl`），透過 AI agent 自動化操控 NotebookLM 瀏覽器介面。
-daemon 連接 iso-browser Chrome instance，暴露 HTTP API 與 MCP server，
-讓使用者透過 CLI 自然語言指令完成「餵入資料 → 查詢知識 → 使用回答」的完整工作流。
+建構一個 CLI daemon 工具 `nbctl`，讓開發者透過命令列控制 Google NotebookLM：
+管理 notebook、餵入來源（repo/URL/PDF）、查詢 grounded 回答、產生 Audio Overview。
 
-技術方案：TypeScript + Claude Agent SDK V2（per-notebook session）+ puppeteer-core（CDP）+
-Fastify HTTP server + MCP SDK（stdio transport 內嵌）。
+技術架構：TypeScript daemon 透過 BrowserPool 管理多個 headless Chrome instance，
+每個 agent session 取得獨立完整 Chrome instance（cookie injection 共享認證），
+NetworkGate 集中管理流量許可。內嵌 Claude Agent SDK V2 的 vision-based AI agent
+執行 UI 操作，agent 擁有完整自我修復能力。
+非同步操作 + 檔案型 Notification Inbox + per-tool Adapter 實現跨工具通知。
 
 ## Technical Context
 
 **Language/Version**: TypeScript 5.x, Node.js 22 LTS
-**Primary Dependencies**: `@anthropic-ai/claude-agent-sdk`, `@modelcontextprotocol/sdk`, `puppeteer-core`, `fastify`, `commander`, `repomix`, `zod`
-**Storage**: JSON 檔案（`~/.nbctl/state.json`），atomic write
-**Testing**: Vitest（unit + integration）
-**Target Platform**: macOS（主要）、Linux（次要）
-**Project Type**: Single project（CLI daemon）
-**Performance Goals**: 管理指令 <100ms 回應（SC-002）；agent 操作依 spec SC-003~SC-005
-**Constraints**: Daemon 記憶體 <500MB（SC-010）；127.0.0.1 only binding；1 daemon : 1 browser
-**Scale/Scope**: 最多 20 個 notebook 元資料管理（SC-009）；單一使用者
+**Primary Dependencies**:
+- `@anthropic-ai/claude-agent-sdk` — AI agent session 管理（V2 API）
+- `puppeteer-core` — Chrome CDP 控制（launch + multi-page 操作）
+- `fastify` — Daemon HTTP API server
+- `commander` — CLI 框架
+- `repomix` — Git repo → 文字轉換
+- `zod` — Runtime schema validation
+- `@mozilla/readability` + `jsdom` — URL → 文字轉換
+- `pdf-parse` — PDF → 文字轉換
+
+**Storage**: JSON 檔案（`~/.nbctl/`），atomic write（temp + rename）
+**Testing**: Vitest
+**Target Platform**: macOS（主要），Linux（次要）
+**Project Type**: Single（CLI daemon 程式）
+**Performance Goals**: 管理指令 <100ms 回應（SC-002），daemon 啟動 <10s（SC-001），async 提交 <500ms（SC-100）
+**Constraints**: Daemon 記憶體 <500MB（不含 Chrome）（SC-010），hook 腳本 <5s（FR-126），同時 ≤3 Chrome instances（FR-173）
+**Scale/Scope**: 單一使用者，≤20 notebook 註冊，≤3 同時 Chrome instances
 
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-| Principle | Status | Notes |
-|-----------|--------|-------|
-| I. 禁止過度設計 | PASS | 單一專案、JSON 檔案存儲、無 ORM/DB 抽象 |
-| II. 單一職責 | PASS | 模組拆分：cli / daemon / agent / browser / content-pipeline / state / mcp |
-| III. Agent 程式本質 | PASS | Agent session 為一等公民；1 daemon : 1 browser；操作序列化 |
-| IV. 測試先行 | PASS | Vitest，每個模組伴隨 unit test |
-| V. 語意明確命名 | PASS | 遵循 spec Key Entities 命名 |
-| VI. 模組輕耦合 | PASS | 模組透過 TypeScript interface 溝通；依賴單向 |
-| VII. 安全並行 | PASS | Operation Queue message passing；state 寫入序列化 |
-| VIII. 繁體中文文件 | PASS | Spec/plan/使用者文件為繁體中文 |
-| IX. CodeTour | PASS | 每個模組建立 CodeTour |
-| X. Checkpoint & Review | PASS | 開發迴圈遵循 commit → review → approve |
+### Pre-Phase 0 Gate
+
+| # | Principle | Status | Notes |
+|---|-----------|--------|-------|
+| I | 禁止過度設計 | **PASS** | 10 模組各有明確職責。BrowserPool（FR-140~142）、AuthManager（FR-145~147）、NetworkGate（FR-190~194）皆為 spec 明確要求，非投機設計。 |
+| II | 單一職責 | **PASS** | 每模組一句話描述：CLI=指令解析、Daemon=HTTP+程序管理、BrowserPool=Chrome instance pool 管理、AuthManager=認證 cookie 管理、NetworkGate=流量許可閘門、Agent=AI session+操作、Content=格式轉換、State=持久化、Notification=inbox+adapter、Skill=外部化操作定義。 |
+| III | Agent 程式本質 | **PASS** | Constitution v1.3.0：BrowserPool 中央集權管理 + 全權委派操作。Agent 取得完整 Chrome instance，具備自我修復能力。Daemon 管理 Chrome lifecycle + NetworkGate 流量控制。 |
+| IV | 測試先行 | **PASS** | 每模組伴隨 unit test，integration test 覆蓋 CLI→daemon→agent 流程。 |
+| V | 語意明確命名 | **PASS** | 所有模組、entity、CLI 指令命名已在 spec 中定義，語意清晰。 |
+| VI | 模組輕耦合 | **PASS** | 依賴方向單向：CLI→Daemon→{ConnectionMgr, Agent, State, Notification}→底層。模組間透過 TypeScript interface 溝通。 |
+| VII | 安全並行 | **PASS** | Per-notebook operation queue（message passing），State Store 序列化寫入，Inbox 原子 rename。無 shared mutable state。 |
+| VIII | 繁體中文文件 | **PASS** | 所有 spec/plan 文件為繁體中文。Code 註解英文。 |
+| IX | CodeTour | **PASS** | 每模組實作時建立 CodeTour。 |
+| X | Checkpoint Commit | **PASS** | 每 checkpoint 建立 commit + code review subagent 審查。 |
+
+### Principle III 技術背景
+
+**Constitution v1.3.0 架構**：BrowserPool 中央集權管理 + 全權委派操作。
+
+**從 multi-tab 到 BrowserPool 的技術理由**（Phase 0 research + 架構討論）：
+1. CDP background tab 操作不可靠（GitHub #3318、#12712），multi-tab 必須序列化，
+   序列化後只剩省 navigate 時間，不值得整個 ConnectionManager 抽象。
+2. BoundTools interface 限制 agent 自我修復能力：agent 遇到 modal/redirect
+   只能回報錯誤，需額外 repair agent。完整 Chrome 讓 agent 自主修復。
+3. BrowserPool 天然 parallel：每個 agent session 獨立 Chrome instance。
+
+**MVP 實作**：
+- BrowserPool 管理 N headless Chrome instances（max=3）
+- Agent 透過 acquire() 取得完整 Chrome instance，release() 歸還
+- Cookie injection：AuthManager 管理 Google cookies，注入每個 headless instance
+- NetworkGate：agent 操作前 acquirePermit()，異常時全域 backoff
+- 超時未歸還 → daemon 強制回收
+- 純讀取記憶體狀態的指令（`list`、`status`）不需 Chrome instance，即時回應
 
 ## Project Structure
 
@@ -47,120 +79,188 @@ Fastify HTTP server + MCP SDK（stdio transport 內嵌）。
 
 ```text
 specs/001-mvp/
-├── plan.md              # This file
-├── research.md          # Phase 0: 技術研究
+├── plan.md              # 本文件
+├── research.md          # Phase 0: 技術研究報告
 ├── data-model.md        # Phase 1: 資料模型
 ├── quickstart.md        # Phase 1: 快速上手指南
-├── contracts/           # Phase 1: API contracts
-│   ├── http-api.yaml    # OpenAPI spec for daemon HTTP API
-│   └── mcp-tools.md     # MCP tool definitions
-└── tasks.md             # Phase 2: 實作任務（/speckit.tasks 產出）
+├── contracts/
+│   └── http-api.yaml    # Phase 1: HTTP API 契約（OpenAPI 3.1）
+├── checklists/
+│   └── flow-coverage.md # Pre-plan 流程覆蓋清單
+└── tasks.md             # Phase 2: 實作任務（由 /speckit.tasks 產生）
 ```
 
 ### Source Code (repository root)
 
 ```text
 src/
-├── cli/                        # CLI 入口與指令解析
-│   ├── index.ts                # CLI entry point (commander setup)
-│   ├── commands/               # 各子命令 handler
+├── cli/                    # CLI 進入點（Commander.js）
+│   ├── index.ts            # CLI 主程式，註冊所有 subcommand
+│   ├── commands/           # 每個 subcommand 一個檔案
 │   │   ├── start.ts
 │   │   ├── stop.ts
 │   │   ├── status.ts
 │   │   ├── list.ts
+│   │   ├── exec.ts
 │   │   ├── open.ts
 │   │   ├── close.ts
 │   │   ├── use.ts
 │   │   ├── add.ts
 │   │   ├── add-all.ts
-│   │   ├── exec.ts
-│   │   └── login.ts
-│   └── output.ts              # JSON output formatter
+│   │   ├── rename.ts
+│   │   ├── remove.ts
+│   │   ├── cancel.ts
+│   │   ├── reauth.ts
+│   │   ├── skills.ts
+│   │   ├── install-hooks.ts
+│   │   ├── uninstall-hooks.ts
+│   │   └── export-skill.ts
+│   └── output.ts          # JSON stdout 輸出格式化
 │
-├── daemon/                     # Daemon 核心
-│   ├── server.ts               # Fastify HTTP server setup
-│   ├── routes/                 # HTTP API routes
+├── daemon/                 # Daemon 程序管理 + HTTP API
+│   ├── server.ts           # Fastify HTTP server 設定與路由
+│   ├── process.ts          # Daemon 背景程序化（fork / PID file）
+│   ├── routes/             # HTTP API 路由
 │   │   ├── health.ts
-│   │   ├── notebook.ts         # notebook CRUD endpoints
-│   │   └── exec.ts             # exec endpoint
-│   ├── process.ts              # Daemon 程序管理（PID, fork, signal）
-│   └── queue.ts                # Operation Queue（序列化瀏覽器操作）
+│   │   ├── exec.ts
+│   │   ├── notebooks.ts
+│   │   ├── tasks.ts
+│   │   └── status.ts
+│   └── scheduler.ts        # Operation scheduler（global semaphore + per-notebook queue）
 │
-├── agent/                      # Agent session 管理
-│   ├── session-manager.ts      # Per-notebook session lifecycle
-│   ├── session.ts              # Single agent session wrapper
-│   └── system-prompt.ts        # Agent system prompt template
+├── browser-pool/              # BrowserPool — Chrome instance pool 管理
+│   ├── pool.ts                # BrowserPool 主類別，manage N headless Chrome instances
+│   ├── types.ts               # BrowserInstance, PoolError 型別定義
+│   ├── puppeteer-launcher.ts  # Puppeteer 底層 Chrome launch 實作
+│   └── chrome-finder.ts       # Chrome 執行檔路徑探索
 │
-├── browser/                    # Browser 連線與操作
-│   ├── connector.ts            # Chrome CDP 連線管理
-│   ├── tools.ts                # Browser tools (screenshot, click, type, scroll, paste)
-│   └── health.ts               # 連線健康檢查 + 重連
+├── auth/                      # AuthManager — 認證 cookie 管理
+│   ├── manager.ts             # AuthManager 主類別
+│   ├── cookie-extractor.ts    # Headed Chrome cookie 擷取
+│   └── cookie-injector.ts     # Headless Chrome cookie 注入
 │
-├── content/                    # Content Pipeline
-│   ├── repo-to-text.ts         # repomix wrapper
-│   ├── url-to-text.ts          # Readability + jsdom
-│   └── pdf-to-text.ts          # pdf-parse wrapper
+├── network-gate/              # NetworkGate — 集中式流量閘門
+│   ├── gate.ts                # NetworkGate 主類別（acquirePermit / reportAnomaly）
+│   ├── throttle-detector.ts   # Rate limit / CAPTCHA 偵測
+│   └── backoff.ts             # Exponential backoff 實作
 │
-├── state/                      # State 管理與持久化
-│   ├── notebook-registry.ts    # Notebook Registry（CRUD + 持久化）
-│   ├── local-cache.ts          # Per-notebook 來源/artifact 元資料
-│   ├── operation-log.ts        # 操作歷程記錄
-│   └── storage.ts              # JSON file atomic read/write
+├── agent/                  # AI Agent — Claude Agent SDK V2
+│   ├── session.ts          # Agent session 建立與管理
+│   ├── tools/              # Agent 可用的 tool 定義
+│   │   ├── browser-tools.ts    # screenshot, click, type, scroll, paste, download（包裝 Chrome instance）
+│   │   ├── content-tools.ts    # repoToText, urlToText, pdfToText
+│   │   └── file-tools.ts      # writeFile（查詢結果輸出）
+│   └── skill-loader.ts    # 從檔案載入 skill 定義
 │
-├── mcp/                        # MCP Server
-│   ├── server.ts               # McpServer setup + tool registration
-│   └── tools.ts                # notebooklm_exec, notebooklm_list_notebooks
+├── content/                # Content Pipeline — 格式轉換
+│   ├── repo-to-text.ts     # repomix 包裝
+│   ├── url-to-text.ts      # Readability + jsdom 包裝
+│   └── pdf-to-text.ts      # pdf-parse 包裝
 │
-└── shared/                     # 共用型別與 utilities
-    ├── types.ts                # 核心型別定義
-    ├── errors.ts               # Error classes + JSON error format
-    ├── logger.ts               # stderr-only logger
-    └── config.ts               # 常數與預設值（ports, paths）
+├── state/                  # State Store — 持久化
+│   ├── store.ts            # 記憶體狀態 + JSON 持久化
+│   ├── notebook-registry.ts # Notebook 元資料 CRUD
+│   ├── local-cache.ts      # Per-notebook 來源/artifact 快取
+│   ├── operation-log.ts    # 操作歷程紀錄
+│   └── task-store.ts       # Async task 狀態管理
+│
+├── notification/           # Notification — Inbox + Adapter
+│   ├── inbox.ts            # 檔案型 inbox 讀寫（atomic write + rename consume）
+│   ├── adapter.ts          # Adapter 介面定義
+│   ├── adapters/
+│   │   ├── claude-code.ts  # Claude Code adapter（hooks 安裝/移除 + 腳本產生）
+│   │   └── generic.ts      # Generic pull-based adapter
+│   └── hooks/              # Hook 腳本模板
+│       ├── user-prompt-submit.sh
+│       └── stop.sh
+│
+├── skill/                  # Agent Skill 外部化定義
+│   ├── types.ts            # Skill 定義型別
+│   ├── loader.ts           # Skill 檔案載入與驗證
+│   └── template-exporter.ts # AI Skill Template 輸出
+│
+└── shared/                 # 共用工具
+    ├── errors.ts           # 統一錯誤型別
+    ├── logger.ts           # 結構化日誌（stderr）
+    ├── paths.ts            # ~/.nbctl/ 路徑常數 + 權限管理
+    └── validation.ts       # URL 格式、alias 格式驗證
+
+skills/                     # Agent Skill 定義檔案（外部化）
+├── add-source.yaml
+├── query.yaml
+├── generate-audio.yaml
+├── screenshot.yaml
+├── list-sources.yaml
+└── rename-source.yaml
 
 tests/
-├── unit/
+├── unit/                   # 單元測試（對應 src/ 結構）
 │   ├── cli/
 │   ├── daemon/
+│   ├── browser-pool/
+│   ├── auth/
+│   ├── network-gate/
 │   ├── agent/
-│   ├── browser/
 │   ├── content/
 │   ├── state/
-│   └── mcp/
-├── integration/
-│   ├── daemon-lifecycle.test.ts
-│   ├── notebook-management.test.ts
-│   └── exec-pipeline.test.ts
-└── contract/
-    └── http-api.test.ts
+│   ├── notification/
+│   └── skill/
+├── integration/            # 整合測試
+│   ├── cli-daemon.test.ts      # CLI → HTTP → daemon 流程
+│   ├── agent-browser.test.ts   # Agent → BrowserPool → mock Chrome instance
+│   ├── async-notification.test.ts # Async exec → inbox → consume
+│   └── state-persistence.test.ts  # State → stop → restart → restore
+└── contract/               # 契約測試
+    └── http-api.test.ts    # HTTP API 符合 OpenAPI spec
 ```
 
-**Structure Decision**: Single project 結構。此為 CLI daemon 工具，不含前端。
-模組按職責垂直拆分為 7 個核心目錄（cli, daemon, agent, browser, content, state, mcp）
-加一個共用目錄（shared）。每個目錄對應一個單一職責模組。
+**Structure Decision**: 採用 Single project 結構。10 個功能模組 + shared 工具，
+每模組一個目錄。CLI 與 daemon 分離（CLI 是 HTTP client，daemon 是 server）。
+BrowserPool + AuthManager + NetworkGate 三模組協作管理瀏覽器與流量。
+Agent skill 定義以 YAML 檔案外部化於 `skills/` 目錄。
 
 ## Module Dependency Graph
 
 ```text
-cli → daemon (HTTP client calls)
-daemon/server → daemon/queue → agent/session-manager → browser/connector
-                                                     → content/*
-daemon/server → state/notebook-registry
-daemon/server → mcp/server (embedded, shares state)
-agent/session → browser/tools (screenshot, click, type...)
-state/* → state/storage (atomic JSON I/O)
-mcp/tools → daemon/queue (submit exec requests)
-           → state/notebook-registry (list notebooks)
+CLI ──HTTP──→ Daemon
+                ├──→ Scheduler ──→ Agent ──→ BrowserPool ──→ [Chrome/Puppeteer]
+                │                    │              │
+                │                    │         AuthManager (cookie injection)
+                │                    │
+                │                    ├──→ NetworkGate (acquirePermit before operations)
+                │                    ├──→ SkillLoader ──→ skills/*.yaml
+                │                    └──→ ContentPipeline
+                ├──→ StateStore ←── Agent (透過 daemon 介面)
+                └──→ NotificationInbox
+                        └──→ Adapter (claude-code / generic)
 ```
 
-依賴方向單向：`cli → daemon → agent → browser`，`state` 被 daemon/agent 共用，
-`mcp` 被 daemon 啟動並共用 queue + state。
+依賴方向：CLI → Daemon → {Scheduler, State, Notification} → {Agent, BrowserPool, AuthManager, NetworkGate} → 底層
+禁止反向依賴。Agent 不直接存取 StateStore，透過 daemon 提供的回呼介面更新狀態。
+Agent 操作前 MUST 透過 NetworkGate acquirePermit()。BrowserPool 啟動 Chrome 時透過 AuthManager 取得 cookies。
 
 ## Complexity Tracking
 
-> No constitution violations detected. All design decisions align with principles.
+> **No constitution violations.** 以下記錄需要額外複雜度說明的設計決策。
 
-| Aspect | Decision | Justification |
-|--------|----------|--------------|
-| 7 source directories | 對應 7 個職責域 | 遵循 Principle II 單一職責 |
-| JSON file storage | 非 SQLite | 資料量小（≤20 notebooks），人類可讀，遵循 Principle I |
-| Agent SDK V2 (unstable) | Adapter 隔離 | `session.ts` 封裝 SDK 呼叫，降低 API 變更風險 |
+| Decision | Why Needed | Simpler Alternative Rejected Because |
+|----------|------------|-------------------------------------|
+| 10 個模組（原 9 → +AuthManager） | 每模組職責明確且為 spec FR 明確要求。BrowserPool（FR-140）、AuthManager（FR-145）、NetworkGate（FR-190）、Notification Adapter（FR-120）皆為獨立模組。 | 合併模組會違反 Principle II 單一職責（如 BrowserPool + AuthManager 合併後描述需用「和」）。 |
+| BrowserPool 取代 ConnectionManager | Agent 自我修復需要完整 Chrome instance。Multi-tab 序列化後優勢消失。BrowserPool 天然 parallel。 | Multi-tab + BoundTools 限制 agent 能力 + 不支援真正 parallel。 |
+
+## Constitution Re-Check (Post Phase 1 Design)
+
+| # | Principle | Status | Phase 1 Notes |
+|---|-----------|--------|---------------|
+| I | 禁止過度設計 | **PASS** | data-model 只包含 spec 要求的 entity。HTTP API 每個 endpoint 對應一個 CLI 指令，無多餘。AuthManager 從 BrowserPool 拆出因為 cookie 管理 ≠ Chrome lifecycle 管理。 |
+| II | 單一職責 | **PASS** | 10 模組各有一句話描述，無重疊。data-model entity 各有明確職責。 |
+| III | Agent 程式本質 | **PASS** | Constitution v1.3.0：BrowserPool 中央集權管理 + 全權委派操作。Agent 取得完整 Chrome instance，自主操作 + 自我修復。 |
+| IV | 測試先行 | **PASS** | 測試結構（unit/integration/contract）已規劃。Contract test 驗證 HTTP API 符合 OpenAPI。 |
+| V | 語意明確命名 | **PASS** | Entity 命名（NotebookEntry, SourceRecord, AsyncTask）語意明確。API endpoint 路徑 RESTful。 |
+| VI | 模組輕耦合 | **PASS** | 依賴圖單向。Agent 不直接存取 StateStore。BrowserPool 透過 acquire/release interface 管理 Chrome，AuthManager 透過 cookie injection 共享認證。 |
+| VII | 安全並行 | **PASS** | BrowserPool 天然隔離（獨立 Chrome instance）。Per-notebook queue 用 message passing。NetworkGate permit-based 流量控制。Inbox 用 atomic rename。State 用 atomic write。 |
+| VIII | 繁體中文文件 | **PASS** | 所有 Phase 1 文件為繁體中文。 |
+| IX | CodeTour | **PASS** | 實作時每模組建立 CodeTour。 |
+| X | Checkpoint Commit | **PASS** | 實作時每 checkpoint commit + review。 |
+
+**Post-Phase 1 Gate**: **ALL PASS**. 設計階段無 constitution violation。
