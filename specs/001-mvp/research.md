@@ -1,10 +1,20 @@
 # 技術研究報告：NotebookLM Controller MVP
 
-**Date**: 2026-02-12 (v3 — 對齊 spec v4 BrowserPool 架構)
+**Date**: 2026-02-24 (v4 — 對齊 spec v6 MCP Server + Single Browser Multi-tab)
 **Feature Branch**: `001-mvp`
-**Previous Version**: 2026-02-12 v2（spec v3 multi-tab）, 2026-02-07 v1（spec v1）
+**Previous Version**: 2026-02-12 v3（spec v4 BrowserPool）, 2026-02-12 v2（spec v3 multi-tab）, 2026-02-07 v1（spec v1）
 
 <!--
+  v4 更新摘要（MCP Server + Single Browser Multi-tab pivot）：
+  - Browser Automation：BrowserPool（多 Chrome instance）→ Single Browser Multi-tab（一 Chrome 多 tab）
+  - Cookie injection 移除 → userDataDir 共享認證
+  - AuthManager 移除 → 不需獨立模組
+  - HTTP Server：Fastify → MCP Server（@modelcontextprotocol/sdk, Streamable HTTP）
+  - CLI Framework：Commander.js → 移除（薄啟動器 npx nbctl 取代）
+  - Notification Inbox：檔案型 inbox → MCP notification 直接推送
+  - Claude Code Hooks：Hook 腳本移除（MCP notification 取代）
+  - 更新技術風險表
+
   v3 更新摘要（BrowserPool 架構 pivot）：
   - Browser Automation section 重寫：multi-tab → BrowserPool 模型
   - 新增 BrowserPool 設計研究（中央集權管理 + 全權委派）
@@ -83,17 +93,18 @@ const mcpServer = createSdkMcpServer({
 ```
 支援 PNG、JPEG、GIF、WebP。
 
-**Architecture pattern** (updated for v4 — BrowserPool):
+**Architecture pattern** (updated for v6 — MCP Server + Single Browser Multi-tab):
 ```
-Daemon process
-├── BrowserPool: manage N headless Chrome instances (max=3)
-├── AuthManager: cookie extraction + injection
+Daemon process (MCP Server, Streamable HTTP)
+├── TabManager: manage single Chrome instance, multi-tab (CDP sessions)
 ├── NetworkGate: acquirePermit() / reportAnomaly()
 ├── SessionManager: Map<notebookAlias, SessionState>
-├── 每個 notebook 一個 agent session + 獨立 Chrome instance
+├── 每個 notebook 一個 agent session + 獨立 tab（CDP session）
 ├── session.send() 發送指令，session.stream() 取得結果
 ├── Session 自動持久化，daemon 重啟後可 resume
-└── Agent tools 透過 createSdkMcpServer 注入
+├── Agent tools 透過 createSdkMcpServer 注入
+├── MCP tools/list 自描述（不需額外 Skill Template）
+└── MCP notification 推送非同步操作結果
 ```
 
 **Known limitations**:
@@ -108,44 +119,41 @@ Daemon process
 
 ## 3. Browser Automation
 
-### Decision: puppeteer-core BrowserPool（多 headless Chrome instance）
+### Decision: puppeteer-core Single Browser Multi-tab（單一 Chrome instance 多 tab）
 
-**v4 重大變更**：從 multi-tab（1 Chrome N tabs）改為 BrowserPool（N headless Chrome instances）。
+**v6 架構**：Single Browser Multi-tab。Daemon 管理一個 Chrome instance（headless），
+每個 notebook 一個 tab，agent 透過 CDP session 操作獨立 tab。
 
-**架構 pivot 理由**：
-1. **序列化讓 multi-tab 優勢消失**：Puppeteer research 確認 background tab 的
-   screenshot/click 不可靠（#3318, #12712），必須序列化所有 vision 操作。
-   序列化後 multi-tab 唯一好處只剩省 navigate 時間，不值得整個 ConnectionManager 抽象。
-2. **BoundTools interface 限制 agent 自我修復能力**：multi-tab 下 agent 拿到的是
-   bounded interface（`click(pageId, x, y)`），遇到意外（modal dialog、redirect）
-   只能回報錯誤，需額外 repair agent + unsolved problem queue。
-   若 agent 有完整 Chrome instance，可自己截圖分析、retry、關 modal → 可靠度大幅提升。
-3. **BrowserPool 天然支援真正 parallel**：每個 agent session 獨立 Chrome instance，
-   無需 bringToFront 序列化，跨 notebook 操作真正平行。
+**架構演進歷程**：
+1. **v3（multi-tab）→ v4（BrowserPool）**：Puppeteer 高層 API（`page.click()`）在 background tab
+   不可靠（#3318, #12712），改為 BrowserPool 多 Chrome instance。
+2. **v4（BrowserPool）→ v5/v6（Single Browser Multi-tab）**：Spike 0 實驗證實 CDP 底層 API
+   （`Input.dispatchMouseEvent`、`Page.captureScreenshot`）在 background tab 操作完全可靠。
+   先前不可靠的結論是 Puppeteer 高層 API 的問題，非 Chrome/CDP 本身限制。
+   單一 Chrome instance 多 tab 降低記憶體（~900MB → ~500MB），
+   且 `userDataDir` 取代 cookie injection，不需獨立 AuthManager 模組。
 
-**Launch API**（BrowserPool 內部，per instance）:
+**Launch API**（TabManager 內部）:
 ```typescript
 import puppeteer from "puppeteer-core";
 
-// BrowserPool.acquire(notebookUrl) 內部：
+// TabManager 啟動時 launch 單一 Chrome instance：
 const browser = await puppeteer.launch({
   executablePath: chromePath,
-  headless: true,  // Pool 中的 instance 全部 headless
+  headless: true,
+  userDataDir: "~/.nbctl/profiles/",  // 共享認證，不需 cookie injection
   args: [
     "--no-first-run",
     "--disable-default-apps",
     "--window-size=1280,800"
   ]
-  // 注意：不使用 userDataDir（改用 cookie injection）
 });
 
-// 注入 cookies（從 AuthManager 取得）
-const context = browser.defaultBrowserContext();
-await context.setCookie(...storedCookies);
-
-// Navigate 到目標 notebook
+// TabManager.openTab(notebookUrl) 內部：
 const page = await browser.newPage();
 await page.goto(notebookUrl);
+const cdpSession = await page.createCDPSession();
+// 回傳 TabHandle（含 cdpSession + page）
 ```
 
 **Chrome 路徑探索**（macOS）:
@@ -158,71 +166,61 @@ await page.goto(notebookUrl);
 ```
 注意：`.app` 是目錄，需解析到 `.../Contents/MacOS/<name>`。
 
-### Background finding: Multi-tab 並行操作不可靠（促使架構 pivot）
+### Background finding: CDP 底層 API background tab 操作可靠
 
-**研究結果**（Puppeteer GitHub #3318、#12712、PR #12724）：
+**Spike 0 實驗結論**（推翻 v3 研究結果）：
 
-| 操作 | 非 active tab | 說明 |
-|------|-------------|------|
-| `page.screenshot()` | **不可靠** | 可能 timeout，即使 headless 模式 |
-| `page.click()` | **不可靠** | 背景 tab 中 click 已知問題 |
-| `page.type()` | **可能有問題** | 依賴焦點狀態 |
-| `page.evaluate()` | **可靠** | JS 執行不依賴 active tab |
-| `page.goto()` | **可靠** | Navigation 不依賴 active tab |
+| 操作 | Puppeteer 高層 API | CDP 底層 API | 說明 |
+|------|-------------------|-------------|------|
+| screenshot | **不可靠** `page.screenshot()` | **可靠** `Page.captureScreenshot` | CDP 直接操作 renderer |
+| click | **不可靠** `page.click()` | **可靠** `Input.dispatchMouseEvent` | CDP 直接派發事件 |
+| type | **可能有問題** `page.type()` | **可靠** `Input.dispatchKeyEvent` | CDP 直接派發按鍵 |
+| evaluate | **可靠** `page.evaluate()` | **可靠** `Runtime.evaluate` | JS 執行不依賴 active tab |
+| navigate | **可靠** `page.goto()` | **可靠** `Page.navigate` | Navigation 不依賴 active tab |
 
-此發現直接促成從 multi-tab 改為 BrowserPool 的架構 pivot。
+CDP 底層 API 繞過 Puppeteer 高層封裝中的 focus/bringToFront 假設，
+直接透過 Chrome DevTools Protocol 操作目標 tab 的 renderer process。
 
-### BrowserPool 設計
+### TabManager 設計
 
-**Pool lifecycle**:
+**TabManager lifecycle**:
 ```
-BrowserPool (max N=3)
-├── acquire(notebookUrl) → launch headless Chrome + inject cookies + navigate
-│   → 回傳完整 Browser instance
-├── release(instanceId) → 關閉 Chrome process，歸還 slot
-├── 超時未歸還 → daemon 強制 kill Chrome process 並歸還 slot
-└── healthcheck() → 檢查所有 active instance 是否回應
+TabManager (single Chrome instance)
+├── launch() → 啟動 headless Chrome（含 userDataDir 認證）
+├── openTab(notebookUrl) → 建立新 tab + CDP session → 回傳 TabHandle
+├── closeTab(tabId) → 關閉 tab + 清理 CDP session
+├── listTabs() → 列舉所有 active tabs
+├── 超時未歸還 → daemon 強制關閉 tab
+└── shutdown() → 關閉所有 tab + Chrome process
 ```
 
 **資源估算**：
-- 每個 headless Chrome instance ~300MB RAM
-- Pool max=3 → ~900MB（vs multi-tab ~500MB，差 400MB 可接受）
-- 不是每個 notebook 常駐一個 Chrome，需要操作時才 acquire
+- 單一 Chrome instance + N tabs：~500MB（vs BrowserPool 3 instances ~900MB）
+- Tab 按需建立，操作完畢關閉
 
 **Agent 防線（防 agent 發瘋）**：
 1. Skill prompt — 明確操作範圍和禁止事項
-2. BrowserPool timeout — agent 超時沒歸還 → daemon 強制回收
+2. Tab timeout — agent 超時沒歸還 → daemon 強制關閉 tab
 3. NetworkGate — 即使 agent 瘋狂操作，gate 擋住異常流量
 4. Operation timeout — 單一操作超時直接 kill
 
-### Cookie Injection 可行性
+### 認證：userDataDir 共享
 
-**問題**：Chrome 對 `userDataDir` 有 SingletonLock，同一 `userDataDir` 不能被
-多個 Chrome instance 同時使用。BrowserPool 需要多個 instance 共享認證。
+**設計**：Single Chrome instance 共享 `userDataDir`（`~/.nbctl/profiles/`），
+不需 cookie extraction/injection，不需獨立 AuthManager 模組。
 
-**解法**：Cookie injection（不使用 userDataDir）
+**認證流程**：
+1. 首次啟動：daemon 以 headed mode 啟動 Chrome（`headless: false`）
+2. 使用者手動完成 Google 登入
+3. Cookies + session state 自動持久化至 `userDataDir`
+4. 後續啟動：headless mode 直接複用 session
+5. Session 過期：`reauth` MCP tool → headed mode 重新認證
 
-**AuthManager 流程**：
-1. 首次登入：launch headed Chrome（有 userDataDir）→ 使用者完成 Google login
-2. 擷取 cookies：`BrowserContext.cookies()` 取得所有 Google cookies
-   - 重要 cookies：SID, HSID, SSID, APISID, `__Secure-1PSID`, `__Secure-3PSID` on `.google.com`
-3. 儲存：`~/.nbctl/profiles/cookies.json`（權限 600）
-4. 關閉 headed Chrome
-5. 後續每個 headless Chrome instance 啟動後注入：
-   ```typescript
-   const context = browser.defaultBrowserContext();
-   await context.setCookie(...storedCookies);
-   ```
-
-**API 注意事項**：
-- `page.cookies()` / `page.setCookie()` 已 deprecated
-- 改用 `BrowserContext.cookies()` / `BrowserContext.setCookie()`
-- Cookie 設定需在 navigate 之前完成
-
-**風險**：
-- NotebookLM 可能不只靠 cookies（可能有 localStorage/IndexedDB auth state）
-- 需實測驗證 cookie injection 是否足以建立有效 session
-- Mitigation：若 cookies 不夠，可嘗試 CDP `Storage.getStorageItems` + `Storage.setStorageItems`
+**優勢（相較於 BrowserPool cookie injection）**：
+- 不需 AuthManager 模組（減少一個模組）
+- 不需 cookie extraction/injection 邏輯
+- 不受 Chrome SingletonLock 限制（只有一個 Chrome instance）
+- localStorage/IndexedDB 等 session state 自動包含
 
 ### Headless 模式
 
@@ -233,12 +231,11 @@ BrowserPool (max N=3)
 | Headed | `headless: false` | 可見視窗，用於 Google 登入 |
 
 **專案選擇**：
-- BrowserPool instances：`headless: true`（new headless，完整 Chrome 功能）
-- AuthManager 首次登入：`headless: false`（headed，使用者手動 Google login）
+- TabManager 正常運作：`headless: true`（new headless，完整 Chrome 功能）
+- 首次登入 / reauth：`headless: false`（headed，使用者手動 Google login）
 
-**Mode switching**：BrowserPool 中的 instance 始終 headless。
-AuthManager 認證 Chrome 獨立於 pool，僅用於登入。
-`nbctl reauth` 流程：launch headed Chrome → 完成登入 → 擷取 cookies → 更新儲存 → 關閉。
+**Mode switching**：TabManager 啟動時根據是否有有效 session 決定 headless/headed。
+`reauth` MCP tool 流程：關閉 headless Chrome → launch headed Chrome → 完成登入 → 關閉 → 重新 launch headless。
 
 ## 4. Content Pipeline
 
@@ -260,15 +257,25 @@ AuthManager 認證 Chrome 獨立於 pool，僅用於登入。
 - 簡單直接，適合文字 PDF
 - 複雜排版 PDF 可用 `pdfjs-dist`（非 MVP 範圍）
 
-## 5. HTTP Server
+## 5. MCP Server
 
-### Decision: Fastify
+### Decision: `@modelcontextprotocol/sdk`（Streamable HTTP transport）
 
-（v1 研究結論不變）
+**v6 重大變更**：從 Fastify HTTP API 改為 MCP Server。
 
-- 高效能（比 Express 快 2-3x）
-- 內建 JSON schema validation
-- 良好的 TypeScript 支援
+**Rationale**:
+- 主要消費者為 AI agent（Claude Code 等），MCP 是 AI 工具的原生協議
+- MCP tool 自描述（tools/list），不需額外 Skill Template
+- MCP 持續連線（Streamable HTTP），非同步通知可直接推送
+- 砍掉 CLI 模組（18 command files）、Fastify、commander 依賴
+
+**Transport**: Streamable HTTP（`127.0.0.1:19224`）
+- Daemon 獨立於 client 存活，支援多 client 同時連線
+- 適合 AI 工具的 MCP client 設定（如 Claude Code `mcp.json`）
+
+**Alternatives considered**:
+- Fastify HTTP API + CLI wrapper：過多膠水層，CLI 只是 thin HTTP client
+- stdio transport：不支援 daemon 獨立存活，無法多 client 連線
 
 ## 6. State Persistence
 
@@ -279,20 +286,16 @@ AuthManager 認證 Chrome 獨立於 pool，僅用於登入。
 **Storage location**: `~/.nbctl/` 目錄（權限 700）
 ```
 ~/.nbctl/
-├── profiles/chrome/        # Chrome userDataDir（session + cookies）
+├── profiles/               # Chrome userDataDir（session + cookies，共享認證）
 ├── state.json              # Notebook Registry + default notebook + daemon PID
 ├── cache/<notebook-alias>/ # Per-notebook 來源元資料、artifacts 紀錄
 ├── tasks/                  # Async task 狀態檔案
-├── inbox/                  # Notification Inbox
-│   ├── <session-id>/
-│   │   ├── urgent/         # 失敗操作通知
-│   │   ├── normal/         # 成功操作通知
-│   │   └── consumed/       # 已消費通知（audit trail）
-│   └── _default/           # 無 session-id 時的 fallback
-├── hooks/                  # Adapter hook 腳本
 ├── skills/                 # Agent skill 定義檔案
 └── logs/                   # 操作日誌
 ```
+
+**v6 變更**：移除 `inbox/`（MCP notification 取代檔案型通知）、`hooks/`（不需 adapter hook 腳本）。
+`profiles/chrome/` 簡化為 `profiles/`（userDataDir 直接使用）。
 
 **Atomic write pattern**:
 ```typescript
@@ -305,24 +308,29 @@ async function atomicWrite(filePath: string, data: string): Promise<void> {
 
 ## 7. CLI Framework
 
-### Decision: Commander.js
+### Decision: 移除（v6 — MCP Server 取代）
 
-（v1 研究結論不變）
+**v6 變更**：CLI 模組（Commander.js）整個移除。所有功能透過 MCP tool 暴露。
 
-支援子命令：start, stop, status, list, open, close, use, add, add-all, exec,
-rename, remove, cancel, reauth, skills, install-hooks, uninstall-hooks, export-skill。
+**Thin launcher**：`npx nbctl` 僅負責 daemon 程序管理（start/stop/status），
+不是完整 CLI framework。實作為簡單的 `process.argv` 解析，不需 Commander.js。
 
-## 8. Notification Inbox 設計
+**Historical note**：
+v1~v5 使用 Commander.js 支援 18 個子命令。v6 pivot 後，這些子命令
+全部轉為 14 個 MCP tool（exec, get_status, list_notebooks 等）。
 
-### Decision: 檔案型 per-session inbox + rename consume
+## 8. Notification 設計
+
+### Decision: MCP notification 直接推送（v6 — 取代檔案型 inbox）
+
+**v6 變更**：檔案型 per-session inbox 整個移除。改為 MCP notification 直接推送。
 
 **Key design**:
-- 每個通知為獨立 JSON 檔案：`~/.nbctl/inbox/<session-id>/<priority>/task-<taskId>.json`
-- 寫入：atomic write（temp + rename）
-- 消費：rename 到 `consumed/`（保留 audit trail）
-- 清理：daemon 定期清除 >24h 的 consumed 通知
+- 非同步操作（`exec` tool 帶 `async: true`）完成後，daemon 透過 MCP notification
+  推送結果至所有連線中的 client
+- MCP protocol 內建 notification 機制，不需自建 inbox + adapter + hook
 
-**通知格式**:
+**通知格式**（MCP notification payload）:
 ```json
 {
   "taskId": "abc123",
@@ -330,53 +338,32 @@ rename, remove, cancel, reauth, skills, install-hooks, uninstall-hooks, export-s
   "notebook": "research",
   "result": { "success": true, "sourceAdded": "my-project (repo)" },
   "originalContext": "把 repo 加入來源",
-  "sessionId": "session-xyz",
-  "priority": "normal",
   "timestamp": "2026-02-12T10:30:00Z"
 }
 ```
 
-**Alternatives considered**:
-- SQLite：過重，不符 Principle I
-- Unix socket / IPC：daemon 重啟後通知丟失
-- 單一 JSON 檔案：concurrent write 衝突
+**離線 client 處理**：
+- 若無 client 連線，通知不會丟失——資訊保留在 AsyncTask 狀態中
+- Client 重新連線後可透過 `get_status` MCP tool 查詢任務結果
+
+**Alternatives considered（歷史記錄）**:
+- 檔案型 inbox（v3~v5）：per-session JSON 檔案 + rename consume。移除原因：MCP 持續連線可直接推送
+- Claude Code Hooks adapter（v3~v5）：UserPromptSubmit hook 注入通知。移除原因：MCP notification 取代
 
 ## 9. Claude Code Hooks 整合
 
-### Decision: UserPromptSubmit + Stop hook，stdin JSON 解析 session_id
+### Decision: 移除（v6 — MCP notification 取代）
 
-**Key findings**:
-- Claude Code hooks 透過 stdin 接收 JSON，包含 `session_id` 欄位
-- `UserPromptSubmit` hook：使用者送出訊息時觸發，stdout 內容注入 AI context
-- `Stop` hook：AI 停止前觸發，exit 2 可阻止停止
-- Hook timeout 預設 60s，我們限制 5s（FR-126）
+**v6 變更**：Claude Code Hooks 整合（UserPromptSubmit + Stop hook）整個移除。
 
-**Hook 腳本設計**（shell script，安裝到 `~/.nbctl/hooks/`）:
+**理由**：
+- MCP Server 架構下，Claude Code 透過 MCP protocol 直接連線 daemon
+- 非同步操作完成後透過 MCP notification 直接推送至 Claude Code
+- 不需 hook 腳本讀取 inbox 檔案再注入 context
 
-```bash
-#!/bin/bash
-# user-prompt-submit.sh
-# 從 stdin 解析 session_id，讀取該 session 的 inbox
-SESSION_ID=$(cat | jq -r '.session_id // empty')
-if [ -z "$SESSION_ID" ]; then exit 0; fi
-
-INBOX_DIR="$HOME/.nbctl/inbox/$SESSION_ID"
-if [ ! -d "$INBOX_DIR" ]; then exit 0; fi
-
-# 讀取 urgent + normal 通知
-for priority in urgent normal; do
-  for f in "$INBOX_DIR/$priority"/task-*.json; do
-    [ -f "$f" ] || continue
-    echo "[nbctl] $(jq -r '.status' "$f"): $(jq -r '.result | tostring' "$f")"
-    mkdir -p "$INBOX_DIR/consumed"
-    mv "$f" "$INBOX_DIR/consumed/"
-  done
-done
-```
-
-**Adapter 安裝**：`nbctl install-hooks --tool claude-code` 將 hook 腳本寫入
-`~/.nbctl/hooks/` 並修改使用者的 `.claude/settings.json`（或 `.claude/settings.local.json`）
-加入 hook 配置。
+**Historical note**：
+v3~v5 設計了 `UserPromptSubmit` hook 腳本，從 stdin 解析 `session_id` 並讀取
+檔案型 inbox 通知。v6 pivot 後，這整套機制被 MCP notification 取代。
 
 ## 10. NetworkGate（集中式流量閘門）
 
@@ -436,11 +423,12 @@ jitter: ±20%
 ### Decision: child_process.fork + PID file
 
 **Daemonization**（flow-coverage CHK016）:
-- `nbctl start` fork 一個 child process（`node daemon/server.ts`）
+- `npx nbctl` thin launcher fork 一個 child process（`node daemon/index.ts`）
 - Child process 寫入 PID file：`~/.nbctl/daemon.pid`
 - Parent process 確認 child 啟動後退出
-- `nbctl stop` 讀取 PID file，發送 SIGTERM
-- Daemon 收到 SIGTERM 後 graceful shutdown：關閉 HTTP server → 關閉所有 agent session → 關閉 Chrome → 清理 PID file
+- `npx nbctl stop` 讀取 PID file，發送 SIGTERM
+- Daemon 收到 SIGTERM 後 graceful shutdown：關閉 MCP Server → 關閉所有 agent session → 關閉 Chrome → 清理 PID file
+- 亦可透過 `shutdown` MCP tool 觸發 graceful shutdown
 
 **Signal handling**:
 ```typescript
@@ -456,11 +444,10 @@ process.on("SIGINT", gracefulShutdown);
 | Agent SDK V2 API unstable | API 可能變更 | 封裝 adapter layer，隔離 SDK 依賴 |
 | NotebookLM UI 更新破壞 agent | 操作失敗 | Vision-based 而非 selector-based；失敗時回報截圖 |
 | 截圖 token 消耗大 | 上下文膨脹 | SDK 自動 compact（1M context）；限制單次操作截圖數 |
-| Cookie injection 不足以建立 session | NotebookLM 可能需要 localStorage 等 | 實測驗證；fallback: CDP Storage API 注入完整 state |
-| BrowserPool Chrome instance 記憶體過高 | 同時 3 個 instance ~900MB | Pool max 可調降；操作完畢即 release |
-| Agent 佔用 Chrome instance 不歸還 | Pool 耗盡 | BrowserPool timeout 強制回收 |
-| Google session 過期 | 操作失敗 | 偵測 302 redirect → 提示 `nbctl reauth` |
-| NotebookLM rate limiting | 操作被拒 | Network Manager exponential backoff |
+| Single Chrome instance tab 記憶體累積 | 長期運行記憶體增長 | 操作完畢關閉 tab；daemon 定期 healthcheck |
+| Agent 佔用 tab 不歸還 | tab 泄漏 | TabManager timeout 強制關閉 tab |
+| Google session 過期 | 操作失敗 | 偵測 302 redirect → 提示 `reauth` MCP tool |
+| NotebookLM rate limiting | 操作被拒 | NetworkGate exponential backoff |
 | Headless 渲染與 headed 不一致 | Vision agent 判斷錯誤 | 使用 `headless: true`（new headless，完整 Chrome 引擎） |
-| Hook 腳本執行失敗 | 通知遺漏 | 通知保留在 inbox，下次 hook 重試；不影響 AI 工具正常操作 |
+| MCP client 斷線時通知丟失 | 使用者錯過通知 | 通知資訊保留在 AsyncTask 狀態，client 可透過 `get_status` 查詢 |
 | Daemon crash 後資料不一致 | 任務狀態錯誤 | Atomic write + crash recovery（FR-108） |

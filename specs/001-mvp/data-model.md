@@ -1,6 +1,7 @@
 # 資料模型：NotebookLM Controller MVP
 
-**Branch**: `001-mvp` | **Date**: 2026-02-12 | **Spec**: [spec.md](./spec.md)
+**Branch**: `001-mvp` | **Date**: 2026-02-24 | **Spec**: [spec.md](./spec.md)
+**Version**: v2 — 對齊 spec v6（MCP Server + Single Browser Multi-tab）
 
 ## Entity Relationship Overview
 
@@ -10,20 +11,16 @@ DaemonState (singleton)
   │                ├── has many → SourceRecord (via Local Cache)
   │                ├── has many → ArtifactRecord (via Local Cache)
   │                └── has many → OperationLogEntry (via Operation Log)
-  ├── has many → AsyncTask (via Task Store)
-  └── has many → NotificationMessage (via Inbox)
+  └── has many → AsyncTask (via Task Store)
 
-BrowserPool (runtime)
-  └── has many → BrowserInstance (per active notebook operation)
-
-AuthManager (runtime)
-  └── has one → CookieStore (persisted cookies.json)
+TabManager (runtime)
+  └── has many → TabHandle (per active notebook tab)
 
 NetworkGate (runtime)
   └── has one → NetworkHealth
 
 AgentSession (runtime, per notebook)
-  ├── uses one → BrowserInstance (via BrowserPool.acquire())
+  ├── uses one → TabHandle (via TabManager.openTab())
   └── uses many → AgentSkill (loaded from files)
 ```
 
@@ -39,9 +36,9 @@ AgentSession (runtime, per notebook)
 ```typescript
 interface DaemonState {
   version: 1;                          // Schema version for migration
-  defaultNotebook: string | null;      // 預設 notebook alias（`nbctl use`）
+  defaultNotebook: string | null;      // 預設 notebook alias（`set_default` MCP tool）
   pid: number | null;                  // Daemon process PID
-  port: number;                        // HTTP API port（預設 19224）
+  port: number;                        // MCP Server port（預設 19224, Streamable HTTP）
   startedAt: string | null;            // ISO 8601 timestamp
   notebooks: Record<string, NotebookEntry>;  // alias → entry
 }
@@ -67,7 +64,7 @@ interface NotebookEntry {
 
 type NotebookStatus =
   | "ready"       // 已註冊且可操作
-  | "operating"   // 正在使用 Chrome instance 執行操作
+  | "operating"   // 正在使用 Chrome tab 執行操作
   | "closed"      // 已標記為 closed（非 active）
   | "stale"       // URL 無效或 NotebookLM 回報不存在
   | "error";      // 連線錯誤
@@ -176,9 +173,8 @@ type OperationActionType =
 interface AsyncTask {
   taskId: string;                      // 唯一 ID（短 hash，如 "abc123"）
   notebookAlias: string;
-  sessionId: string | null;            // CLI session ID（for notification routing）
   command: string;                     // 原始 exec 指令
-  context: string | null;              // --context 附帶的情境描述（FR-104）
+  context: string | null;              // context 附帶的情境描述（FR-104）
   status: TaskStatus;
   result: object | null;               // 完成結果（status=completed 時）
   error: string | null;                // 錯誤訊息（status=failed 時）
@@ -219,58 +215,59 @@ interface TaskStatusChange {
 
 **Transitions**:
 - `queued → running`：scheduler 將任務交給 agent
-- `queued → cancelled`：使用者 `nbctl cancel`，從 queue 移除
+- `queued → cancelled`：使用者透過 `cancel_task` MCP tool，從 queue 移除
 - `running → completed`：agent 成功完成
-- `running → failed`：agent 異常、timeout、Chrome instance 崩潰、daemon crash
-- `running → cancelled`：使用者 `nbctl cancel`，agent 在安全點停止
+- `running → failed`：agent 異常、timeout、tab 崩潰、daemon crash
+- `running → cancelled`：使用者透過 `cancel_task` MCP tool，agent 在安全點停止
 
-### NotificationMessage
+### MCP Notification Payload
 
-**Storage**: `~/.nbctl/inbox/<session-id>/<priority>/task-<taskId>.json`
+**Storage**: 無（直接透過 MCP notification 推送至連線中的 client）
 **Purpose**: 非同步操作完成通知（FR-110~115）。
 
 ```typescript
-interface NotificationMessage {
+interface TaskNotificationPayload {
   taskId: string;
   status: "completed" | "failed";
   notebook: string;                    // Notebook alias
   result: object;                      // 操作結果
-  originalContext: string | null;       // --context 描述
+  originalContext: string | null;       // context 描述
   command: string;                     // 原始指令
-  sessionId: string;
-  priority: "urgent" | "normal";       // urgent = failed，normal = completed
   timestamp: string;                   // ISO 8601
 }
 ```
 
 **Lifecycle**:
-1. Daemon 寫入 `inbox/<session-id>/<priority>/task-<taskId>.json`（atomic write）
-2. Hook 腳本讀取後 rename 到 `inbox/<session-id>/consumed/task-<taskId>.json`
-3. Daemon 定期清理 >24h 的 consumed 通知
+1. Agent 完成非同步操作 → Daemon 更新 AsyncTask 狀態
+2. Daemon 透過 MCP notification 推送 payload 至所有連線中的 client
+3. 若無 client 連線，通知資訊保留在 AsyncTask 狀態中，client 可透過 `get_status` tool 查詢
 
 ---
 
 ## Runtime-Only Entities
 
-### BrowserInstance
+### TabHandle
 
-**Purpose**: BrowserPool 為每個 agent session 分配的 Chrome instance 句柄。
+**Purpose**: TabManager 為每個 agent session 分配的 tab 句柄（CDP session）。
 
 ```typescript
-interface BrowserInstance {
-  instanceId: string;                  // 唯一識別碼（UUID）
+interface TabHandle {
+  tabId: string;                       // 唯一識別碼（UUID）
   notebookAlias: string;               // 目前操作的 notebook
   url: string;                         // Navigate 的目標 URL
   acquiredAt: string;                  // ISO 8601 取得時間
   timeoutAt: string;                   // ISO 8601 超時強制回收時間
-  browser: Browser;                    // Puppeteer Browser instance（agent 有完整存取權）
-  page: Page;                          // 主要 page（agent 可自行管理）
+  cdpSession: CDPSession;             // CDP session（agent 透過底層 API 操作）
+  page: Page;                          // Puppeteer page 物件（用於初始化）
 }
 ```
 
-**設計說明**：Agent 取得完整 `Browser` 和 `Page` 物件，不是 bounded tools interface。
-Agent 可自主截圖、click、type、scroll、關 modal、處理 dialog 等，具備完整自我修復能力。
-Agent 不能自行關閉 Browser（由 BrowserPool 管理 lifecycle）。
+**設計說明**：Agent 取得獨立的 tab（CDP session），透過 CDP 底層 API
+（`Input.dispatchMouseEvent`、`Page.captureScreenshot`）操作，
+background tab 操作完全可靠（實驗驗證）。Agent 可自主截圖分析、retry、
+關 modal、處理 dialog 等，具備完整自我修復能力。
+Agent 不能自行啟動/關閉 Chrome（由 TabManager 管理 lifecycle）。
+認證透過 `userDataDir` 共享，不需獨立 cookie injection。
 
 ### NetworkHealth
 
@@ -310,31 +307,16 @@ interface SkillParameter {
 
 ---
 
-## CLI Response Shapes
+## MCP Tool Response Shapes
 
-### Standard Success Response
+MCP tool 回應遵循 MCP protocol 標準格式（`CallToolResult`）。以下為專案內部使用的
+結構化回應資料，嵌入於 MCP tool result 的 `content` 欄位中。
 
-```typescript
-interface SuccessResponse {
-  success: true;
-  [key: string]: unknown;              // 操作特定欄位
-}
-```
-
-### Standard Error Response
+### Async Submit Result
 
 ```typescript
-interface ErrorResponse {
-  success: false;
-  error: string;                       // 人類可讀錯誤訊息
-  code?: string;                       // 機器可讀錯誤碼（optional）
-}
-```
-
-### Async Submit Response
-
-```typescript
-interface AsyncSubmitResponse {
+// exec tool 帶 async: true 時回傳
+interface AsyncSubmitResult {
   taskId: string;
   status: "queued";
   notebook: string;
@@ -342,15 +324,15 @@ interface AsyncSubmitResponse {
 }
 ```
 
-### Daemon Status Response
+### Daemon Status Result
 
 ```typescript
-interface DaemonStatusResponse {
+// get_status tool 回傳
+interface DaemonStatusResult {
   running: boolean;
-  browserPool: {
-    maxInstances: number;
-    activeInstances: number;
-    availableSlots: number;
+  tabManager: {
+    activeTabs: number;
+    maxTabs: number;
   };
   network: NetworkHealth;
   activeNotebooks: string[];           // Alias 列表
@@ -369,6 +351,6 @@ interface DaemonStatusResponse {
 | `~/.nbctl/` | `700` (drwx------) | 主目錄（FR-054） |
 | `~/.nbctl/**/*` (dirs) | `700` | 所有子目錄 |
 | `~/.nbctl/**/*` (files) | `600` (-rw-------) | 所有檔案（FR-054） |
-| `~/.nbctl/profiles/chrome/` | `700` | Chrome userDataDir（含 cookies） |
+| `~/.nbctl/profiles/` | `700` | Chrome userDataDir（含 session + cookies，共享認證） |
 
 Daemon 啟動時驗證權限，過於寬鬆則自動修正並輸出警告（FR-055）。

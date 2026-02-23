@@ -1,21 +1,21 @@
 <!--
   Sync Impact Report
   ==================
-  Version change: 1.3.0 → 1.4.0
+  Version change: 1.4.0 → 1.5.0
   Modified principles:
-    - III. Agent 程式本質 → 從「BrowserPool 中央集權管理 + 全權委派操作」
-      改回「Single Browser Multi-tab」模型。
-      理由：實驗驗證（Spike 0, 2026-02-23）證實 background tab 操作不可靠
-      是 Puppeteer page.click() 高層 API 的問題，非 Chrome/CDP 限制。
-      CDP Input.dispatchMouseEvent + page.screenshot() 在 background tab
-      完全可靠（5 tabs 並行，15/15 成功）。
-      Multi-tab 優勢：(1) 省記憶體（~500MB vs ~900MB）；
-      (2) 認證簡化（一個 userDataDir 即可，不需 cookie extraction/injection）；
-      (3) 程序管理簡化（一個 Chrome process）。
-      Agent 仍透過 CDP 底層操作（非 Puppeteer 高層 API）擁有完整操作能力。
+    - III. Agent 程式本質 → 新增「MCP Server 介面」段落。
+      理由：CLI + HTTP API 架構中，CLI 是 thin HTTP client wrapper，
+      18 個 command 檔案 + Fastify routes + Skill Template 都是膠水層。
+      主要消費者是 AI agent（Claude Code），MCP 是 AI 工具的原生協議。
+      改為 MCP Server 後：(1) 砍掉 CLI 模組、Fastify、commander 依賴；
+      (2) MCP tool 自描述，不需 Skill Template；
+      (3) MCP 持續連線，非同步通知可直接推送，簡化 Notification 系統。
+      Daemon 核心（TabManager、Agent、State、NetworkGate）不變，
+      只是介面層從 CLI+HTTP 換成 MCP protocol。
+      Transport：Streamable HTTP（daemon 獨立存活 + 多 client 連線）。
   Modified sections:
-    - III. Agent 程式本質 — BrowserPool → Single Browser Multi-tab
-    - 並行與資料流設計約束 — BrowserPool → TabManager 模型
+    - III. Agent 程式本質 — 新增 MCP Server 介面
+    - 並行與資料流設計約束 — HTTP Router → MCP Tool Handler
   Added sections: None
   Removed sections: None
   Templates requiring updates:
@@ -24,10 +24,11 @@
     - .specify/templates/tasks-template.md — ⚠ pending (carried over)
     - .specify/templates/agent-file-template.md — ✅ no update needed
   Follow-up TODOs:
-    - spec.md: FR-140~147 BrowserPool → TabManager
-    - plan.md: 模組結構 browser-pool → tab-manager
+    - spec.md: v5 → v6 MCP Server pivot
+    - plan.md: 模組結構 CLI+HTTP → MCP Server + browser-pool → tab-manager
+    - data-model.md: CLI Response Shapes → MCP + BrowserInstance → Tab
     - research.md: 更新 Browser Automation section
-    - data-model.md: BrowserInstance → Tab model
+    - CLAUDE.md: 模組列表更新
 -->
 
 # NotebookLM Controller Constitution
@@ -53,6 +54,15 @@
 - 所有設計決策 MUST 以「agent 能否自主完成操作」為核心考量。
 - Agent session、tool 呼叫、vision model 互動是一等公民，
   非附加功能。
+- **MCP Server 介面**：
+  - Daemon 以 MCP Server 形式暴露所有功能（Streamable HTTP transport）。
+  - AI 工具（Claude Code 等）透過 MCP protocol 直接呼叫 tool，
+    無需 CLI 中間層。
+  - MCP tool 定義自描述（tools/list），不需額外 Skill Template。
+  - 非同步操作透過 MCP tool 快速回傳 taskId，
+    完成後以 MCP notification 通知連線中的 client。
+  - Daemon 獨立於 client 存活（Streamable HTTP），
+    支援多 client 同時連線。
 - **Single Browser Multi-tab 架構**：
   - Daemon 管理一個 Chrome instance（headless），每個 notebook 一個 tab。
   - Agent session 透過 TabManager 取得 tab handle（CDP session），
@@ -139,7 +149,7 @@
   Agent 操作前 MUST `acquirePermit()`。異常（429/timeout）觸發全域 backoff。
 - **Agent Pool ↔ State Store**：透過事件或訊息傳遞同步狀態，
   禁止 agent 直接寫入 store 內部結構。
-- **HTTP Router ↔ Agent Pool**：request handler MUST 透過
+- **MCP Tool Handler ↔ Agent Pool**：tool handler MUST 透過
   pool 的公開介面派發任務，禁止直接操作 agent session 內部。
 - **磁碟 I/O**：state 持久化 MUST 序列化存取，避免寫入衝突。
 
@@ -183,4 +193,4 @@
 - 合規審查：每次 checkpoint code review MUST 包含 Constitution
   合規性檢查。
 
-**Version**: 1.4.0 | **Ratified**: 2026-02-02 | **Last Amended**: 2026-02-23
+**Version**: 1.5.0 | **Ratified**: 2026-02-02 | **Last Amended**: 2026-02-23
