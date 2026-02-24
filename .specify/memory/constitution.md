@@ -1,34 +1,26 @@
 <!--
   Sync Impact Report
   ==================
-  Version change: 1.4.0 → 1.5.0
+  Version change: 1.5.0 → 1.6.0
   Modified principles:
-    - III. Agent 程式本質 → 新增「MCP Server 介面」段落。
-      理由：CLI + HTTP API 架構中，CLI 是 thin HTTP client wrapper，
-      18 個 command 檔案 + Fastify routes + Skill Template 都是膠水層。
-      主要消費者是 AI agent（Claude Code），MCP 是 AI 工具的原生協議。
-      改為 MCP Server 後：(1) 砍掉 CLI 模組、Fastify、commander 依賴；
-      (2) MCP tool 自描述，不需 Skill Template；
-      (3) MCP 持續連線，非同步通知可直接推送，簡化 Notification 系統。
-      Daemon 核心（TabManager、Agent、State、NetworkGate）不變，
-      只是介面層從 CLI+HTTP 換成 MCP protocol。
-      Transport：Streamable HTTP（daemon 獨立存活 + 多 client 連線）。
+    - III. Agent 程式本質 → 移除 MCP Server 介面、Single Browser Multi-tab 實作細節。
+      理由：憲法應只包含不隨實作改變的原則。MCP、TabManager、CDP、
+      NetworkGate 等具體架構已在 spec.md 和 plan.md 充分記載（147 處引用）。
+      每次架構 pivot（multi-tab → BrowserPool → TabManager → MCP）都要改憲法
+      說明它不該放這裡。保留原則層：agent 自主性、自我修復能力、
+      瀏覽器生命週期由 daemon 管理。
+    - VII. 安全的並行處理 → 新增 per-resource 寫入保護規則，取代舊的
+      「磁碟 I/O MUST 序列化存取」。舊規則過於寬泛，可能導致
+      global serialization 過度設計（違反 Principle I）。
   Modified sections:
-    - III. Agent 程式本質 — 新增 MCP Server 介面
-    - 並行與資料流設計約束 — HTTP Router → MCP Tool Handler
-  Added sections: None
-  Removed sections: None
+    - III. Agent 程式本質 — 精簡為原則層
+    - VII. 安全的並行處理 — 新增 per-resource 寫入保護
+  Removed sections:
+    - 並行與資料流設計約束 — 實作細節下放至 spec.md
   Templates requiring updates:
-    - .specify/templates/plan-template.md — ✅ no update needed
-    - .specify/templates/spec-template.md — ✅ no update needed
     - .specify/templates/tasks-template.md — ⚠ pending (carried over)
-    - .specify/templates/agent-file-template.md — ✅ no update needed
   Follow-up TODOs:
-    - spec.md: v5 → v6 MCP Server pivot
-    - plan.md: 模組結構 CLI+HTTP → MCP Server + browser-pool → tab-manager
-    - data-model.md: CLI Response Shapes → MCP + BrowserInstance → Tab
-    - research.md: 更新 Browser Automation section
-    - CLAUDE.md: 模組列表更新
+    - spec.md: 確認並行約束細節已涵蓋（已驗證）
 -->
 
 # NotebookLM Controller Constitution
@@ -54,27 +46,9 @@
 - 所有設計決策 MUST 以「agent 能否自主完成操作」為核心考量。
 - Agent session、tool 呼叫、vision model 互動是一等公民，
   非附加功能。
-- **MCP Server 介面**：
-  - Daemon 以 MCP Server 形式暴露所有功能（Streamable HTTP transport）。
-  - AI 工具（Claude Code 等）透過 MCP protocol 直接呼叫 tool，
-    無需 CLI 中間層。
-  - MCP tool 定義自描述（tools/list），不需額外 Skill Template。
-  - 非同步操作透過 MCP tool 快速回傳 taskId，
-    完成後以 MCP notification 通知連線中的 client。
-  - Daemon 獨立於 client 存活（Streamable HTTP），
-    支援多 client 同時連線。
-- **Single Browser Multi-tab 架構**：
-  - Daemon 管理一個 Chrome instance（headless），每個 notebook 一個 tab。
-  - Agent session 透過 TabManager 取得 tab handle（CDP session），
-    操作完畢歸還。Agent 不能自行啟動/關閉 Chrome。
-  - Agent 透過 CDP 底層 API（`Input.dispatchMouseEvent`、
-    `Page.captureScreenshot`）操作 tab，不依賴 Puppeteer 高層 API。
-    背景 tab 操作完全可靠（實驗驗證）。
-  - 認證：一個 `userDataDir` 即可，首次 headed 登入後
-    後續 headless 直接複用 session。
-  - NetworkGate 集中式流量閘門：agent 操作前 MUST `acquirePermit()`，
-    異常時觸發全域 backoff。
-  - Tab 超時未歸還 → daemon 強制關閉 tab。
+- Agent MUST 擁有完整自我修復能力（可自主截圖分析、retry、
+  處理意外狀況），不得將 agent 限制為只能回報錯誤的被動角色。
+- 瀏覽器生命週期由 daemon 管理，agent 不能自行啟動或關閉瀏覽器。
 
 ### IV. 測試先行，通過才推進 (Test-First, Pass-Before-Proceed)
 
@@ -105,6 +79,9 @@
   設計，禁止共享可變狀態。
 - 單一模組內部若需同步，SHOULD 限縮至最小 critical section，
   並 MUST 附帶文件說明鎖的範圍與理由。
+- 同一持久化資源的寫入 MUST 防止競爭條件（race condition），
+  保護範圍 MUST 限縮至最小單位（per-file），
+  禁止 global serialization。
 - 所有非同步操作 MUST 有明確的錯誤傳播與取消機制。
 
 ### VIII. 繁體中文文件 (Traditional Chinese Documentation)
@@ -133,25 +110,6 @@
   - 對應的 CodeTour 路線供 user review
 - User review 完成並確認通過後，才能繼續下一步開發。
 - 此流程為開發迴圈的硬性閘門（hard gate），不可跳過。
-
-## 並行與資料流設計約束
-
-本專案架構核心為 daemon 管理多個 agent session，天然涉及並行處理。
-以下約束補充 Principle III 與 Principle VII 的具體實施規則：
-
-- **Agent ↔ Browser（Single Browser Multi-tab 模型）**：Daemon 管理
-  一個 Chrome instance，每個 agent session 取得獨立的 tab（CDP session）。
-  Agent 透過 CDP 底層 API 操作，background tab 截圖/點擊完全可靠，
-  支援真正的跨 notebook parallel 操作。
-  - Chrome 生命週期完全由 daemon 管理（agent 不能啟動/關閉 Chrome）。
-  - Tab 超時未歸還 → daemon 強制關閉。
-- **NetworkGate（集中式流量閘門）**：不在 data path，只管「能不能做」。
-  Agent 操作前 MUST `acquirePermit()`。異常（429/timeout）觸發全域 backoff。
-- **Agent Pool ↔ State Store**：透過事件或訊息傳遞同步狀態，
-  禁止 agent 直接寫入 store 內部結構。
-- **MCP Tool Handler ↔ Agent Pool**：tool handler MUST 透過
-  pool 的公開介面派發任務，禁止直接操作 agent session 內部。
-- **磁碟 I/O**：state 持久化 MUST 序列化存取，避免寫入衝突。
 
 ## 開發流程與品質門檻
 
@@ -193,4 +151,4 @@
 - 合規審查：每次 checkpoint code review MUST 包含 Constitution
   合規性檢查。
 
-**Version**: 1.5.0 | **Ratified**: 2026-02-02 | **Last Amended**: 2026-02-23
+**Version**: 1.6.0 | **Ratified**: 2026-02-02 | **Last Amended**: 2026-02-24
