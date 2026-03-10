@@ -2,7 +2,7 @@
 
 **Feature Branch**: `001-mvp`
 **Created**: 2026-02-06
-**Status**: Draft (v6 — MCP Server 介面 + Single Browser Multi-tab 架構)
+**Status**: Draft (v7 — 補充 SHIP B/R/N 解除後的設計決策)
 **Input**: PRD 文件 `docs/prd.md` + 架構重構討論
 
 <!--
@@ -22,6 +22,14 @@
   3. Agent 透過 CDP 底層 API 操作 tab，擁有完整操作能力。
   4. 記憶體從 ~900MB 降至 ~500MB。
   5. NetworkGate 保留，Chrome 生命週期仍由 daemon 管理。
+  v7 SHIP B/R/N 解除後補充設計決策（2026-03-10）：
+  1. Agent task 設計原則：細粒度、每步進度外部化、conceptually stateless per run。
+  2. Shutdown 策略：不做 graceful shutdown，直接終止，task queue 恢復。
+  3. Chrome crash 處理：disconnected → 通知 agent → 重啟 Chrome → task queue 接手。
+  4. PID file 雙重檢查：{ pid, startedAt } 防 PID 重用。
+  5. 429 偵測：agent 自主偵測、回報，daemon 不規範方式。
+  6. MCP notification：fire-and-forget，不補發。
+  7. Tool 自包原則：screenshot tool 自行截圖 + 格式轉換，daemon 不中轉。
   v6 MCP Server 介面 pivot（2026-02-23）：
   1. CLI + HTTP API → MCP Server（Streamable HTTP transport）。
      主要消費者為 AI agent（Claude Code 等），MCP 是 AI 工具的原生協議。
@@ -1007,6 +1015,9 @@ notebook 包含哪些來源是一種認知負擔。
 **TabManager**:
 - **Tab 崩潰隔離**：單一 tab 崩潰不影響其他 tab 與 Chrome process。
   TabManager 偵測並回報，支援重新建立 tab。
+- **Chrome crash**：Chrome 對 daemon 至關重要（所有 agent 的工作環境）。
+  `browser.on('disconnected')` → 立即通知所有 agent 停止工作 →
+  重啟 Chrome → agent 從 task queue 的上一個完成點接手。
 - **Tab 上限**：同時活躍的 tab MUST 有可設定上限（預設 10），
   超過時等待直到有 tab 關閉。
 - **同 notebook 多個操作**：per-notebook queue 序列化。
@@ -1015,14 +1026,18 @@ notebook 包含哪些來源是一種認知負擔。
 **非同步與通知**:
 - **MCP 通知推送失敗**：若 client 已斷線，通知無法推送。
   結果保留在 task store，client 重新連線後可透過 `get_status` tool 查詢。
+  不做 notification 補發機制（fire-and-forget）——MCP 對 client 而言
+  只是可重試的資料來源，非 mission-critical 即時通道。
 - **Task store TTL**：已完成任務的結果保留 24 小時，過期後自動清理。
 - **MCP 連線隔離**：每個 MCP client 連線自然隔離，
   不存在跨 client 搶讀通知的問題。
 - **Client 連線失敗**：MCP client 無法連線至 daemon 時，回報清楚錯誤訊息。
-- **非同步操作提交後 daemon 正常關閉（`shutdown` tool）**：`queued` 任務恢復為 `queued`
-  （下次啟動可繼續），`running` 任務標記為 `failed`（reason: "daemon stopped"）。
-- **Daemon 非正常關閉（crash/SIGKILL）**：重啟後 `queued` 恢復，
-  `running` 標記為 `failed`（reason: "daemon interrupted"）。
+- **Daemon 關閉（無論正常或異常）**：不做 agent-level graceful shutdown。
+  Vision agent 單步操作可能耗時數分鐘，等待 agent 完成不切實際。
+  關閉策略：直接終止 process，task queue 負責恢復。
+  重啟後 `queued` 恢復為 `queued`，`running` 標記為 `failed`
+  （reason: "daemon interrupted"）。Agent task 設計為細粒度、
+  每步進度外部化，因此最多重做一個小步驟。
 - **使用者主動取消 `running` 任務**：agent 在安全點停止（不保證立即中止），
   視覺操作可能已部分完成，不自動回滾。
 - **通知優先級**：失敗操作（urgent）優先推送。
@@ -1052,8 +1067,9 @@ notebook 包含哪些來源是一種認知負擔。
 - **無 MCP client 時**：可透過 `npx nbctl` 啟動 daemon，以任何 MCP client 連線操作。
 
 **網路與 Rate Limiting**:
-- **NotebookLM rate limiting**：NetworkGate 偵測 429/503、異常延遲、CAPTCHA，
-  自動觸發全域 backoff，期間 acquirePermit() 等待。
+- **NotebookLM rate limiting**：Agent 自主偵測 429（透過 CDP 或視覺分析，
+  不規範偵測方式），透過 `reportRateLimit` tool 回報 NetworkGate。
+  NetworkGate 收到後觸發全域 backoff，期間 acquirePermit() 等待。
 - **Bot 偵測（CAPTCHA）**：NetworkGate 偵測後暫停 permit 發放，
   通知使用者可能需要呼叫 `reauth` tool 或手動介入。
 - **網路斷線**：NetworkGate 暫停所有 permit 發放，恢復後自動恢復。
@@ -1357,6 +1373,10 @@ notebook 包含哪些來源是一種認知負擔。
 
 - **Daemon**：常駐背景程序，管理所有已註冊 notebook，暴露 MCP Server（Streamable HTTP），
   維護狀態快取。管理單一 Chrome instance，透過 TabManager 管理多個 tab。
+  PID file（`~/.nbctl/daemon.pid`）格式為 `{ pid, startedAt }`，
+  啟動時雙重檢查（process 存在 AND 啟動時間吻合）防止 PID 重用誤判。
+  Shutdown 策略：不做 agent-level graceful shutdown，直接終止。
+  恢復靠 task queue（細粒度任務 + 每步進度外部化），不靠 cleanup handler。
 
 - **TabManager**：管理單一 Chrome instance 中的多個 tab（max N，預設 10）。
   負責 tab 建立/關閉、生命週期管理、超時強制關閉、健康檢查。
@@ -1376,6 +1396,10 @@ notebook 包含哪些來源是一種認知負擔。
   取得獨立 tab（CDP session），透過 CDP 底層 API 操作，具備自主截圖分析、
   retry、關 modal 的完整自我修復能力。操作前 MUST 透過 NetworkGate acquirePermit()。
   不能自行啟動/關閉 Chrome（由 daemon 管理）。
+  Agent 透過 Copilot SDK 註冊 tools（含 screenshot、click 等），
+  Copilot CLI agent 自主決定何時呼叫哪個 tool。Tool 自包操作邏輯
+  （例：screenshot tool 自行透過 CDP 截圖 + 格式轉換），daemon 不中轉。
+  Daemon 是指揮者：調度任務、提供工具、設定目標。Agent 是執行者。
 
 - **Agent Skill**：參數化的 agent 操作技能定義。
   包含 prompt template、所需 tool 清單、操作依賴宣告。
@@ -1393,6 +1417,11 @@ notebook 包含哪些來源是一種認知負擔。
   狀態機：`queued`（等待 agent 取走）→ `running`（agent 執行中）→
   `completed`（成功）| `failed`（異常，需 debug）| `cancelled`（使用者取消）。
   所有狀態轉換記錄 timestamp。
+  **Task 設計原則**：任務切為細粒度步驟，每步完成後進度外部化至 task store。
+  Agent 在概念上是 stateless per run — 每個 run 完成後，
+  任何無記憶的 agent 都能從 task store 接手。Session 內部有 state（對話記憶），
+  但架構不依賴 session persistence。Daemon 負責全局狀態與調度，
+  agent 只負責執行單一細粒度任務。
 
 - **State Store**：記憶體中的狀態快取 + 磁碟持久化。
 
@@ -1460,6 +1489,17 @@ notebook 包含哪些來源是一種認知負擔。
 - Q: 移除了哪些 FR？ → A: FR-120~127（Notification Adapter 全系列）、FR-130~133（AI Skill Template 全系列）、FR-114/FR-115（Inbox 原子寫入/consume rename）。
 - Q: 新增了哪些 FR？ → A: FR-200~205（MCP Server 系列）。
 - Q: Daemon 如何啟動？ → A: `npx nbctl` thin launcher 啟動 daemon process，或透過 MCP client 設定（如 Claude Code MCP config）直接啟動。不再需要完整 CLI 框架。
+
+### Session 2026-03-10 (SHIP B/R/N 解除)
+
+- Q: Agent session 需要 persist across daemon restart 嗎？ → A: 不需要。Task 設計為細粒度 + 每步進度外部化，session persistence 不必要。類比 message queue consumer：consumer 是 stateless 的，state 在 queue 裡。Daemon 管全局狀態，agent 只執行單一步驟。
+- Q: Vision input（截圖）怎麼傳給 agent？ → A: Tool 自包截圖 + 格式轉換。Screenshot tool 自行透過 CDP 截圖、轉換格式、回傳給 Copilot CLI agent。Daemon 不中轉。Copilot SDK 的 tool return spec 接受什麼 image 格式是語法層問題（Spike 1 確認）。
+- Q: Daemon 收到 SIGTERM 時 agent 在操作中怎麼辦？ → A: 不做 agent-level graceful shutdown。Vision agent 單步可能耗時 5 分鐘，等不起。Graceful shutdown 本身不可靠（SIGKILL/OOM 繞過 handler）。直接終止，task queue 負責恢復。
+- Q: Atomic write 怎麼保證 crash 安全？ → A: temp file + rename。rename 在 APFS/ext4 上是 atomic（單一 metadata pointer 更新），writeFile 不是（多次 data block 寫入可中斷）。
+- Q: Stale PID file 怎麼處理？ → A: PID file 存 `{ pid, startedAt }`，驗證時雙重檢查（process 存在 AND 啟動時間吻合），防止 PID 被 OS 重用給其他 process 的誤判。
+- Q: Chrome crash 怎麼處理？ → A: Chrome 對 daemon 至關重要。`browser.on('disconnected')` → 通知所有 agent 停止 → 重啟 Chrome → agent 從 task queue 接手。
+- Q: Agent 怎麼偵測 429？ → A: 不規範偵測方式（CDP 或視覺分析都可），agent 自主決定。Daemon 提供 `reportRateLimit` tool 讓 agent 回報，NetworkGate 負責 backoff 決策。
+- Q: MCP notification 斷線後怎麼補？ → A: 不補。Fire-and-forget。MCP 對 client 而言是可重試的資料來源，非 mission-critical 即時通道。Client 再 query 一次就好。
 
 ---
 

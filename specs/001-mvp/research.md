@@ -1,10 +1,15 @@
 # 技術研究報告：NotebookLM Controller MVP
 
-**Date**: 2026-02-24 (v4 — 對齊 spec v6 MCP Server + Single Browser Multi-tab)
+**Date**: 2026-03-10 (v5 — 補充 spec v7 SHIP 決策 + 運維設計)
 **Feature Branch**: `001-mvp`
-**Previous Version**: 2026-02-12 v3（spec v4 BrowserPool）, 2026-02-12 v2（spec v3 multi-tab）, 2026-02-07 v1（spec v1）
+**Previous Version**: 2026-02-24 v4（spec v6 MCP+Multi-tab）, 2026-02-12 v3（spec v4 BrowserPool）, 2026-02-12 v2（spec v3 multi-tab）, 2026-02-07 v1（spec v1）
 
 <!--
+  v5 更新摘要（SHIP B/R/N 解除 + spec v7 設計決策）：
+  - 新增 Section 14: Daemon 運維設計（Shutdown、Chrome crash recovery、PID double-check）
+  - 新增 Section 15: Agent Task 設計原則（stateless per run、細粒度、Tool 自包）
+  - 更新技術風險表（新增 SHIP 解除後的緩解策略）
+
   v4 更新摘要（MCP Server + Single Browser Multi-tab pivot）：
   - Browser Automation：BrowserPool（多 Chrome instance）→ Single Browser Multi-tab（一 Chrome 多 tab）
   - Cookie injection 移除 → userDataDir 共享認證
@@ -51,62 +56,157 @@
 
 ## 2. Copilot SDK
 
-### Decision: `@github/copilot-sdk`（Technical Preview）
+### Decision: `@github/copilot-sdk`（Technical Preview, v0.1.32+）
 
-**Key findings**:
-- Copilot CLI 的 agent runtime，可程式化呼叫
-- 透過 JSON-RPC 與 Copilot CLI server mode 通訊，SDK 自動管理 CLI process lifecycle
-- 支援多模型（包括 Claude、Codex 等所有 Copilot CLI 可用模型）
-- 支援 custom tool definitions、MCP server 整合
-- 認證：GitHub OAuth、BYOK（自帶 API key）
-- 多語言 SDK（TypeScript、Python、Go、.NET），本專案使用 TypeScript
+**v5 重大更新**：基於 SDK 原始碼和 README 完整研究，確認 API 實際結構。
 
-**Custom tool 定義**:
+**核心架構**:
+- `CopilotClient` — 管理 Copilot CLI server process lifecycle（JSON-RPC over stdio）
+- `CopilotSession` — 單一對話 session，支援 multi-turn、streaming、event-driven
+- `defineTool()` — 型別安全 tool 定義（Zod schema + handler）
+- `CustomAgentConfig` — 自訂 agent 定義（prompt + tool 限制 + MCP servers）
+
+**Import pattern**:
 ```typescript
-import { CopilotSDK } from "@github/copilot-sdk";
+import { CopilotClient, defineTool, approveAll } from "@github/copilot-sdk";
+import { z } from "zod";
+```
 
-// 初始化 SDK
-const copilot = new CopilotSDK({
-  // 認證方式待確認（BYOK 或 GitHub OAuth）
+**CopilotClient（singleton for daemon）**:
+```typescript
+const client = new CopilotClient({
+  autoStart: true,
+  autoRestart: true,    // CLI crash → 自動重啟
+  logLevel: "info",
+  // BYOK 模式：
+  // provider 設定在 session 層級，不在 client 層級
+});
+await client.start();
+```
+
+**Session 建立（per task/notebook）**:
+```typescript
+const session = await client.createSession({
+  model: "claude-sonnet-4.5",  // 或其他 Copilot 可用模型
+  tools: [...browserTools, ...contentTools, ...stateTools],
+  systemMessage: {
+    mode: "append",          // 保留 SDK 預設 persona + 安全 guardrails
+    content: skillPrompt,    // 附加 skill-specific prompt
+  },
+  customAgents: [agentConfig],  // 可選：自訂 agent 定義
+  agent: agentConfig.name,      // 啟動時使用指定 agent
+  onPermissionRequest: approveAll,  // daemon 控制一切，auto-approve
+  streaming: true,
+  hooks: {
+    onPreToolUse: async (input) => { /* NetworkGate acquirePermit */ },
+    onErrorOccurred: async (input) => { /* 錯誤處理策略 */ },
+    onSessionEnd: async (input) => { /* 清理 tab handle */ },
+  },
+});
+```
+
+**Custom tool 定義（defineTool + Zod）**:
+```typescript
+const screenshotTool = defineTool("screenshot", {
+  description: "Take a screenshot of the current NotebookLM page",
+  parameters: z.object({
+    fullPage: z.boolean().optional().describe("Capture full page or viewport only"),
+  }),
+  handler: async ({ fullPage }, invocation) => {
+    const base64 = await cdpSession.send("Page.captureScreenshot", {
+      format: "png", captureBeyondViewport: fullPage ?? false,
+    });
+    // Tool 自包：screenshot tool 自行截圖 + 格式轉換
+    return {
+      textResultForLlm: "Screenshot captured successfully.",
+      binaryResultsForLlm: [{
+        data: base64.data,
+        mimeType: "image/png",
+        type: "image",
+        description: "Current page screenshot",
+      }],
+      resultType: "success" as const,
+    } satisfies ToolResultObject;
+  },
+});
+```
+
+**Custom Agent（映射到 Skill）**:
+```typescript
+// CustomAgentConfig 等同於我們的 Skill 概念
+const addSourceAgent: CustomAgentConfig = {
+  name: "add-source",
+  displayName: "Add Source",
+  description: "Add content to NotebookLM as a source",
+  prompt: `You are operating NotebookLM to add a new source...
+    Steps: 1. screenshot to see current state 2. click "Add source"...`,
+  tools: ["screenshot", "click", "type", "paste", "repoToText", "urlToText", "pdfToText"],
+};
+```
+
+**Session 執行 & 結果收集**:
+```typescript
+// 方法 1：sendAndWait（簡單操作）
+const result = await session.sendAndWait({
+  prompt: task.command,
+  attachments: task.screenshot ? [{ type: "file", path: screenshotPath }] : undefined,
 });
 
-// 定義 browser tools 供 agent 使用
-const browserTools = [
-  {
-    name: "screenshot",
-    description: "Take a screenshot of the current page",
-    parameters: { pageId: { type: "string" } },
-    handler: async (args) => {
-      const base64 = await tabManager.screenshot(args.pageId);
-      return { type: "image", data: base64 };
-    }
-  },
-  // click, type, scroll, paste, download...
-];
+// 方法 2：event-driven（需追蹤進度的操作）
+session.on("tool.execution_start", (event) => {
+  updateTaskProgress(task.taskId, `Running ${event.data.toolName}...`);
+});
+session.on("assistant.message", (event) => {
+  // 最終回答
+});
 ```
 
-**Architecture pattern** (updated for v6 — MCP Server + Single Browser Multi-tab):
+**Session 生命週期**:
+```
+createSession() → send()/sendAndWait() → disconnect()
+                                          ↑
+                  可多次 send()（multi-turn conversation）
+```
+- `disconnect()` 保留 session data on disk，可 `resumeSession()` 恢復
+- `infiniteSessions` 預設啟用：80% context 自動 compact、95% 阻塞等待
+
+**Architecture pattern** (v5 — 基於 SDK 實際 API):
 ```
 Daemon process (MCP Server, Streamable HTTP)
-├── TabManager: manage single Chrome instance, multi-tab (CDP sessions)
+├── CopilotClient (singleton)
+│   └── manages Copilot CLI server process (JSON-RPC)
+├── TabManager: Chrome instance → tabs → CDP sessions
 ├── NetworkGate: acquirePermit() / reportAnomaly()
-├── SessionManager: Map<notebookAlias, SessionState>
-├── 每個 notebook 一個 agent session + 獨立 tab（CDP session）
-├── Copilot SDK agent runtime 執行操作（vision + tool use）
-├── Agent tools 透過 Copilot SDK custom tool definitions 注入
-├── MCP tools/list 自描述（不需額外 Skill Template）
-└── MCP notification 推送非同步操作結果
+├── Per-task execution:
+│   ├── createSession({ tools, agent, hooks })
+│   ├── session.sendAndWait({ prompt })
+│   └── session.disconnect()
+├── Tools (defineTool + Zod):
+│   ├── Browser tools: screenshot, click, type, scroll, paste (CDP-based)
+│   ├── Content tools: repoToText, urlToText, pdfToText
+│   └── State tools: reportRateLimit, updateCache
+├── Skills → CustomAgentConfig (prompt + tool restriction)
+├── MCP tools/list 自描述
+└── MCP notification fire-and-forget
 ```
 
 **Known limitations**:
-- Technical Preview，API 可能變更
+- Technical Preview（v0.1.32），API 可能變更
 - JSON-RPC 與 Copilot CLI 的通訊開銷待實測
-- Vision 分析每張截圖的 token 消耗待確認
+- Vision（截圖→model）token 消耗待確認
+- `binaryResultsForLlm` 接受的格式和大小限制待 Spike 1 驗證
 
 **Mitigation**:
-- 封裝 adapter layer，隔離 SDK API 變動
+- SDK 的 `CopilotClient`/`CopilotSession`/`defineTool` 已是穩定抽象
+- 如 API 變更，影響範圍限於 `agent/` 模組
 - Copilot SDK 支援多模型，可選擇最適合 vision 操作的模型
-- 截圖在 daemon 隔離 context 中消耗，不影響使用者的 AI 工具 context
+- Infinite sessions 自動管理 context，減少 token 管理負擔
+
+**Spike 1 驗證項目**:
+1. `binaryResultsForLlm` 回傳截圖後，agent 是否能正確分析圖片內容
+2. `onPreToolUse` hook 插入 `acquirePermit()` 的延遲影響
+3. BYOK provider 設定 + 截圖 token 消耗基準
+4. `disconnect()` → `resumeSession()` 的 session state 保留範圍
 
 ## 3. Browser Automation
 
@@ -442,3 +542,79 @@ process.on("SIGINT", gracefulShutdown);
 | Headless 渲染與 headed 不一致 | Vision agent 判斷錯誤 | 使用 `headless: true`（new headless，完整 Chrome 引擎） |
 | MCP client 斷線時通知丟失 | 使用者錯過通知 | 通知資訊保留在 AsyncTask 狀態，client 可透過 `get_status` 查詢 |
 | Daemon crash 後資料不一致 | 任務狀態錯誤 | Atomic write + crash recovery（FR-108） |
+| PID file 殘留導致誤判 daemon 在運行 | 無法啟動新 daemon | PID file 存 `{ pid, startedAt }`，雙重檢查防 PID 重用 |
+| Daemon SIGKILL 無法 cleanup | Agent 操作中斷 | Task queue 恢復：queued 恢復、running 標記 failed |
+
+## 14. Daemon 運維設計
+
+### Decision: 不做 graceful agent shutdown + task queue 恢復
+
+**v7 新增**（SHIP B/R/N 解除後的設計決策）。
+
+**Shutdown 策略**:
+- 不做 agent-level graceful shutdown。Vision agent 單步操作可能耗時數分鐘，
+  等待 agent 完成不切實際。Graceful shutdown handler 本身也不可靠
+  （SIGKILL/OOM 直接繞過 handler）。
+- 關閉策略：直接終止 process。
+- 恢復策略：task queue 負責。重啟後：
+  - `queued` 任務恢復為 `queued`
+  - `running` 任務標記為 `failed`（reason: "daemon interrupted"）
+  - Agent task 設計為細粒度，每步進度外部化，最多重做一個小步驟。
+
+**Chrome crash recovery**:
+- Chrome 對 daemon 至關重要（所有 agent 的工作環境）。
+- `browser.on('disconnected')` → 立即通知所有 agent 停止工作 →
+  重啟 Chrome → agent 從 task queue 的上一個完成點接手。
+- Chrome 重啟後所有 tab handle 失效，需重建。
+
+**PID file 雙重檢查**:
+```typescript
+interface PidFile {
+  pid: number;
+  startedAt: string; // ISO 8601
+}
+
+// 驗證邏輯：
+// 1. 讀取 PID file
+// 2. 檢查 process 是否存在（process.kill(pid, 0)）
+// 3. 檢查 startedAt 是否與 process 啟動時間吻合
+// 4. 兩者都通過 → daemon 正在運行
+// 5. 任一不通過 → stale PID file，可覆寫
+```
+防止 OS 重用 PID 給其他 process 導致的誤判。
+
+**Rationale**:
+- Graceful shutdown 是「假安全」——無法處理最常見的失敗情境（SIGKILL, OOM, crash）
+- Task queue + atomic write 提供真正的 crash safety
+- 簡化程式碼：不需複雜的 shutdown coordinator
+
+## 15. Agent Task 設計原則
+
+### Decision: Stateless per run + 細粒度 + Tool 自包
+
+**v7 新增**（SHIP B/R/N 解除後的設計決策）。
+
+**Agent conceptually stateless per run**:
+- Task 切為細粒度步驟，每步完成後進度外部化至 task store。
+- 每個 run 完成後，任何無記憶的 agent 都能從 task store 接手。
+- Session 內部有 state（對話記憶），但架構不依賴 session persistence。
+- 類比 message queue consumer：consumer 是 stateless 的，state 在 queue 裡。
+
+**Daemon vs Agent 分工**:
+- Daemon 是指揮者：調度任務、提供工具、設定目標、管理全局狀態。
+- Agent 是執行者：自主使用 tool 完成單一細粒度任務。
+- Daemon 不中轉 agent 的操作邏輯。
+
+**Tool 自包原則**:
+- Screenshot tool 自行透過 CDP 截圖 + 格式轉換，回傳給 Copilot CLI agent。
+- Daemon 不做「接收截圖 → 轉換 → 回傳」的中轉。
+- 每個 tool 封裝完整操作邏輯，agent 直接呼叫即得結果。
+
+**429 偵測**:
+- 不規範偵測方式（CDP 或視覺分析都可），agent 自主決定。
+- Daemon 提供 `reportRateLimit` tool 讓 agent 回報。
+- NetworkGate 負責 backoff 決策。
+
+**MCP notification fire-and-forget**:
+- 不補發。MCP 對 client 而言是可重試的資料來源，非 mission-critical 即時通道。
+- Client 斷線後重新連線可透過 `get_status` tool 查詢結果。
