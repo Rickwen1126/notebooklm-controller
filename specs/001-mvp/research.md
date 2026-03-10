@@ -33,7 +33,7 @@
   - 新增 Notification Inbox 設計研究
   - 新增 Claude Code Hooks 整合研究
   - 新增 Network 監控研究
-  - 更新 Agent SDK V2 API 研究
+  - 更新 Copilot SDK API 研究
   - 更新技術風險表
 -->
 
@@ -42,56 +42,48 @@
 ### Decision: TypeScript 5.x + Node.js 22 LTS
 
 **Rationale**:
-- Agent SDK (`@anthropic-ai/claude-agent-sdk`) 提供 TypeScript SDK
+- Copilot SDK (`@github/copilot-sdk`) 提供 TypeScript SDK
 - puppeteer-core 為 Node.js 生態系標準 CDP 工具
 - 統一語言減少維護成本
 
 **Alternatives considered**:
-- Python：有 Agent SDK Python 版本，但 puppeteer-core 只有 Node.js 版本
+- Python：Copilot SDK 有 Python 版本，但 puppeteer-core 只有 Node.js 版本
 
-## 2. Agent SDK V2
+## 2. Copilot SDK
 
-### Decision: `@anthropic-ai/claude-agent-sdk` V2 API (unstable preview)
+### Decision: `@github/copilot-sdk`（Technical Preview）
 
 **Key findings**:
-- V2 API：`unstable_v2_createSession` / `unstable_v2_resumeSession`
-  明確的 session 生命週期管理，適合 daemon 架構
-- 每個 session 獨立上下文，可自動 compact
-- Sessions 自動持久化到磁碟（`~/.claude/projects/`），可跨 process restart resume
-- 支援 1M token context window（Claude Opus 4.6，beta flag `context-1m-2025-08-07`）
-- Auto-compact 在 ~83.5% context window（~167K tokens for 200K）觸發
+- Copilot CLI 的 agent runtime，可程式化呼叫
+- 透過 JSON-RPC 與 Copilot CLI server mode 通訊，SDK 自動管理 CLI process lifecycle
+- 支援多模型（包括 Claude、Codex 等所有 Copilot CLI 可用模型）
+- 支援 custom tool definitions、MCP server 整合
+- 認證：GitHub OAuth、BYOK（自帶 API key）
+- 多語言 SDK（TypeScript、Python、Go、.NET），本專案使用 TypeScript
 
 **Custom tool 定義**:
 ```typescript
-import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
-import { z } from "zod";
+import { CopilotSDK } from "@github/copilot-sdk";
 
-const screenshotTool = tool(
-  "screenshot",
-  "Take a screenshot of the current page",
-  { pageId: z.string() },
-  async (args) => {
-    const base64 = await connectionManager.screenshot(args.pageId);
-    return {
-      content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: base64 } }],
-      isError: false
-    };
-  }
-);
-
-const mcpServer = createSdkMcpServer({
-  name: "nbctl-agent-tools",
-  version: "1.0.0",
-  tools: [screenshotTool, clickTool, typeTool, ...]
+// 初始化 SDK
+const copilot = new CopilotSDK({
+  // 認證方式待確認（BYOK 或 GitHub OAuth）
 });
-```
 
-**Vision 輸入格式**:
-```typescript
-// 標準 Anthropic API base64 image content block
-{ type: "image", source: { type: "base64", media_type: "image/png", data: "<base64>" } }
+// 定義 browser tools 供 agent 使用
+const browserTools = [
+  {
+    name: "screenshot",
+    description: "Take a screenshot of the current page",
+    parameters: { pageId: { type: "string" } },
+    handler: async (args) => {
+      const base64 = await tabManager.screenshot(args.pageId);
+      return { type: "image", data: base64 };
+    }
+  },
+  // click, type, scroll, paste, download...
+];
 ```
-支援 PNG、JPEG、GIF、WebP。
 
 **Architecture pattern** (updated for v6 — MCP Server + Single Browser Multi-tab):
 ```
@@ -100,21 +92,20 @@ Daemon process (MCP Server, Streamable HTTP)
 ├── NetworkGate: acquirePermit() / reportAnomaly()
 ├── SessionManager: Map<notebookAlias, SessionState>
 ├── 每個 notebook 一個 agent session + 獨立 tab（CDP session）
-├── session.send() 發送指令，session.stream() 取得結果
-├── Session 自動持久化，daemon 重啟後可 resume
-├── Agent tools 透過 createSdkMcpServer 注入
+├── Copilot SDK agent runtime 執行操作（vision + tool use）
+├── Agent tools 透過 Copilot SDK custom tool definitions 注入
 ├── MCP tools/list 自描述（不需額外 Skill Template）
 └── MCP notification 推送非同步操作結果
 ```
 
 **Known limitations**:
-- V2 API 為 unstable preview，API 可能變更
-- Session forking 在 V2 尚不可用
-- Vision 分析每張截圖 ~1000+ tokens
+- Technical Preview，API 可能變更
+- JSON-RPC 與 Copilot CLI 的通訊開銷待實測
+- Vision 分析每張截圖的 token 消耗待確認
 
 **Mitigation**:
 - 封裝 adapter layer，隔離 SDK API 變動
-- Auto-compact 自動處理 token 限制
+- Copilot SDK 支援多模型，可選擇最適合 vision 操作的模型
 - 截圖在 daemon 隔離 context 中消耗，不影響使用者的 AI 工具 context
 
 ## 3. Browser Automation
@@ -441,7 +432,7 @@ process.on("SIGINT", gracefulShutdown);
 
 | 風險 | 影響 | 緩解策略 |
 |------|------|----------|
-| Agent SDK V2 API unstable | API 可能變更 | 封裝 adapter layer，隔離 SDK 依賴 |
+| Copilot SDK Technical Preview | API 可能變更 | 封裝 adapter layer，隔離 SDK 依賴 |
 | NotebookLM UI 更新破壞 agent | 操作失敗 | Vision-based 而非 selector-based；失敗時回報截圖 |
 | 截圖 token 消耗大 | 上下文膨脹 | SDK 自動 compact（1M context）；限制單次操作截圖數 |
 | Single Chrome instance tab 記憶體累積 | 長期運行記憶體增長 | 操作完畢關閉 tab；daemon 定期 healthcheck |

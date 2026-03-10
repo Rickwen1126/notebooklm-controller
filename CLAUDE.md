@@ -4,7 +4,7 @@ Auto-generated from all feature plans. Last updated: 2026-02-24
 
 ## Active Technologies
 
-- TypeScript 5.x, Node.js 22 LTS + `@anthropic-ai/claude-agent-sdk`, `puppeteer-core`, `@modelcontextprotocol/sdk`, `repomix`, `zod`, `@mozilla/readability`, `jsdom`, `pdf-parse` (001-mvp)
+- TypeScript 5.x, Node.js 22 LTS + `@github/copilot-sdk`, `puppeteer-core`, `@modelcontextprotocol/sdk`, `repomix`, `zod`, `@mozilla/readability`, `jsdom`, `pdf-parse` (001-mvp)
 - Storage: JSON 檔案（`~/.nbctl/`），atomic write（temp + rename）(001-mvp)
 - Testing: Vitest (001-mvp)
 
@@ -15,7 +15,7 @@ src/
   daemon/         # MCP Server daemon (Streamable HTTP, @modelcontextprotocol/sdk)
   tab-manager/    # Single Chrome multi-tab management (puppeteer-core, CDP)
   network-gate/   # Centralized traffic gate (permit-based)
-  agent/          # AI agent sessions (Claude Agent SDK V2)
+  agent/          # AI agent sessions (GitHub Copilot SDK)
   content/        # Content pipeline (repo/URL/PDF → text)
   state/          # JSON state persistence
   notification/   # MCP notification (async task completion)
@@ -39,6 +39,11 @@ TypeScript 5.x, Node.js 22 LTS: Follow standard conventions
 - 001-mvp: CLI + HTTP API → MCP Server (Streamable HTTP); BrowserPool → TabManager (Single Browser Multi-tab)
 
 <!-- MANUAL ADDITIONS START -->
+
+## CRITICAL: AI Agent SDK
+
+**使用 `@github/copilot-sdk`（GitHub Copilot SDK），不是 Claude Agent SDK。**
+這是專案核心決策，不可更改。所有 agent session 管理、tool 注入、vision 操作都透過 Copilot SDK 的 agent runtime。
 
 ## Checkpoint
 

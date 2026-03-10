@@ -11,7 +11,7 @@
 
 技術架構：TypeScript daemon 透過 Single Browser Multi-tab（一個 Chrome instance，多 tab）管理瀏覽器，
 每個 agent session 取得獨立 tab（CDP session），userDataDir 共享認證，
-NetworkGate 集中管理流量許可。內嵌 Claude Agent SDK V2 的 vision-based AI agent
+NetworkGate 集中管理流量許可。內嵌 GitHub Copilot SDK 的 vision-based AI agent
 執行 UI 操作，agent 擁有完整自我修復能力。
 非同步操作完成後透過 MCP notification 直接推送通知至連線中的 client。
 
@@ -19,7 +19,7 @@ NetworkGate 集中管理流量許可。內嵌 Claude Agent SDK V2 的 vision-bas
 
 **Language/Version**: TypeScript 5.x, Node.js 22 LTS
 **Primary Dependencies**:
-- `@anthropic-ai/claude-agent-sdk` — AI agent session 管理（V2 API）
+- `@github/copilot-sdk` — AI agent runtime（Copilot CLI engine，Technical Preview）
 - `puppeteer-core` — Chrome CDP 控制（launch + multi-tab 操作）
 - `@modelcontextprotocol/sdk` — MCP Server 實作（Streamable HTTP transport）
 - `repomix` — Git repo → 文字轉換
@@ -125,7 +125,7 @@ src/
 │   ├── throttle-detector.ts   # Rate limit / CAPTCHA 偵測
 │   └── backoff.ts             # Exponential backoff 實作
 │
-├── agent/                     # AI Agent — Claude Agent SDK V2
+├── agent/                     # AI Agent — GitHub Copilot SDK
 │   ├── session.ts             # Agent session 建立與管理
 │   ├── tools/                 # Agent 可用的 tool 定義
 │   │   ├── browser-tools.ts   # screenshot, click, type, scroll, paste, download（CDP 底層 API）
