@@ -116,7 +116,7 @@ npx nbctl
 
 # 其他
 → reauth()                                # Google session 過期時重新認證
-→ list_skills()                           # 列出 agent 可用的操作技能
+→ list_agents()                           # 列出 agent config（可用的操作定義）
 → shutdown()                              # 關閉 daemon
 ```
 

@@ -53,7 +53,7 @@
   - Part C: 輔助功能 (US8-US9)：截圖除錯、狀態持久化
   - Part D: 查詢與使用 (US10-US12)：向 NotebookLM 查詢並使用知識
   - Part E: 非同步操作與通知 (US13-US16)：非同步操作與 MCP 通知
-  - Part F: 瀏覽器抽象化 (US17-US18)：TabManager、Skill 參數化
+  - Part F: 瀏覽器抽象化 (US17-US18)：TabManager、Agent Config 參數化
   - Part G: 智慧選擇 (US19)：自動選擇最相關的 notebook
   - Part H: 命名與資源管理 (US20-US24)：命名、索引、歷程紀錄
 
@@ -79,7 +79,7 @@
   - 操作指令（自然語言）：exec（prompt, notebook, async, context）
   - 管理工具：get_status, list_notebooks, add_notebook, add_all_notebooks,
     open_notebook, close_notebook, set_default, rename_notebook, remove_notebook,
-    cancel_task, reauth, list_skills, shutdown
+    cancel_task, reauth, list_agents, shutdown
   - Daemon 啟動：`npx nbctl`（thin launcher）或 MCP client 設定
 -->
 
@@ -773,9 +773,9 @@ AI 工具連線後即可自動理解所有操作方式，零設定成本。
    **Then** AI 根據 tool 描述自動選擇 `exec` tool，
    並以正確參數呼叫。
 
-3. **Given** 使用者想查看所有可用的 agent skill，
-   **When** 呼叫 `list_skills` tool，
-   **Then** 回傳所有 skill 名稱、描述與版本。
+3. **Given** 使用者想查看所有可用的 agent config，
+   **When** 呼叫 `list_agents` tool，
+   **Then** 回傳所有 agent config 名稱、描述與版本。
 
 ---
 
@@ -793,7 +793,7 @@ MCP 連線自然隔離取代 per-session inbox routing。
 
 身為系統維護者，我希望 daemon 的瀏覽器控制層有統一的抽象介面，
 讓底層自動化程式庫能被替換（如從 Puppeteer 切到 Patchright），
-而不需要修改 agent 邏輯或 skill 定義。
+而不需要修改 agent 邏輯或 agent config。
 
 TabManager 是 daemon 管理 Chrome tabs 的核心：
 - 管理單一 Chrome instance 中的多個 tab（建立/關閉/列舉）
@@ -823,7 +823,7 @@ NetworkGate 集中管理流量：
 
 2. **Given** 系統管理者在設定檔中切換了底層實作，
    **When** daemon 重新啟動，
-   **Then** daemon 使用新實作運作，agent 與 skill 不受影響。
+   **Then** daemon 使用新實作運作，agent 與 agent config 不受影響。
 
 3. **Given** 底層實作出現錯誤（例如截圖失敗），
    **When** agent 嘗試操作，
@@ -836,28 +836,28 @@ NetworkGate 集中管理流量：
 
 ---
 
-### User Story 18 - Agent Skill 參數化 (Priority: P18)
+### User Story 18 - Agent Config 參數化 (Priority: P18)
 
-身為系統維護者，我希望 agent 的操作技能（如「新增來源」「查詢提問」
-「產生 Audio」）以參數化的 skill 定義存在，讓我能調整 prompt 和
-tool 組合，而不需要修改程式碼。
+身為系統維護者，我希望 agent 的操作定義（如「新增來源」「查詢提問」
+「產生 Audio」）以參數化的 agent config（YAML → CustomAgentConfig）存在，
+讓我能調整 prompt 和 tool 組合，而不需要修改程式碼。
 
 **Why this priority**: NotebookLM 的 UI 可能隨時間變化，
-agent 的操作策略也需要持續調整。將 skill 定義外部化，
-讓調整操作流程只需修改 skill 檔案。
+agent 的操作策略也需要持續調整。將 agent config 外部化，
+讓調整操作流程只需修改 YAML 檔案。
 
-**Independent Test**: 修改某個 skill 的 prompt，重啟 daemon，
+**Independent Test**: 修改某個 agent config 的 prompt，重啟 daemon，
 驗證 agent 使用新的 prompt 執行操作。
 
 **Acceptance Scenarios**:
 
-1. **Given** 系統管理者修改了「新增來源」skill 的 prompt template，
+1. **Given** 系統管理者修改了「新增來源」agent config 的 prompt template，
    **When** daemon 重新啟動後使用者執行新增來源操作，
    **Then** agent 使用更新後的 prompt 執行操作。
 
-2. **Given** 使用者想查看所有可用的 agent skill，
-   **When** 呼叫 `list_skills` tool，
-   **Then** 回傳所有 skill 名稱、描述與版本。
+2. **Given** 使用者想查看所有可用的 agent config，
+   **When** 呼叫 `list_agents` tool，
+   **Then** 回傳所有 agent config 名稱、描述與版本。
 
 ---
 
@@ -1045,7 +1045,7 @@ notebook 包含哪些來源是一種認知負擔。
 **瀏覽器抽象**:
 - **底層實作切換後**：daemon 重建 TabManager，
   Notebook Registry 不受影響，agent session 重建。
-- **Skill 檔案格式錯誤**：daemon 啟動時驗證，格式錯誤的 skill 被跳過，
+- **Agent config YAML 格式錯誤**：daemon 啟動時驗證，格式錯誤的 config 被跳過，
   記錄警告日誌，不阻塞 daemon 啟動。
 
 **內容與互動**:
@@ -1086,7 +1086,7 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-001**: 系統 MUST 以 MCP Server 形式暴露所有功能，提供以下 MCP tools：
   `exec`、`get_status`、`list_notebooks`、`add_notebook`、`add_all_notebooks`、
   `open_notebook`、`close_notebook`、`set_default`、`rename_notebook`、`remove_notebook`、
-  `cancel_task`、`reauth`、`list_skills`、`shutdown`。
+  `cancel_task`、`reauth`、`list_agents`、`shutdown`。
 - **FR-002**: 系統 MUST 提供 `exec` MCP tool（prompt, notebook, async, context），
   將自然語言指令傳送給該 notebook 的 agent session。
   未指定 `notebook` 時使用預設 notebook（由 `set_default` tool 設定）。
@@ -1313,12 +1313,12 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-147**: 系統 MUST 偵測 session 過期（302 redirect to login），
   通知使用者呼叫 `reauth` tool 重新認證。
 
-**Agent Skill 參數化** (FR-150 series):
-- **FR-150**: Agent 操作技能 MUST 以外部化的 skill 定義描述，
+**Agent Config 參數化** (FR-150 series):
+- **FR-150**: Agent 操作定義 MUST 以外部化的 agent config（YAML → CustomAgentConfig）描述，
   包含 prompt template 與所需 tool 清單。
-- **FR-151**: Skill 定義 MUST 可在不重新編譯的前提下修改。
-- **FR-152**: 系統 MUST 提供 `list_skills` MCP tool 列出所有已載入的 agent skill。
-- **FR-153**: 每個 skill MUST 宣告依賴的瀏覽器操作。
+- **FR-151**: Agent config MUST 可在不重新編譯的前提下修改（修改 YAML 檔案即可）。
+- **FR-152**: 系統 MUST 提供 `list_agents` MCP tool 列出所有已載入的 agent config。
+- **FR-153**: 每個 agent config MUST 宣告依賴的瀏覽器操作。
 
 **OS 通知（輔助）**:
 - **FR-160**: 系統 SHOULD 在非同步操作完成時發送 OS 通知（macOS notification）。
@@ -1401,9 +1401,9 @@ notebook 包含哪些來源是一種認知負擔。
   （例：screenshot tool 自行透過 CDP 截圖 + 格式轉換），daemon 不中轉。
   Daemon 是指揮者：調度任務、提供工具、設定目標。Agent 是執行者。
 
-- **Agent Skill**：參數化的 agent 操作技能定義。
+- **Agent Config**：參數化的 agent 操作定義（YAML → SDK 的 `CustomAgentConfig`）。
   包含 prompt template、所需 tool 清單、操作依賴宣告。
-  以檔案形式存在，可不重編譯修改。
+  以 YAML 檔案形式存在（`agents/` 目錄），可不重編譯修改。
 
 - **MCP Tool**：MCP Server 暴露的工具定義。每個 tool 透過 `tools/list` 自描述，
   包含名稱、描述與 Zod-validated input schema。AI client 連線後即可自動探索。
@@ -1566,8 +1566,8 @@ notebook 包含哪些來源是一種認知負擔。
 - **SC-110**: （已移除——無 adapter 安裝。MCP client 設定即可連線。）
 - **SC-111**: （已移除——無 Skill Template。MCP tool 自描述，零設定成本。）
 
-**Skill 參數化**:
-- **SC-112**: 修改 agent skill prompt 後重啟，agent 使用新 prompt。
+**Agent Config 參數化**:
+- **SC-112**: 修改 agent config prompt 後重啟，agent 使用新 prompt。
 
 **Multi-tab 並行**:
 - **SC-113**: N 個 notebook（N ≤ tab max）操作互不阻塞。

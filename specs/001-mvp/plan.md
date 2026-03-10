@@ -35,11 +35,11 @@ Daemon 管理單一 Chrome instance（puppeteer-core + CDP 底層 API），暴�
 | Principle | Status | Notes |
 |-----------|--------|-------|
 | I. 禁止過度設計 | ✅ PASS | 8 模組各有明確職責。NetworkGate 不在 data path（只管 permit）。不做 graceful agent shutdown。不補發 notification。|
-| II. 單一職責 | ✅ PASS | daemon（調度）、tab-manager（tab lifecycle）、network-gate（流量控制）、agent（執行操作）、content（轉換）、state（持久化）、notification（MCP 推送）、skill（技能定義）各自一件事。|
+| II. 單一職責 | ✅ PASS | daemon（調度）、tab-manager（tab lifecycle）、network-gate（流量控制）、agent（執行操作 + config 載入）、content（轉換）、state（持久化）、notification（MCP 推送）各自一件事。|
 | III. Agent 程式本質 | ✅ PASS | Agent 是一等公民。透過 CDP 底層 API 自主操作、自我修復（截圖分析/retry/關 modal）。Tool 自包原則（screenshot tool 自行截圖+轉換）。|
 | IV. 測試先行 | ✅ GATE | 實作時 MUST 先寫測試。每個 checkpoint commit 前全部測試通過。|
 | V. 語意命名 | ✅ GATE | 所有 entity（TabHandle, NotebookEntry, AsyncTask 等）已在 data-model.md 定義明確語意。|
-| VI. 模組輕耦合 | ✅ PASS | 模組間透過介面溝通。Agent 不能直接存取 TabManager 內部。依賴方向單向：daemon → tab-manager, daemon → agent, agent → skill。|
+| VI. 模組輕耦合 | ✅ PASS | 模組間透過介面溝通。Agent 不能直接存取 TabManager 內部。依賴方向單向：daemon → tab-manager, daemon → agent。Agent config（YAML）由 agent 模組自行載入。|
 | VII. 安全的並行處理 | ✅ PASS | 跨 notebook parallel（獨立 tab, CDP 底層 API）。同 notebook serial（per-notebook queue）。持久化寫入 per-file atomic write，禁止 global serialization。|
 | VIII. 繁體中文文件 | ✅ PASS | Spec、plan 皆繁體中文。程式碼註解英文。|
 | IX. CodeTour | ✅ GATE | 每個模組 MUST 建立 CodeTour。|
@@ -80,10 +80,11 @@ src/
 │   └── cdp-helpers.ts   # CDP 底層 API helpers（click, type, screenshot, scroll）
 ├── network-gate/        # 集中式流量閘門
 │   └── network-gate.ts  # acquirePermit / reportAnomaly / getHealth / backoff
-├── agent/               # Copilot SDK agent adapter
+├── agent/               # Copilot SDK agent adapter + config loader
 │   ├── client.ts        # CopilotClient singleton lifecycle（start/stop/autoRestart）
 │   ├── session-runner.ts # Per-task: createSession → sendAndWait → disconnect → collect result
 │   ├── hooks.ts         # SessionHooks（onPreToolUse→NetworkGate, onErrorOccurred, onSessionEnd）
+│   ├── agent-loader.ts  # Load YAML → CustomAgentConfig[]（SDK 原生型別）
 │   └── tools/           # Agent tool definitions（defineTool + Zod）
 │       ├── browser-tools.ts  # screenshot, click, type, scroll, paste（CDP-based, Tool 自包）
 │       ├── content-tools.ts  # repoToText, urlToText, pdfToText
@@ -99,15 +100,12 @@ src/
 │   └── cache-manager.ts # Per-notebook local cache（sources, artifacts, operations）
 ├── notification/        # MCP notification
 │   └── notifier.ts      # Fire-and-forget MCP notification push
-├── skill/               # Skill → CustomAgentConfig adapter
-│   ├── skill-loader.ts  # Load YAML → CustomAgentConfig[]（SDK 原生型別）
-│   └── types.ts         # Skill file schema（YAML 結構，轉換為 CustomAgentConfig）
 └── shared/              # Shared utilities
     ├── types.ts          # Shared TypeScript interfaces（from data-model.md）
     ├── errors.ts         # Unified error types + format
     └── config.ts         # Configuration（port, max tabs, timeouts, Chrome path, model）
 
-skills/                  # Agent skill YAML files（轉換為 CustomAgentConfig）
+agents/                  # Agent config YAML files（→ CustomAgentConfig）
 ├── add-source.yaml      # → CustomAgentConfig { name, prompt, tools: [...] }
 ├── query.yaml
 ├── generate-audio.yaml
@@ -124,7 +122,7 @@ tests/
 │   ├── network-gate/
 │   ├── state/
 │   ├── content/
-│   ├── skill/
+│   ├── agent/config/    # agent-loader unit tests
 │   └── agent/tools/     # Tool handler unit tests（mock CDP session）
 ├── integration/
 │   ├── daemon/
@@ -144,21 +142,21 @@ tests/
    tool 按職責分檔（browser/content/state），`index.ts` 提供 `buildToolsForTab(tabHandle)` 工廠函數。
 3. 新增 `agent/hooks.ts`。SDK 的 `SessionHooks` 是 NetworkGate 整合的自然切入點
    （`onPreToolUse` → `acquirePermit()`），也處理 error recovery 和 session cleanup。
-4. `skill/` 模組明確映射到 SDK 的 `CustomAgentConfig` 型別。
-   YAML skill file → `skill-loader.ts` → `CustomAgentConfig { name, prompt, tools }`。
+4. Agent config 載入併入 `agent/` 模組（`agent-loader.ts`），不再獨立 `skill/` 模組。
+   YAML agent config → `agent-loader.ts` → `CustomAgentConfig { name, prompt, tools }`。
 5. `content/` 維持純函數，不直接依賴 SDK——透過 `agent/tools/content-tools.ts` 包裝為 `defineTool()`。
 
 **Per-task execution flow**:
 ```
 Scheduler.dispatch(task)
-  → SessionRunner.run(task, tabHandle, skill)
-    → client.createSession({ tools: buildToolsForTab(tabHandle), agent: skill.name, hooks })
+  → SessionRunner.run(task, tabHandle, agentConfig)
+    → client.createSession({ tools: buildToolsForTab(tabHandle), agent: agentConfig.name, hooks })
     → session.sendAndWait({ prompt: task.command })
     → session.disconnect()
     → return result
 ```
 
-`skills/` 在 repo root（版本控制 + 可覆寫至 `~/.nbctl/skills/`）。
+`agents/` 在 repo root（版本控制 + 可覆寫至 `~/.nbctl/agents/`）。
 Tests 按 unit/integration/contract 分層，unit 按模組對應。
 
 ## Complexity Tracking
@@ -169,4 +167,4 @@ Tests 按 unit/integration/contract 分層，unit 按模組對應。
 |------|-----------|
 | 8 src 模組 | 每個模組一件事（Principle II），不是過度設計 |
 | NetworkGate 獨立模組 | 流量控制邏輯足夠獨立，且跨 agent 共享（全域 backoff） |
-| Skill 外部化 | NotebookLM UI 會變，skill prompt 需可調整（FR-150~153） |
+| Agent config 外部化 | NotebookLM UI 會變，agent prompt 需可調整（FR-150~153） |

@@ -244,9 +244,9 @@ or operation-specific result (sourceAdded, screenshot, etc.)
 
 **Output**: `{ "success": true, "message": "Re-authenticated successfully" }`
 
-### `list_skills`
+### `list_agents`
 
-列出所有已載入的 agent skill。
+列出所有已載入的 agent config。
 
 **Input Schema**: `{}`（無參數）
 
