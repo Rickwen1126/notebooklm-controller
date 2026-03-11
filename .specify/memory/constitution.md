@@ -1,26 +1,22 @@
 <!--
   Sync Impact Report
   ==================
-  Version change: 1.5.0 → 1.6.0
-  Modified principles:
-    - III. Agent 程式本質 → 移除 MCP Server 介面、Single Browser Multi-tab 實作細節。
-      理由：憲法應只包含不隨實作改變的原則。MCP、TabManager、CDP、
-      NetworkGate 等具體架構已在 spec.md 和 plan.md 充分記載（147 處引用）。
-      每次架構 pivot（multi-tab → BrowserPool → TabManager → MCP）都要改憲法
-      說明它不該放這裡。保留原則層：agent 自主性、自我修復能力、
-      瀏覽器生命週期由 daemon 管理。
-    - VII. 安全的並行處理 → 新增 per-resource 寫入保護規則，取代舊的
-      「磁碟 I/O MUST 序列化存取」。舊規則過於寬泛，可能導致
-      global serialization 過度設計（違反 Principle I）。
+  Version change: 1.6.0 → 1.7.0
+  Removed principles:
+    - IX. CodeTour 意圖說明 — 完全移除。CodeTour 是開發者主動發起的活動，
+      不是 AI executor 的約束，不屬於 Constitution 範疇。
+    - X. Checkpoint 提交與 Code Review — 移除 code review hard gate 和
+      品質門檻中的 review 必檢項目。Code review/audit 是開發者主動發起，
+      不是 executor 約束。
+  Kept from old X (renumbered as IX):
+    - Checkpoint commit + lint + test 為 executor 必要條件。
+  Renumbered:
+    - Old X → IX（CodeTour 移除後遞補）
   Modified sections:
-    - III. Agent 程式本質 — 精簡為原則層
-    - VII. 安全的並行處理 — 新增 per-resource 寫入保護
-  Removed sections:
-    - 並行與資料流設計約束 — 實作細節下放至 spec.md
+    - 開發迴圈 — 精簡為 4 步
+    - 品質門檻 — 只保留 lint + test（executor 可自動化的部分）
   Templates requiring updates:
-    - .specify/templates/tasks-template.md — ⚠ pending (carried over)
-  Follow-up TODOs:
-    - spec.md: 確認並行約束細節已涵蓋（已驗證）
+    - .specify/templates/tasks-template.md — ⚠ pending (carried over from v1.6.0)
 -->
 
 # NotebookLM Controller Constitution
@@ -93,48 +89,24 @@
   SHOULD 使用繁體中文。
 - 此原則確保團隊溝通語言一致性。
 
-### IX. CodeTour 意圖說明 (CodeTour Intent Documentation)
+### IX. Checkpoint 提交 (Checkpoint Commit)
 
-- 每個模組或重要函數 MUST 建立 VSCode CodeTour，內容包含：
-  - **What**：這段程式做什麼
-  - **Why**：為什麼需要它
-  - **How**：實作方式概述
-  - **Solved Problem**：解決了什麼問題
-- Tour 路線 MUST 提供給 reviewer 作為 code review 的導覽路徑。
-
-### X. Checkpoint 提交與 Code Review (Checkpoint Commit & Review)
-
-- 每一個 checkpoint MUST 建立 git commit。
-- Commit 後 MUST 指派 code review subagent 執行審查並產出：
-  - 問題報告（issue report）
-  - 對應的 CodeTour 路線供 user review
-- User review 完成並確認通過後，才能繼續下一步開發。
-- 此流程為開發迴圈的硬性閘門（hard gate），不可跳過。
+- 每一個 checkpoint MUST 建立 git commit，且 MUST 通過 lint + test。
 
 ## 開發流程與品質門檻
 
 ### 開發迴圈
 
 ```
-1. 撰寫 / 更新 CodeTour（Principle IX）
-2. 撰寫測試（Principle IV）
-3. 實作功能
-4. 測試全部通過
-5. Checkpoint commit（Principle X）
-6. Code review subagent 審查 + 產出報告
-7. User review CodeTour + 問題報告
-8. User 確認通過 → 進入下一步
+1. 撰寫測試（Principle IV）
+2. 實作功能
+3. 測試全部通過
+4. Checkpoint commit（Principle IX）
 ```
 
 ### 品質門檻
 
 - 所有 PR / checkpoint MUST 通過 lint + test。
-- 命名審查為 code review 的必檢項目（Principle V）。
-- 模組耦合度為 code review 的必檢項目（Principle VI）。
-- 並行安全性為涉及跨模組互動之 checkpoint 的必檢項目
-  （Principle VII）。
-- 瀏覽器隔離合規性為涉及 agent 操作之 checkpoint 的必檢項目
-  （Principle III）。
 
 ## Governance
 
@@ -148,7 +120,4 @@
   - MAJOR：移除或重新定義既有原則（不向下相容）。
   - MINOR：新增原則或實質擴充既有指引。
   - PATCH：措辭修正、排版調整、非語意性修訂。
-- 合規審查：每次 checkpoint code review MUST 包含 Constitution
-  合規性檢查。
-
-**Version**: 1.6.0 | **Ratified**: 2026-02-02 | **Last Amended**: 2026-02-24
+**Version**: 1.7.0 | **Ratified**: 2026-02-02 | **Last Amended**: 2026-03-12

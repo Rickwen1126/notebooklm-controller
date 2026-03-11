@@ -1,3 +1,70 @@
+## 2026-03-12 00:13 — SHIP 筆記整理 + tasks.md 產出 + analyze 完成
+
+**Goal**: 整理 SHIP 學習筆記、產出 tasks.md、跑 cross-artifact consistency check
+
+**Done**:
+- SHIP 9 個知識點整理為兩篇 Obsidian 筆記（含 Training Angles）
+  - `projects/notebooklm-controller/001-mvp-copilot-sdk-架構與邊界@2026-03-11.md`（#0-#3）
+  - `projects/notebooklm-controller/001-mvp-copilot-sdk-生命週期與安全@2026-03-11.md`（#4-#8）
+- `/speckit.tasks` 產出 `specs/001-mvp/tasks.md`（107 tasks, 14 phases）
+- `/speckit.analyze` 完成 cross-artifact consistency check
+
+**Decisions**:
+- SHIP 設計洞察（Section 6）只有一行摘要深度不夠，不獨立成筆記 → 直接 4+5 知識點分兩篇
+- MVP scope = US1+US2+US3+US10+US13+US14 = Phases 1-7（78 tasks）
+- SHIP 不適合拿來 review tasks（SHIP 是知識確認，tasks 是開發步驟）→ 改用 speckit.analyze
+
+**State**: Branch `001-mvp` at `99fe458`。tasks.md 已產出但尚未 commit。analyze 報告已產出（未寫入檔案）。
+
+**Next**:
+- [ ] 決定 analyze 報告的 2 個 CRITICAL（CodeTour 時機、Review gate）處理策略
+- [ ] 補缺失 tasks（FR-044 sync、FR-045~047 description、FR-051 logging、FR-031 timeout、T033-T036 unit tests）
+- [ ] Commit tasks.md
+- [ ] 開始實作 Phase 1 Setup
+
+**User Notes**:
+- 用戶覺得逐條 review tasks.md 很痛苦且不必要 → 只需看 dependency graph + MVP scope
+- tasks.md 是給 AI 執行者的 checklist，細節在它引用的 spec/plan/data-model 裡
+
+---
+
+## 2026-03-11 17:29 — SHIP 9/9 完成 + Data Model Review + 設計修正
+
+**Goal**: 完成 SHIP 剩餘驗證 + review data model 10 個 entity + 記錄設計洞察
+
+**Done**:
+- SHIP #8 驗證通過（approveAll 安全邊界）— SDK 只有 approveAll，不是選擇題；安全靠三道防線；approveAll 和 onPreToolUse 是不同層級
+- SHIP 9/9 知識點全部完成，學習紀錄更新
+- Commit `dec2275`: Spec v7 + SHIP 完成 + Plan/Research/Quickstart cascade
+- Commit `d8f6750`: 命名修正 skill → agent config（cascade 所有 artifacts）
+- Data model insight-learning review 10 個 entity 全部過完
+- Commit `99fe458`: Data model review 設計修正（7 個修正 + 3 個文件補強）
+- 筆記存到 Obsidian vault
+
+**Decisions**:
+- **approveAll 不是選擇題**：SDK 只提供 approveAll，per-call 機制不存在。安全靠前三道防線，不靠 permission model
+- **AsyncTask vs OperationLog 分離**：context 污染防治。agent 執行時只載入 task（集中），歷史按需載入
+- **OperationLog 是 agent 外部記憶體**：stateless per run 設計下，agent 靠它精確接手中斷任務
+- **ArtifactRecord 補 soft delete**：雲端資料需追溯（與 SourceRecord 同理）
+- **Notification 是 best-effort**：任務完成是我們的責任，通知送達是對方的責任。Pull（get_status）是可靠通道
+- **Main Agent vs Subagent**：Daemon 不是 agent，是 createSession 呼叫者。Main agent 是 Copilot runtime。customAgents 全部是 subagent，只看到自己 config 列的 tools
+- **Agent config 格式 .yaml → .md**：YAML frontmatter + Markdown prompt body，prompt 長文本更自然
+- **AgentConfig 對齊 SDK**：name, displayName, description, tools, prompt, infer + 我們的 parameters 擴展。砍掉 version（YAGNI）
+
+**State**: Branch `001-mvp` at `99fe458`。SHIP 全部完成。Data model review 完成。所有 artifacts 已 commit。
+
+**Next**:
+- [ ] 整理 SHIP 知識點為 Obsidian 筆記
+- [ ] Run `/speckit.tasks` → generate implementation tasks
+- [ ] Run `/speckit.analyze` → cross-artifact consistency check
+- [ ] 開始實作
+
+**User Notes**:
+- SHIP + insight-learning 比 speckit 更深——檢查的是「設計 vs 現實」的矛盾，不只是 artifacts 一致性
+- 資料模型設計要為 agent context 服務（最小 context 精確接手）
+- content/ 模組是 utils layer，agent/tools/ 才是 SDK wrapper
+- 不要依賴 notification 太重，使用者自己負責記得拉結果
+
 ## 2026-03-11 00:12 — Copilot SDK insight-learning 完成 8/9 知識點
 
 **Goal**: 用 insight-learning 深入研究 @github/copilot-sdk，建立 9 個機制級心智模型
