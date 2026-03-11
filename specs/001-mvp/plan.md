@@ -90,7 +90,8 @@ src/
 │       ├── content-tools.ts  # repoToText, urlToText, pdfToText
 │       ├── state-tools.ts    # reportRateLimit, updateCache, writeFile
 │       └── index.ts          # Tool registry: buildToolsForTab(tabHandle) → Tool[]
-├── content/             # Content pipeline（pure functions, no SDK dependency）
+├── content/             # Content pipeline（pure functions, no SDK dependency）— utils layer
+                         # 被 agent/tools/content-tools.ts 包裝為 defineTool()；分離是為了可獨立測試
 │   ├── repo-to-text.ts  # repomix wrapper
 │   ├── url-to-text.ts   # readability + jsdom
 │   └── pdf-to-text.ts   # pdf-parse wrapper
@@ -105,16 +106,16 @@ src/
     ├── errors.ts         # Unified error types + format
     └── config.ts         # Configuration（port, max tabs, timeouts, Chrome path, model）
 
-agents/                  # Agent config YAML files（→ CustomAgentConfig）
-├── add-source.yaml      # → CustomAgentConfig { name, prompt, tools: [...] }
-├── query.yaml
-├── generate-audio.yaml
-├── download-audio.yaml
-├── screenshot.yaml
-├── list-sources.yaml
-├── rename-source.yaml
-├── create-notebook.yaml
-└── sync.yaml
+agents/                  # Agent config .md files（YAML frontmatter + Markdown prompt body → CustomAgentConfig）
+├── add-source.md        # → CustomAgentConfig { name, prompt, tools: [...] }
+├── query.md
+├── generate-audio.md
+├── download-audio.md
+├── screenshot.md
+├── list-sources.md
+├── rename-source.md
+├── create-notebook.md
+└── sync.md
 
 tests/
 ├── unit/
@@ -133,6 +134,11 @@ tests/
 ```
 
 **Structure Decision**: Single project 結構。8 個 src/ 子模組對齊 CLAUDE.md 定義的模組劃分。
+
+**⚠️ MUST READ**: 實作 `agent/` 模組前，必須先讀 [research.md Section 2 — Copilot SDK](./research.md)
+的「Main Agent vs Subagent 架構」段落。核心規則：Daemon 是 createSession 的呼叫者，
+Main agent 是 Copilot runtime（不是我們定義的），customAgents 全部是 subagent，
+每個 subagent 只看到自己 config 列的 tools。
 
 **v2 結構調整理由**（基於 SDK 研究）：
 1. `agent/session.ts` → `agent/client.ts`（CopilotClient singleton）+ `agent/session-runner.ts`（per-task session lifecycle）。
@@ -156,7 +162,7 @@ Scheduler.dispatch(task)
     → return result
 ```
 
-`agents/` 在 repo root（版本控制 + 可覆寫至 `~/.nbctl/agents/`）。
+`agents/` 在 repo root（版本控制 + 可覆寫至 `~/.nbctl/agents/`）。格式為 `.md`（YAML frontmatter + Markdown prompt body），對齊 Copilot CLI `.agent.md` 慣例，prompt 長文本用 Markdown 撰寫更自然。
 Tests 按 unit/integration/contract 分層，unit 按模組對應。
 
 ## Complexity Tracking

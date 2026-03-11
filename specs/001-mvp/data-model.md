@@ -21,7 +21,7 @@ NetworkGate (runtime)
 
 AgentSession (runtime, per notebook)
   ├── uses one → TabHandle (via TabManager.openTab())
-  └── uses many → AgentSkill (loaded from files)
+  └── uses many → AgentConfig (loaded from agents/*.md)
 ```
 
 ---
@@ -126,6 +126,8 @@ interface ArtifactRecord {
   duration: string | null;             // Audio 長度（如適用）
   size: string | null;                 // 檔案大小
   createdAt: string;                   // ISO 8601
+  removedAt: string | null;            // soft delete（待補：artifact 雖有本機副本，
+                                       // 但雲端狀態仍需追溯，與 SourceRecord 同理）
 }
 ```
 
@@ -133,6 +135,10 @@ interface ArtifactRecord {
 
 **Storage**: `~/.nbctl/cache/<notebook-alias>/operations.json`
 **Purpose**: 所有透過 nbctl exec 執行的操作歷程（FR-042~043）。
+  雙重用途：(1) 人類查歷史；(2) **agent 的外部記憶體**——
+  因為 agent 是 stateless per run，session memory 不可靠（compact/restart 會丟失）。
+  OperationLog 讓任何無記憶的新 agent 能精確接手中斷的任務，
+  不依賴 session persistence，不從頭重做。
 
 ```typescript
 interface OperationLogEntry {
@@ -168,6 +174,23 @@ type OperationActionType =
 
 **Storage**: `~/.nbctl/tasks/<taskId>.json`
 **Purpose**: 非同步操作的追蹤紀錄（FR-100~109）。
+  刻意與 OperationLogEntry 分離：agent 執行任務時只載入 AsyncTask（集中上下文）；
+  需要歷史回顧時才按需載入 OperationLog。合併會讓歷史 log 污染任務上下文，
+  浪費 token 並干擾 agent 決策。資料模型設計為 agent context 管理服務。
+
+> **⚠️ 開發注意：AsyncTask.history vs OperationLogEntry 的粒度差異**
+>
+> 兩者容易混淆，但粒度和目的完全不同，**不可合併實作**：
+>
+> | | AsyncTask.history | OperationLogEntry |
+> |---|---|---|
+> | 粒度 | 高層（狀態機轉換） | 低層（每個具體動作）|
+> | 內容 | 決策節點：為什麼到這一步、reason | 操作流水帳：截圖、點擊、填表、等待 |
+> | 整理程度 | 結構化摘要（LLM 整理過的思路） | 原始詳細記錄（真實發生順序）|
+> | 類比 | 案件摘要（判決節點與原因） | 監視器錄影（每秒發生什麼）|
+>
+> Agent 重接中斷任務時：先讀 history 知道「任務在哪個階段、為什麼」，
+> 再按需載入 OperationLog 知道「上一步具體做到哪」。兩者服務不同查詢需求。
 
 ```typescript
 interface AsyncTask {
@@ -242,6 +265,20 @@ interface TaskNotificationPayload {
 2. Daemon 透過 MCP notification 推送 payload 至所有連線中的 client
 3. 若無 client 連線，通知資訊保留在 AsyncTask 狀態中，client 可透過 `get_status` tool 查詢
 
+**⚠️ 設計決策：Notification 是 best-effort，不是核心依賴**
+
+MCP notification 的接收行為由 MCP client 實作決定——client 怎麼把通知轉給 LLM
+沒有標準規範，各家實作不同，我們無法控制也不應該假設。
+
+**可靠通道是 Pull（`get_status`）**，不是 Push（notification）：
+- 使用者送出 async 操作後，**自己負責記得去拉結果**
+- `exec` 回傳的 `hint` 欄位會明確提示「這是 async，記得用 `get_status` 查」
+- Notification 是即時提醒的加分，送出去就結束，不補發、不確認
+
+**替代方案**：不想等 async？
+- 派 sub-agent 定期呼叫 `get_status` 輪詢
+- 或直接用同步模式（exec 不帶 `async: true`）
+
 ---
 
 ## Runtime-Only Entities
@@ -283,27 +320,34 @@ interface NetworkHealth {
 }
 ```
 
-### AgentSkill
+### AgentConfig（原 AgentSkill，待更名）
 
-**Storage**: `skills/<name>.yaml`（外部化定義檔案）或 `~/.nbctl/skills/<name>.yaml`
-**Purpose**: 參數化的 agent 操作技能定義（FR-150~153）。
+**Storage**: `agents/<name>.md`（YAML frontmatter + Markdown prompt body）或 `~/.nbctl/agents/<name>.md`
+**Purpose**: 參數化的 agent 操作定義（FR-150~153）。對應 SDK 的 `CustomAgentConfig`。
 
 ```typescript
-interface AgentSkill {
-  name: string;                        // 唯一名稱
-  version: string;                     // Semver
-  description: string;                 // 人類可讀描述
-  promptTemplate: string;              // Agent prompt template（可含 {{variables}}）
-  requiredTools: string[];             // 依賴的 tool 名稱（FR-153）
-  parameters: Record<string, SkillParameter>;  // 可調整參數
+// 對齊 SDK CustomAgentConfig + 我們的擴展欄位
+interface AgentConfig {
+  name: string;                        // 唯一名稱（對應 CustomAgentConfig.name）
+  displayName: string;                 // 顯示名稱（對應 CustomAgentConfig.displayName）
+  description: string;                 // 人類可讀描述（對應 CustomAgentConfig.description）
+  tools: string[];                     // tool 白名單（對應 CustomAgentConfig.tools）
+  prompt: string;                      // Markdown body，agent-loader 做 template rendering 後傳給 SDK
+  infer: boolean;                      // 是否注入 main agent tool list（預設 true）
+  // --- 以下為我們的擴展，不傳給 SDK ---
+  parameters: Record<string, AgentParameter>;  // 動態 prompt template 變數
 }
 
-interface SkillParameter {
+interface AgentParameter {
   type: "string" | "number" | "boolean";
   description: string;
   default: string | number | boolean;
 }
 ```
+
+**載入流程**：`agents/*.md` → `agent-loader.ts` 讀 YAML frontmatter + Markdown body
+→ template rendering（用 parameters 替換 `{{variables}}`）→ `CustomAgentConfig`（SDK 原生型別）。
+SDK 拿到的是已渲染的靜態 prompt。
 
 ---
 

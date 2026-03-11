@@ -131,9 +131,39 @@ const screenshotTool = defineTool("screenshot", {
 });
 ```
 
-**Custom Agent（映射到 Skill）**:
+**Main Agent vs Subagent 架構**:
+
+createSession 時，Copilot CLI runtime 自帶 main agent（Copilot 本身），
+你傳的 `customAgents` 全部是 subagent 候選。`infer: true`（預設）的 subagent
+會被轉成 `task:xxx` tool 注入 main agent 的 tool list，由 main agent 的 model
+自動決定何時呼叫哪個 subagent。
+
+```
+Main Agent (Copilot runtime 內建)
+  ├── built-in tools: grep, glob, view, edit, bash, ...
+  ├── task:add-source   ← customAgent infer:true → 變成 tool
+  └── task:query        ← customAgent infer:true → 變成 tool
+
+Subagent "add-source" 被呼叫時
+  └── 只看到自己 config 裡列的 tools: screenshot, click, type, paste, repoToText
+      （不看到其他 subagent，不看到 main agent 的 built-in tools）
+```
+
+**關鍵規則**：
+- Main agent 是 Copilot runtime，不需要也不能由我們定義
+- `systemMessage` 可追加指令給 main agent（mode: "append" 保留預設 prompt）
+- Subagent 之間互相看不到，不能互相呼叫
+- Subagent 的 tools 是 per-agent 白名單（防線 1），不繼承 main agent 的 tool list
+- 我們的 daemon 是 createSession 的呼叫者，不是 agent
+
+**對我們架構的意義**：
+- 每個 agent config YAML 對應 customAgents 陣列的一個 entry
+- `requiredTools` 就是 subagent 的 tool 白名單
+- `promptTemplate` 就是 subagent 的 prompt
+- main agent 的 `systemMessage` 用來設定全局行為（例如 NotebookLM 操作通則）
+
+**Custom Agent Config 定義**:
 ```typescript
-// CustomAgentConfig 等同於我們的 Skill 概念
 const addSourceAgent: CustomAgentConfig = {
   name: "add-source",
   displayName: "Add Source",
@@ -185,7 +215,7 @@ Daemon process (MCP Server, Streamable HTTP)
 │   ├── Browser tools: screenshot, click, type, scroll, paste (CDP-based)
 │   ├── Content tools: repoToText, urlToText, pdfToText
 │   └── State tools: reportRateLimit, updateCache
-├── Skills → CustomAgentConfig (prompt + tool restriction)
+├── Agent Configs → CustomAgentConfig (prompt + tool restriction)
 ├── MCP tools/list 自描述
 └── MCP notification fire-and-forget
 ```

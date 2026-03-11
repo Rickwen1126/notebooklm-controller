@@ -50,12 +50,17 @@ TypeScript 5.x, Node.js 22 LTS: Follow standard conventions
 **使用 `@github/copilot-sdk`（GitHub Copilot SDK），不是 Claude Agent SDK。**
 這是專案核心決策，不可更改。所有 agent session 管理、tool 注入、vision 操作都透過 Copilot SDK 的 agent runtime。
 
+**角色分工**：
+- **Daemon** = createSession 的呼叫者（不是 agent）
+- **Main Agent** = Copilot CLI runtime 內建（不由我們定義），用 `systemMessage` 追加指令
+- **Subagent** = `customAgents` 陣列的每個 entry（對應 `agents/*.yaml`），只看到自己 config 列的 tools
+
 **SDK 標準寫法**：
 - `CopilotClient` singleton（daemon 層級，autoRestart: true）
-- `client.createSession({ tools, agent, hooks })` per-task
+- `client.createSession({ tools, customAgents, hooks })` per-task
 - `defineTool(name, { description, parameters: z.object(...), handler })` 定義 tool
 - `ToolResultObject.binaryResultsForLlm` 回傳截圖（Tool 自包原則）
-- `CustomAgentConfig { name, prompt, tools }` 對應 agent config YAML（`agents/` 目錄）
+- `CustomAgentConfig { name, prompt, tools }` 對應 agent config .md（`agents/`，YAML frontmatter + Markdown prompt body）
 - `session.sendAndWait({ prompt })` 執行操作
 - `SessionHooks.onPreToolUse` → NetworkGate acquirePermit()
 
