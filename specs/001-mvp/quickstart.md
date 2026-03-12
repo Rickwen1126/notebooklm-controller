@@ -128,7 +128,7 @@ npx nbctl
 ├── state.json         # Notebook Registry + default notebook + daemon PID
 ├── cache/             # 每個 notebook 的來源/操作紀錄
 ├── tasks/             # 非同步任務狀態
-├── skills/            # Agent 操作技能定義（可覆寫）
+├── agents/            # Agent config 定義（可覆寫）
 └── logs/              # 操作日誌
 ```
 

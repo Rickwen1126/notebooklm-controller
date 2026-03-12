@@ -333,7 +333,7 @@ interface AgentConfig {
   description: string;                 // 人類可讀描述（對應 CustomAgentConfig.description）
   tools: string[];                     // tool 白名單（對應 CustomAgentConfig.tools）
   prompt: string;                      // Markdown body，agent-loader 做 template rendering 後傳給 SDK
-  infer: boolean;                      // 是否注入 main agent tool list（預設 true）
+  infer: boolean;                      // 是否讓 Copilot CLI 自主推斷可用 tools（預設 true）。false 時 subagent 只能用 tools 列表中的工具
   // --- 以下為我們的擴展，不傳給 SDK ---
   parameters: Record<string, AgentParameter>;  // 動態 prompt template 變數
 }

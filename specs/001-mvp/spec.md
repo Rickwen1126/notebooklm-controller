@@ -1305,9 +1305,9 @@ notebook 包含哪些來源是一種認知負擔。
   與建議動作（重試、重建 tab、截圖、重新認證）。
 
 **認證管理** (FR-145 series):
-- **FR-145**: 系統 MUST 透過 userDataDir 管理 Google 認證。
+- **FR-145**: _(alias of FR-048)_ 系統 MUST 透過 userDataDir 管理 Google 認證。
   首次登入以 headed Chrome（同一 userDataDir）完成認證，
-  cookies 與 session 自動持久化至 `~/.nbctl/profiles/chrome/`。
+  cookies 與 session 自動持久化至 `~/.nbctl/profiles/`。
 - **FR-146**: 後續 headless Chrome 啟動時 MUST 使用同一 userDataDir，
   自動繼承已登入的 Google session，無需 cookie injection。
 - **FR-147**: 系統 MUST 偵測 session 過期（302 redirect to login），
@@ -1325,9 +1325,9 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-161**: OS 通知 MUST 可透過設定檔開關，預設開啟。
 
 **Multi-tab Daemon** (FR-170 series):
-- **FR-170**: Daemon MUST 管理單一 Chrome instance，透過 TabManager 為每個
+- **FR-170**: _(alias of FR-004)_ Daemon MUST 管理單一 Chrome instance，透過 TabManager 為每個
   agent session 分配獨立的 tab（CDP session）。
-- **FR-171**: 每個 notebook MUST 有獨立的 operation queue。
+- **FR-171**: _(alias of FR-030)_ 每個 notebook MUST 有獨立的 operation queue。
   同 notebook serial，跨 notebook parallel（CDP 底層 API 支援 background tab 操作）。
 - **FR-172**: 每個 notebook 操作 MUST 對應一個獨立的 AI agent session +
   獨立的 tab。Agent 透過 CDP 底層 API 操作，可自主操作與自我修復。
@@ -1352,8 +1352,8 @@ notebook 包含哪些來源是一種認知負擔。
 
 **Headless / Headed 雙模式** (FR-180 series):
 - **FR-180**: Daemon MUST 支援 headless 與 headed 兩種 Chrome 啟動模式。
-- **FR-181**: 首次啟動且無有效 session 時，MUST 自動 headed mode 讓使用者登入，
-  session 持久化至 `~/.nbctl/profiles/chrome/`（userDataDir）。
+- **FR-181**: _(alias of FR-049)_ 首次啟動且無有效 session 時，MUST 自動 headed mode 讓使用者登入，
+  session 持久化至 `~/.nbctl/profiles/`（userDataDir）。
 - **FR-182**: 後續啟動 MUST headless mode，使用者桌面無瀏覽器視窗。
 - **FR-183**: 系統 MUST 偵測 session 過期，提供 `reauth` MCP tool 重新認證。
 - **FR-184**: Headless 截圖渲染 MUST 與 headed 一致。
@@ -1365,7 +1365,7 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-202**: MCP Server MUST 支援多個同時連線的 client。
 - **FR-203**: Daemon MUST 提供 thin launcher（`npx nbctl`）啟動 MCP server process，
   亦可透過 MCP client 設定（如 Claude Code MCP config）直接啟動。
-- **FR-204**: MCP Server MUST 在非同步操作完成時，透過 MCP notification 通知連線中的 client。
+- **FR-204**: _(alias of FR-110)_ MCP Server MUST 在非同步操作完成時，透過 MCP notification 通知連線中的 client。
 - **FR-205**: 若 client 在操作完成前斷線，結果 MUST 保留在 task store，
   client 重新連線後可透過 `get_status` tool 查詢。
 
