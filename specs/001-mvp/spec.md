@@ -1162,6 +1162,7 @@ notebook 包含哪些來源是一種認知負擔。
   以交互式方式批次納管使用者帳號中的所有 notebook。
 - **FR-035**: `add_all_notebooks` MUST 依序展示每個 notebook 的標題與 URL，
   讓使用者選擇是否納管並指定別名。
+  _⚠️ MCP 互動模型待定：傾向 Preview + confirm 兩步模式（call 1: dry-run 回傳列表，call 2: 帶 selected 確認納管）。MVP 後決定。_
 
 **來源重命名**:
 - **FR-036**: 系統 MUST 在透過「Copied text」方式新增來源後，
