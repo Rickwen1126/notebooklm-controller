@@ -3,7 +3,7 @@ import { mkdtemp, rm, readFile, writeFile, stat, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StateManager, createDefaultState } from "../../../src/state/state-manager.js";
-import type { DaemonState, NotebookEntry } from "../../../src/shared/types.js";
+import type { NotebookEntry } from "../../../src/shared/types.js";
 import { NotebookNotFoundError } from "../../../src/shared/errors.js";
 import { FILE_PERMISSION, DIR_PERMISSION } from "../../../src/shared/config.js";
 

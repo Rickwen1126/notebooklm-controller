@@ -174,6 +174,10 @@ vi.mock("../../../src/daemon/notebook-tools.js", () => ({
   registerNotebookTools: vi.fn(),
 }));
 
+vi.mock("../../../src/daemon/exec-tools.js", () => ({
+  registerExecTools: vi.fn(),
+}));
+
 // ---------------------------------------------------------------------------
 // Mock: Notifier
 // ---------------------------------------------------------------------------

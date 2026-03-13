@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { TaskStore } from "../../../src/state/task-store.js";
-import type { AsyncTask } from "../../../src/shared/types.js";
 
 describe("TaskStore", () => {
   let store: TaskStore;
@@ -88,14 +87,14 @@ describe("TaskStore", () => {
 
   describe("getAll", () => {
     it("returns all tasks sorted newest first", async () => {
-      const t1 = await store.create({ notebookAlias: "a", command: "cmd1" });
-      const t2 = await store.create({ notebookAlias: "b", command: "cmd2" });
-      const t3 = await store.create({ notebookAlias: "a", command: "cmd3" });
+      await store.create({ notebookAlias: "a", command: "cmd1" });
+      await store.create({ notebookAlias: "b", command: "cmd2" });
+      const newest = await store.create({ notebookAlias: "a", command: "cmd3" });
 
       const all = await store.getAll();
       expect(all).toHaveLength(3);
-      // Newest first — t3 was created last
-      expect(all[0].taskId).toBe(t3.taskId);
+      // Newest first — newest was created last
+      expect(all[0].taskId).toBe(newest.taskId);
     });
 
     it("filters by notebook alias", async () => {
@@ -132,7 +131,7 @@ describe("TaskStore", () => {
     it("returns only completed and failed tasks", async () => {
       const t1 = await store.create({ notebookAlias: "nb", command: "cmd1" });
       const t2 = await store.create({ notebookAlias: "nb", command: "cmd2" });
-      const t3 = await store.create({ notebookAlias: "nb", command: "cmd3" });
+      await store.create({ notebookAlias: "nb", command: "cmd3" });
 
       await store.transition(t1.taskId, "running");
       await store.transition(t1.taskId, "completed");
@@ -140,7 +139,7 @@ describe("TaskStore", () => {
       await store.transition(t2.taskId, "running");
       await store.transition(t2.taskId, "failed", "timeout");
 
-      // t3 stays queued — should NOT appear in recent
+      // Third task stays queued — should NOT appear in recent
       const recent = await store.getRecent();
       expect(recent).toHaveLength(2);
 

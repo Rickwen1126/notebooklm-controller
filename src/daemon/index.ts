@@ -11,6 +11,7 @@ import { NbctlMcpServer } from "./mcp-server.js";
 import { Scheduler } from "./scheduler.js";
 import { registerDaemonTools } from "./mcp-tools.js";
 import { registerNotebookTools } from "./notebook-tools.js";
+import { registerExecTools } from "./exec-tools.js";
 import { StateManager } from "../state/state-manager.js";
 import { TaskStore } from "../state/task-store.js";
 import { CacheManager } from "../state/cache-manager.js";
@@ -115,6 +116,9 @@ export async function startDaemon(options?: {
   });
   registerNotebookTools(mcpServer, {
     stateManager, tabManager, cacheManager,
+  });
+  registerExecTools(mcpServer, {
+    scheduler, stateManager, taskStore,
   });
 
   // 8. Start MCP Server

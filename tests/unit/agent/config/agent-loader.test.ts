@@ -71,7 +71,7 @@ const NO_FRONTMATTER = `# Just Markdown
 No YAML frontmatter at all.
 `;
 
-const BROKEN_YAML = `---
+const _BROKEN_YAML = `---
 name: broken
 description
   this is not valid

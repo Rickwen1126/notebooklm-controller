@@ -186,18 +186,18 @@
 
 ### Tests for US13+US14
 
-- [ ] T059 [P] [US13] Contract test for exec tool (async mode) in `tests/contract/mcp-tools/exec-async.test.ts` (AsyncSubmitResult schema, get_status with taskId)
-- [ ] T060 [P] [US13] Contract test for cancel_task tool in `tests/contract/mcp-tools/cancel-task.test.ts` (queued→cancelled, running→cancelled, terminal state error)
-- [ ] T061 [P] [US14] Integration test for MCP notification in `tests/integration/mcp/notification.test.ts` (async operation complete → notification pushed to connected client)
+- [x] T059 [P] [US13] Contract test for exec tool (async mode) in `tests/contract/mcp-tools/exec-async.test.ts` (AsyncSubmitResult schema, get_status with taskId)
+- [x] T060 [P] [US13] Contract test for cancel_task tool in `tests/contract/mcp-tools/cancel-task.test.ts` (queued→cancelled, running→cancelled, terminal state error)
+- [x] T061 [P] [US14] Integration test for MCP notification in `tests/integration/mcp/notification.test.ts` (async operation complete → notification pushed to connected client)
 
 ### Implementation for US13+US14
 
-- [ ] T062 [US13] Register `exec` MCP tool in `src/daemon/mcp-server.ts` (parse prompt + notebook + async + context, resolve default notebook, dispatch to scheduler)
-- [ ] T063 [US13] Implement sync/async branching in exec tool (sync: await scheduler result; async: return taskId + hint immediately)
-- [ ] T064 [US13] Register `cancel_task` MCP tool in `src/daemon/mcp-server.ts` (cancel queued task from queue, signal running agent to stop at safe point, reject terminal state)
-- [ ] T065 [US13] Extend `get_status` MCP tool with task query modes (taskId → single task, all → recent tasks list, recent → undelivered tasks, notebook filter, limit)
-- [ ] T066 [US14] Integrate notifier with scheduler — on task complete/fail, push MCP notification to connected clients (fire-and-forget, no priority — client uses `status` field)
-- [ ] T067 [US14] Handle client disconnection gracefully (notification not sent, result preserved in task store for get_status pull)
+- [x] T062 [US13] Register `exec` MCP tool in `src/daemon/exec-tools.ts` (parse prompt + notebook + async + context, resolve default notebook, dispatch to scheduler)
+- [x] T063 [US13] Implement sync/async branching in exec tool (sync: await scheduler result; async: return taskId + hint immediately)
+- [x] T064 [US13] Register `cancel_task` MCP tool in `src/daemon/exec-tools.ts` (cancel queued task from queue, signal running agent to stop at safe point, reject terminal state)
+- [x] T065 [US13] Extend `get_status` MCP tool with task query modes (taskId → single task, all → recent tasks list, recent → undelivered tasks, notebook filter, limit) — already implemented in Phase 2
+- [x] T066 [US14] Integrate notifier with scheduler — on task complete/fail, push MCP notification to connected clients (fire-and-forget, no priority — client uses `status` field) — already wired in Phase 2
+- [x] T067 [US14] Handle client disconnection gracefully (notification not sent, result preserved in task store for get_status pull) — already implemented in Notifier
 
 **Checkpoint**: Async operations work end-to-end. Can submit, track, cancel tasks, and receive notifications.
 
