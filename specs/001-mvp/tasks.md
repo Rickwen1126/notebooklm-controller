@@ -157,18 +157,18 @@
 
 ### Tests for US2
 
-- [ ] T047 [P] [US2] Contract tests for notebook management tools in `tests/contract/mcp-tools/notebook-mgmt.test.ts` (add_notebook, list_notebooks, open_notebook, close_notebook, set_default, rename_notebook, remove_notebook — input/output schema validation)
-- [ ] T048 [P] [US2] Integration test for notebook CRUD in `tests/integration/daemon/notebook-crud.test.ts` (add → list → open → close → rename → remove full flow)
+- [x] T047 [P] [US2] Contract tests for notebook management tools in `tests/contract/mcp-tools/notebook-mgmt.test.ts` (add_notebook, list_notebooks, open_notebook, close_notebook, set_default, rename_notebook, remove_notebook — input/output schema validation)
+- [x] T048 [P] [US2] Integration test for notebook CRUD in `tests/integration/daemon/notebook-crud.test.ts` (add → list → open → close → rename → remove full flow)
 
 ### Implementation for US2
 
-- [ ] T049 [US2] Register `add_notebook` MCP tool in `src/daemon/mcp-server.ts` (validate URL format, check duplicate URL/alias, open tab, scan notebook, sync to state + cache)
-- [ ] T050 [US2] Register `list_notebooks` MCP tool in `src/daemon/mcp-server.ts` (return all registered notebooks with description, status, active flag, sourceCount)
-- [ ] T051 [P] [US2] Register `open_notebook` MCP tool in `src/daemon/mcp-server.ts` (mark active, next operation opens tab)
-- [ ] T052 [P] [US2] Register `close_notebook` MCP tool in `src/daemon/mcp-server.ts` (close tab if open, mark inactive, preserve registration)
-- [ ] T053 [P] [US2] Register `set_default` MCP tool in `src/daemon/mcp-server.ts` (update DaemonState.defaultNotebook)
-- [ ] T054 [P] [US2] Register `rename_notebook` MCP tool in `src/daemon/mcp-server.ts` (validate new alias uniqueness, update state)
-- [ ] T055 [P] [US2] Register `remove_notebook` MCP tool in `src/daemon/mcp-server.ts` (close tab, remove from registry, clean cache)
+- [x] T049 [US2] Register `add_notebook` MCP tool in `src/daemon/notebook-tools.ts` (validate URL format, check duplicate URL/alias, create NotebookEntry, sync to state)
+- [x] T050 [US2] Register `list_notebooks` MCP tool in `src/daemon/notebook-tools.ts` (return all registered notebooks with description, status, active flag, sourceCount)
+- [x] T051 [P] [US2] Register `open_notebook` MCP tool in `src/daemon/notebook-tools.ts` (mark active, next operation opens tab)
+- [x] T052 [P] [US2] Register `close_notebook` MCP tool in `src/daemon/notebook-tools.ts` (close tab if open, mark inactive, preserve registration)
+- [x] T053 [P] [US2] Register `set_default` MCP tool in `src/daemon/notebook-tools.ts` (update DaemonState.defaultNotebook)
+- [x] T054 [P] [US2] Register `rename_notebook` MCP tool in `src/daemon/notebook-tools.ts` (validate new alias uniqueness, update state)
+- [x] T055 [P] [US2] Register `remove_notebook` MCP tool in `src/daemon/notebook-tools.ts` (close tab, remove from registry, clean cache)
 - [ ] T056 [US2] Register `add_all_notebooks` MCP tool in `src/daemon/mcp-server.ts` (navigate to NotebookLM homepage via agent, extract notebook list, batch add. ⚠️ MCP 互動模型待定：傾向 Preview+confirm 兩步模式，MVP 後決定)
 - [ ] T057 [US2] Implement tab limit enforcement and queuing (max 10 tabs, wait or error per spec AS11)
 - [ ] T058 [US2] Write `agents/create-notebook.md` agent config (navigate to NotebookLM homepage, click new notebook, capture dynamic URL, register)

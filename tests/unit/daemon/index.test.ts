@@ -131,6 +131,35 @@ vi.mock("../../../src/state/task-store.js", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Mock: CacheManager
+// ---------------------------------------------------------------------------
+
+const mockCacheManagerInstance = {};
+
+vi.mock("../../../src/state/cache-manager.js", () => {
+  const CacheManager = vi.fn(function (this: typeof mockCacheManagerInstance) {
+    return Object.assign(this, mockCacheManagerInstance);
+  });
+  return { CacheManager };
+});
+
+// ---------------------------------------------------------------------------
+// Mock: mcp-tools (registerDaemonTools)
+// ---------------------------------------------------------------------------
+
+vi.mock("../../../src/daemon/mcp-tools.js", () => ({
+  registerDaemonTools: vi.fn(),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock: notebook-tools (registerNotebookTools)
+// ---------------------------------------------------------------------------
+
+vi.mock("../../../src/daemon/notebook-tools.js", () => ({
+  registerNotebookTools: vi.fn(),
+}));
+
+// ---------------------------------------------------------------------------
 // Mock: Notifier
 // ---------------------------------------------------------------------------
 
@@ -193,6 +222,7 @@ vi.mock("../../../src/shared/config.js", () => ({
   MCP_HOST: "127.0.0.1",
   STATE_FILE: "/tmp/test-state.json",
   TASKS_DIR: "/tmp/test-tasks",
+  CACHE_DIR: "/tmp/test-cache",
   BACKOFF_INITIAL_MS: 5000,
   BACKOFF_MAX_MS: 300000,
   MAX_TABS: 10,
@@ -248,6 +278,7 @@ describe("Daemon entry point", () => {
       expect(runtime).toHaveProperty("scheduler");
       expect(runtime).toHaveProperty("stateManager");
       expect(runtime).toHaveProperty("taskStore");
+      expect(runtime).toHaveProperty("cacheManager");
       expect(runtime).toHaveProperty("notifier");
       expect(runtime).toHaveProperty("networkGate");
       expect(runtime).toHaveProperty("locale");

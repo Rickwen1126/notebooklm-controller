@@ -9,8 +9,11 @@ import { TabManager } from "../tab-manager/tab-manager.js";
 import { CopilotClientSingleton } from "../agent/client.js";
 import { NbctlMcpServer } from "./mcp-server.js";
 import { Scheduler } from "./scheduler.js";
+import { registerDaemonTools } from "./mcp-tools.js";
+import { registerNotebookTools } from "./notebook-tools.js";
 import { StateManager } from "../state/state-manager.js";
 import { TaskStore } from "../state/task-store.js";
+import { CacheManager } from "../state/cache-manager.js";
 import { Notifier } from "../notification/notifier.js";
 import { NetworkGate } from "../network-gate/network-gate.js";
 import { resolveLocale, loadUIMap } from "../shared/locale.js";
@@ -29,6 +32,7 @@ export interface DaemonRuntime {
   scheduler: Scheduler;
   stateManager: StateManager;
   taskStore: TaskStore;
+  cacheManager: CacheManager;
   notifier: Notifier;
   networkGate: NetworkGate;
   locale: string;
@@ -51,6 +55,7 @@ export async function startDaemon(options?: {
   const copilotClient = CopilotClientSingleton.getInstance();
   const stateManager = new StateManager();
   const taskStore = new TaskStore();
+  const cacheManager = new CacheManager();
   const networkGate = NetworkGate.getInstance();
   const notifier = new Notifier(null);
 
@@ -96,11 +101,27 @@ export async function startDaemon(options?: {
     onTaskComplete: (task) => notifier.notify(task),
   });
 
-  // 7. Start MCP Server
+  // 7. Register MCP tools
+  const shutdownFn = async () => {
+    await stopDaemon({
+      tabManager, copilotClient, mcpServer, scheduler,
+      stateManager, taskStore, cacheManager, notifier, networkGate,
+      locale, uiMap,
+    });
+  };
+  registerDaemonTools(mcpServer, {
+    tabManager, scheduler, stateManager, networkGate, taskStore,
+    shutdownFn,
+  });
+  registerNotebookTools(mcpServer, {
+    stateManager, tabManager, cacheManager,
+  });
+
+  // 8. Start MCP Server
   await mcpServer.start();
   notifier.setServer(mcpServer.getServer().server);
 
-  // 8. Update daemon state
+  // 9. Update daemon state
   await stateManager.updateDaemon({
     pid: process.pid,
     startedAt: new Date().toISOString(),
@@ -120,6 +141,7 @@ export async function startDaemon(options?: {
     scheduler,
     stateManager,
     taskStore,
+    cacheManager,
     notifier,
     networkGate,
     locale,

@@ -8,7 +8,7 @@
  * order and the returned DaemonRuntime is properly assembled.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { DaemonRuntime } from "../../../src/daemon/index.js";
 import type { UIMap } from "../../../src/shared/types.js";
 
@@ -152,6 +152,29 @@ vi.mock("../../../src/state/task-store.js", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Mock: CacheManager
+// ---------------------------------------------------------------------------
+
+vi.mock("../../../src/state/cache-manager.js", () => {
+  const CacheManager = vi.fn(function () {
+    return {};
+  });
+  return { CacheManager };
+});
+
+// ---------------------------------------------------------------------------
+// Mock: registerDaemonTools / registerNotebookTools
+// ---------------------------------------------------------------------------
+
+vi.mock("../../../src/daemon/mcp-tools.js", () => ({
+  registerDaemonTools: vi.fn(),
+}));
+
+vi.mock("../../../src/daemon/notebook-tools.js", () => ({
+  registerNotebookTools: vi.fn(),
+}));
+
+// ---------------------------------------------------------------------------
 // Mock: Notifier
 // ---------------------------------------------------------------------------
 
@@ -214,6 +237,7 @@ vi.mock("../../../src/shared/config.js", () => ({
   MCP_HOST: "127.0.0.1",
   STATE_FILE: "/tmp/test-state.json",
   TASKS_DIR: "/tmp/test-tasks",
+  CACHE_DIR: "/tmp/test-cache",
   BACKOFF_INITIAL_MS: 5000,
   BACKOFF_MAX_MS: 300000,
   MAX_TABS: 10,
