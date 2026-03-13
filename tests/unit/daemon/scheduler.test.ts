@@ -332,6 +332,49 @@ describe("Scheduler", () => {
       expect(stored!.status).toBe("failed");
     });
 
+    it("persists result to disk on success", async () => {
+      const runTask = createMockRunTask({
+        result: { success: true, result: { summary: "all done" } },
+      });
+
+      const scheduler = new Scheduler({ taskStore, runTask });
+
+      const task = await scheduler.submit({
+        notebookAlias: "nb",
+        command: "query something",
+      });
+
+      await scheduler.shutdown();
+
+      const stored = await taskStore.get(task.taskId);
+      expect(stored!.status).toBe("completed");
+      expect(stored!.result).toEqual({ summary: "all done" });
+    });
+
+    it("persists error and errorScreenshot to disk on failure", async () => {
+      const runTask = createMockRunTask({
+        result: {
+          success: false,
+          error: "timeout reached",
+          errorScreenshot: "/tmp/err.png",
+        },
+      });
+
+      const scheduler = new Scheduler({ taskStore, runTask });
+
+      const task = await scheduler.submit({
+        notebookAlias: "nb",
+        command: "failing-cmd",
+      });
+
+      await scheduler.shutdown();
+
+      const stored = await taskStore.get(task.taskId);
+      expect(stored!.status).toBe("failed");
+      expect(stored!.error).toBe("timeout reached");
+      expect(stored!.errorScreenshot).toBe("/tmp/err.png");
+    });
+
     it("handles thrown errors from runTask", async () => {
       const completedTasks: AsyncTask[] = [];
       const onTaskComplete = vi.fn((task: AsyncTask) => {
@@ -361,6 +404,7 @@ describe("Scheduler", () => {
 
       const stored = await taskStore.get(task.taskId);
       expect(stored!.status).toBe("failed");
+      expect(stored!.error).toBe("unexpected crash");
     });
   });
 

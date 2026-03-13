@@ -263,7 +263,20 @@ export class NbctlMcpServer {
   ): Promise<void> {
     // Read the raw body.
     const body = await this.readBody(req);
-    const parsed: unknown = JSON.parse(body);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32700, message: "Parse error" },
+          id: null,
+        }),
+      );
+      return;
+    }
 
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
 

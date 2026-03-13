@@ -171,7 +171,7 @@ export interface NetworkHealth {
   backoffRemainingMs: number | null;
   /** ISO 8601 */
   lastCheckedAt: string;
-  recentLatencyMs: number;
+  recentLatencyMs: number | null;
 }
 
 /** A parameter definition within an agent config. */

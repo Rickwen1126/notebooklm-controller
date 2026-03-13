@@ -120,7 +120,7 @@ export class NetworkGate {
         : null,
       backoffRemainingMs: isThrottled ? this.backoffUntil! - now : null,
       lastCheckedAt: new Date(now).toISOString(),
-      recentLatencyMs: 0,
+      recentLatencyMs: null,
     };
   }
 

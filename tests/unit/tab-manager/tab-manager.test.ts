@@ -296,5 +296,27 @@ describe("TabManager", () => {
     it("throws ChromeError if browser is not launched", async () => {
       await expect(tm.switchMode(true)).rejects.toThrow(ChromeError);
     });
+
+    it("throws ChromeError if there are active tabs", async () => {
+      await tm.launch({ headless: true });
+      await tm.openTab("nb", "https://notebooklm.google.com/notebook/1");
+
+      await expect(tm.switchMode(false)).rejects.toThrow(ChromeError);
+      await expect(tm.switchMode(false)).rejects.toThrow(/active tab/);
+
+      // Browser should still be running (not shut down).
+      expect(tm.isConnected()).toBe(true);
+    });
+
+    it("succeeds after all tabs are closed", async () => {
+      await tm.launch({ headless: true });
+      const handle = await tm.openTab("nb", "https://notebooklm.google.com/notebook/1");
+      await tm.closeTab(handle.tabId);
+
+      mockBrowser = createMockBrowser();
+      await tm.switchMode(false);
+
+      expect(tm.isConnected()).toBe(true);
+    });
   });
 });

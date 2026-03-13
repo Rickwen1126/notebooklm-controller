@@ -183,6 +183,12 @@ export class TabManager extends EventEmitter {
       throw new ChromeError("Browser is not launched");
     }
 
+    if (this.tabs.size > 0) {
+      throw new ChromeError(
+        `Cannot switch mode: ${this.tabs.size} active tab(s). Close them first.`,
+      );
+    }
+
     log.info("Switching browser mode", {
       from: this.headless ? "headless" : "headed",
       to: headless ? "headless" : "headed",

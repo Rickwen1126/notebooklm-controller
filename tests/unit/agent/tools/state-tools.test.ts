@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 // Mock the Copilot SDK to avoid loading vscode-jsonrpc (not available in test env).
@@ -30,6 +30,18 @@ vi.mock("../../../../src/shared/logger.js", () => {
   const noop = () => {};
   const childLogger = { info: noop, warn: noop, error: noop, child: () => childLogger };
   return { logger: childLogger };
+});
+
+// Create a temp dir for writeFile tests that serves as NBCTL_HOME.
+const writeFileTestDir = await mkdtemp(join(tmpdir(), "nbctl-home-test-"));
+
+// Mock NBCTL_HOME to point to our temp dir so writeFile path validation passes.
+vi.mock("../../../../src/shared/config.js", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...original,
+    NBCTL_HOME: writeFileTestDir,
+  };
 });
 
 // Import after mocks are set up.
@@ -248,6 +260,46 @@ describe("state-tools", () => {
       expect(result.resultType).toBe("success");
     });
 
+    it("returns failure when source add is missing required fields", async () => {
+      const mockGate = createMockNetworkGate();
+      const mockCache = createMockCacheManager();
+      const tools = createStateTools({
+        networkGate: mockGate as any,
+        cacheManager: mockCache as any,
+        notebookAlias: NOTEBOOK_ALIAS,
+      });
+
+      const tool = findTool(tools, "updateCache");
+      const result = (await tool.handler(
+        { type: "source", action: "add", data: { id: "src-1" } },
+        { ...dummyInvocation, toolName: "updateCache" },
+      )) as TestToolResult;
+
+      expect(result.resultType).toBe("failure");
+      expect(result.textResultForLlm).toContain("required fields");
+      expect(mockCache.addSource).not.toHaveBeenCalled();
+    });
+
+    it("returns failure when artifact add is missing required fields", async () => {
+      const mockGate = createMockNetworkGate();
+      const mockCache = createMockCacheManager();
+      const tools = createStateTools({
+        networkGate: mockGate as any,
+        cacheManager: mockCache as any,
+        notebookAlias: NOTEBOOK_ALIAS,
+      });
+
+      const tool = findTool(tools, "updateCache");
+      const result = (await tool.handler(
+        { type: "artifact", action: "add", data: { id: "art-1" } },
+        { ...dummyInvocation, toolName: "updateCache" },
+      )) as TestToolResult;
+
+      expect(result.resultType).toBe("failure");
+      expect(result.textResultForLlm).toContain("required fields");
+      expect(mockCache.addArtifact).not.toHaveBeenCalled();
+    });
+
     it("returns failure when source update is missing id", async () => {
       const mockGate = createMockNetworkGate();
       const mockCache = createMockCacheManager();
@@ -300,7 +352,7 @@ describe("state-tools", () => {
 
       const tool = findTool(tools, "updateCache");
       const result = (await tool.handler(
-        { type: "source", action: "add", data: { id: "src-fail" } },
+        { type: "source", action: "add", data: { id: "src-fail", notebookAlias: NOTEBOOK_ALIAS, displayName: "fail source" } },
         { ...dummyInvocation, toolName: "updateCache" },
       )) as TestToolResult;
 
@@ -310,17 +362,11 @@ describe("state-tools", () => {
   });
 
   describe("writeFile", () => {
-    let tempDir: string;
-
-    beforeEach(async () => {
-      tempDir = await mkdtemp(join(tmpdir(), "state-tools-test-"));
-    });
-
     afterEach(async () => {
-      await rm(tempDir, { recursive: true, force: true });
+      // Clean up files created during tests (but keep the dir itself).
     });
 
-    it("writes content to a file path", async () => {
+    it("writes content to a file path within NBCTL_HOME", async () => {
       const mockGate = createMockNetworkGate();
       const mockCache = createMockCacheManager();
       const tools = createStateTools({
@@ -329,7 +375,7 @@ describe("state-tools", () => {
         notebookAlias: NOTEBOOK_ALIAS,
       });
 
-      const filePath = join(tempDir, "output.txt");
+      const filePath = join(writeFileTestDir, "output.txt");
       const tool = findTool(tools, "writeFile");
       const result = (await tool.handler(
         { path: filePath, content: "hello world" },
@@ -352,7 +398,7 @@ describe("state-tools", () => {
         notebookAlias: NOTEBOOK_ALIAS,
       });
 
-      const filePath = join(tempDir, "nested", "dir", "file.txt");
+      const filePath = join(writeFileTestDir, "nested", "dir", "file.txt");
       const tool = findTool(tools, "writeFile");
       const result = (await tool.handler(
         { path: filePath, content: "nested content" },
@@ -365,7 +411,7 @@ describe("state-tools", () => {
       expect(written).toBe("nested content");
     });
 
-    it("returns failure when write fails", async () => {
+    it("rejects path traversal outside NBCTL_HOME", async () => {
       const mockGate = createMockNetworkGate();
       const mockCache = createMockCacheManager();
       const tools = createStateTools({
@@ -374,15 +420,54 @@ describe("state-tools", () => {
         notebookAlias: NOTEBOOK_ALIAS,
       });
 
-      // Use an invalid path (empty string) to trigger an error
       const tool = findTool(tools, "writeFile");
+
+      // Absolute path outside NBCTL_HOME
       const result = (await tool.handler(
-        { path: "", content: "should fail" },
+        { path: "/etc/passwd", content: "malicious" },
         { ...dummyInvocation, toolName: "writeFile" },
       )) as TestToolResult;
 
       expect(result.resultType).toBe("failure");
-      expect(result.textResultForLlm).toContain("Failed to write file");
+      expect(result.textResultForLlm).toContain("must be within");
+    });
+
+    it("rejects relative path traversal with ..", async () => {
+      const mockGate = createMockNetworkGate();
+      const mockCache = createMockCacheManager();
+      const tools = createStateTools({
+        networkGate: mockGate as any,
+        cacheManager: mockCache as any,
+        notebookAlias: NOTEBOOK_ALIAS,
+      });
+
+      const tool = findTool(tools, "writeFile");
+      const result = (await tool.handler(
+        { path: "../../.ssh/authorized_keys", content: "malicious" },
+        { ...dummyInvocation, toolName: "writeFile" },
+      )) as TestToolResult;
+
+      expect(result.resultType).toBe("failure");
+      expect(result.textResultForLlm).toContain("must be within");
+    });
+
+    it("returns failure for path outside NBCTL_HOME", async () => {
+      const mockGate = createMockNetworkGate();
+      const mockCache = createMockCacheManager();
+      const tools = createStateTools({
+        networkGate: mockGate as any,
+        cacheManager: mockCache as any,
+        notebookAlias: NOTEBOOK_ALIAS,
+      });
+
+      const tool = findTool(tools, "writeFile");
+      const result = (await tool.handler(
+        { path: "/tmp/outside-nbctl/evil.txt", content: "should fail" },
+        { ...dummyInvocation, toolName: "writeFile" },
+      )) as TestToolResult;
+
+      expect(result.resultType).toBe("failure");
+      expect(result.textResultForLlm).toContain("must be within");
     });
   });
 

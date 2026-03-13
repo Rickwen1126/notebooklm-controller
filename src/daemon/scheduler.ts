@@ -292,7 +292,7 @@ export class Scheduler {
         return;
       }
 
-      // Transition based on result.
+      // Transition based on result and persist outcome fields.
       let finalTask: AsyncTask;
       if (result.success) {
         finalTask = await this.taskStore.transition(
@@ -300,7 +300,9 @@ export class Scheduler {
           "completed",
         );
         if (result.result) {
-          finalTask.result = result.result;
+          finalTask = await this.taskStore.update(task.taskId, {
+            result: result.result,
+          });
         }
       } else {
         finalTask = await this.taskStore.transition(
@@ -308,10 +310,13 @@ export class Scheduler {
           "failed",
           result.error ?? "unknown error",
         );
-        finalTask.error = result.error ?? "unknown error";
+        const updateFields: { error: string; errorScreenshot?: string } = {
+          error: result.error ?? "unknown error",
+        };
         if (result.errorScreenshot) {
-          finalTask.errorScreenshot = result.errorScreenshot;
+          updateFields.errorScreenshot = result.errorScreenshot;
         }
+        finalTask = await this.taskStore.update(task.taskId, updateFields);
       }
 
       log.info("task finished", {
@@ -333,12 +338,14 @@ export class Scheduler {
       });
 
       try {
-        const failedTask = await this.taskStore.transition(
+        await this.taskStore.transition(
           task.taskId,
           "failed",
           errorMessage,
         );
-        failedTask.error = errorMessage;
+        const failedTask = await this.taskStore.update(task.taskId, {
+          error: errorMessage,
+        });
 
         if (this.onTaskComplete) {
           this.onTaskComplete(failedTask);

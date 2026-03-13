@@ -196,6 +196,27 @@ export class TaskStore {
   }
 
   // -------------------------------------------------------------------------
+  // update — persist additional fields on an existing task
+  // -------------------------------------------------------------------------
+
+  async update(
+    taskId: string,
+    fields: Partial<Pick<AsyncTask, "result" | "error" | "errorScreenshot">>,
+  ): Promise<AsyncTask> {
+    const task = await this.get(taskId);
+    if (!task) {
+      throw new Error(`Task not found: ${taskId}`);
+    }
+
+    if (fields.result !== undefined) task.result = fields.result;
+    if (fields.error !== undefined) task.error = fields.error;
+    if (fields.errorScreenshot !== undefined) task.errorScreenshot = fields.errorScreenshot;
+
+    await this.writeTask(task);
+    return task;
+  }
+
+  // -------------------------------------------------------------------------
   // cleanup — remove tasks older than ttlMs
   // -------------------------------------------------------------------------
 

@@ -169,7 +169,7 @@ describe("NetworkGate", () => {
       backoffUntil: null,
       backoffRemainingMs: null,
       lastCheckedAt: expect.any(String),
-      recentLatencyMs: 0,
+      recentLatencyMs: null,
     });
 
     // Verify lastCheckedAt is a valid ISO string.

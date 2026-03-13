@@ -84,8 +84,8 @@ function classifyError(error: string): ErrorHandling {
   for (const pattern of FATAL_PATTERNS) {
     if (pattern.test(error)) return "abort";
   }
-  for (const TRANSIENT_PATTERN of TRANSIENT_PATTERNS) {
-    if (TRANSIENT_PATTERN.test(error)) return "retry";
+  for (const pattern of TRANSIENT_PATTERNS) {
+    if (pattern.test(error)) return "retry";
   }
   for (const pattern of NON_CRITICAL_PATTERNS) {
     if (pattern.test(error)) return "skip";
