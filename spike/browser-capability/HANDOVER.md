@@ -21,6 +21,7 @@
 | Phase C（Enhanced tools v2 + agent autonomy） | ✅ PASS — 22 tool calls, 55.7s |
 | Phase D（全操作實測） | ✅ PASS — 40+ 操作全通過，9 tools 充分 |
 | Phase E（CustomAgents 生產模擬） | ⚠️ 架構限制 — sub-agent 無法取得 custom tools |
+| Phase F（Two-Session Planner+Executor） | ✅ PASS — 13/13 全操作通過（GPT-4.1） |
 | Chrome | 仍在跑 port 9222，spike profile |
 
 ## 檔案結構
@@ -29,8 +30,9 @@
 spike/browser-capability/
 ├── experiment.ts          # 主實驗 script（7 個 tool commands）
 ├── phase-b.ts             # Copilot SDK runtime 驗證腳本
-├── phase-e.ts             # CustomAgents 生產模擬腳本
-├── results.md             # Phase A-E 詳細結果
+├── phase-e.ts             # CustomAgents 生產模擬腳本（Finding #39-40）
+├── phase-f.ts             # Two-Session Planner+Executor 驗證腳本（Finding #41-42）
+├── results.md             # Phase A-F 詳細結果
 ├── HANDOVER.md            # 本文件
 ├── agent-guide.md         # Agent system prompt 操作準則（→ 主線 agent prompt 基礎）
 ├── ui-maps/               # i18n UI element config
@@ -609,27 +611,159 @@ Sub-agents 只看到 built-in tools（bash, view, edit 等），不看到 sessio
 
 `CustomAgentConfig.tools` 只過濾 built-in tools，custom tools 需要走 **MCP** 才能暴露給 sub-agents。
 
-**可行方案（按優先順序）：**
+**已知社群 issues 佐證（非孤例）：**
 
-1. **MCP Tools**：把 browser tools 註冊為 MCP server tools，sub-agents 透過 `mcpServers` 設定取得 → 符合 spec 原始設計（daemon = MCP Server）
-2. **Main agent 單層**：不用 sub-agents，main agent 直接用 custom tools + 操作指令集（system prompt routing）→ 簡單但失去模組化
-3. **Bash wrapper**：包 browser tools 為 CLI scripts，sub-agents 透過 bash 呼叫 → hack，不推薦
+| Issue | 內容 | 狀態 |
+|-------|------|------|
+| copilot-sdk#553 | `CustomAgentConfig.mcpServers` MCP tools 不暴露給 sub-agent | ✅ 修復 (SDK v0.1.32) |
+| copilot-cli#693 | CLI ≥0.0.361 agent MCP tools 不可見（regression） | ❌ Open |
+| copilot-cli#556 | `customAgents[].tools` 過濾根本沒作用 | ❌ Open |
+| copilot-sdk#301 | Sub-agent 編排支援 | ✅ 關閉（加文件，未完整實作） |
 
-**推薦方案 1（MCP Tools）**：這與 spec 設計一致 — daemon 本身就是 MCP Server（Streamable HTTP），browser tools 本來就要以 MCP tool 形式暴露。Sub-agents 透過 `customAgents[].mcpServers` 連接 daemon 取得 tools。
+**結論：`defineTool()` → sub-agent 是架構限制，不是 bug。社群無人 file 此 issue。**
+
+### 架構方案演進
+
+#### 方案 A：MCP Self-loop（❌ 放棄）
+
+把 browser tools 包成 MCP Server → sub-agents 透過 `mcpServers` 取得。
+問題：自己暴露 MCP 然後自己消費，多一層不必要的 abstraction，dirty。
+
+#### 方案 B：Two-Session Planner + Executor（✅ 採用）
+
+不用 sub-agents，改為兩個獨立 session 分工：
+
+```
+Session 1 — Planner（輕量，無 browser tools）
+  input:  使用者自然語言
+  tools:  無（純 LLM 推理）
+  systemMessage: 所有 agent config 的 description + parameter schema
+  output: 結構化 prompt（從 agents/*.md template 選擇 + 填參數 + 路徑優化）
+
+Session 2 — Executor（重量，帶 browser tools）
+  input:  Planner 產出的結構化 prompt
+  tools:  該操作需要的 browser tools subset（defineTool，session-level 直接可用）
+  systemMessage: 選中的 agent config prompt（已渲染 template）
+  output: 執行結果
+```
+
+**優勢：**
+- `defineTool()` 在 session-level 天然可用，不需繞路
+- Planner 極快（無 tools，純推理，低 token）
+- Executor 精準（拿到明確指令，不需判斷意圖）
+- Composite 操作：Planner 拆成 ordered steps → Executor 依序建 session 執行
+- `agents/*.md` 成為 **prompt template library**，角色不變
+- 完全不依賴 SDK 的 sub-agent 機制（那個機制有多個 open issues）
+
+**對 spec 影響：**
+- `session-runner.ts` 拆為 `planner-session` + `executor-session`（或合在 SessionRunner 內兩步驟）
+- `agent-loader.ts` 不變 — 仍載入 `agents/*.md`，但用途從 `CustomAgentConfig[]` 變成 prompt template registry
+- `customAgents` 參數從 `createSession()` 移除
+- Daemon 不做意圖路由 — Planner session 做
 
 ### 驗證通過的部分
 
-儘管 sub-agent 無法使用 custom tools，以下部分已驗證成功：
+儘管 sub-agent 架構不適用，以下部分已驗證成功：
 - ✅ Agent config 載入（YAML frontmatter parsing, template rendering）
 - ✅ UI map locale 解析 + template variable 注入
 - ✅ `{{NOTEBOOKLM_KNOWLEDGE}}` 共享知識模板渲染
 - ✅ Main agent 意圖辨識 + 路由判斷（正確選擇 task:list-sources）
 - ✅ CopilotClient lifecycle（start → createSession → sendAndWait → disconnect → stop）
 - ✅ Event observer 完整捕捉所有 session events
-- ✅ Main agent fallback 正確使用 custom tools 完成任務
+- ✅ Main agent fallback 正確使用 custom tools 完成任務（42s, 5 calls）
+
+## Phase F — Two-Session Planner + Executor (2026-03-13, session 6)
+
+### 目標
+
+驗證雙 session 架構：Planner（意圖解析 + prompt 組裝）→ Executor（browser tools 執行）。
+
+### 測試腳本
+
+`phase-f.ts` — Planner session 帶 1 個 `submitPlan` tool（純結構化輸出），Executor session 帶 browser tools subset。
+
+### 測試結果
+
+#### 初期驗證（單步 + 複合）
+
+| 測試 | Prompt | Planner | Executor | Total |
+|------|--------|---------|----------|-------|
+| 單步 | "列出這個筆記本的來源" | 11s, 2 calls | 22.8s, 6 calls | **33.8s** |
+| 複合 | "先問 TypeScript 靜態型別優點，然後列出來源" | 14.6s, 2 calls | Step1: 72.5s/12 calls + Step2: 24s/6 calls | **111.1s** |
+
+#### 全操作 Batch Test（13 項，GPT-4.1）
+
+| ID | 操作 | 狀態 | 耗時 | Agent |
+|----|------|------|------|-------|
+| T01 | list-sources | PASS | 38s | list-sources |
+| T02 | sync-notebook | PASS | 175s | sync-notebook |
+| T03 | query | PASS | 79s | query |
+| T04 | add-source (text) | PASS | 66s | add-source |
+| T05 | list-sources (驗證) | PASS | 41s | list-sources |
+| T06 | rename-source | PASS | 93s | rename-source |
+| T07 | query (cross-source) | PASS | 65s | query |
+| T08 | clear-chat | PASS | 46s | clear-chat |
+| T09 | remove-source | PASS | 62s | remove-source |
+| T10 | list-sources (驗證) | PASS | 22s | list-sources |
+| T11 | create notebook | PASS | 150s | manage-notebook |
+| T12 | rename notebook | PASS | 82s | manage-notebook |
+| T13 | delete notebook | PASS | 60s | manage-notebook |
+
+**13/13 PASS，總時間 ~18 分鐘。** Planner 100% 選對 agent（零誤判）。
+
+### 關鍵發現 — Finding #41
+
+**Two-Session Planner+Executor 架構完全可行。**
+
+- Planner 正確解析意圖（單步/複合）、選擇 agent config、組裝明確 prompt
+- Executor 用 `defineTool()` custom tools 執行操作，所有 browser tools 正常
+- Composite 操作（query → list-sources）正確拆成 ordered steps 依序執行
+- 架構簡潔：兩個普通 `createSession → sendAndWait → disconnect`，中間是純資料傳遞
+
+### Finding #42 — Built-in tools 殘留
+
+Executor session 仍可使用 built-in tools（bash, view 等），偶爾會 fallback 到 built-in。生產環境需要：
+- 在 systemMessage 明確指示「只使用以下 tools」
+- 或等 SDK 支持 `disableBuiltInTools` 設定（copilot-sdk#617）
+
+### Finding #43 — CDP Ctrl+A 在 Angular Material dialog 失效
+
+CDP `Input.dispatchKeyEvent` 的 Ctrl+A 在 Angular Material dialog input 中不可靠。
+**修正**：`dispatchType("Ctrl+A")` 改用 JS `document.activeElement.select()` 取代 CDP key event。
+
+### Finding #44 — Dialog 確認步驟必須明確寫出
+
+Agent prompt 中 dialog 出現後的確認/取消按鈕必須明確寫出 `find("按鈕文字") → click`，不能用「→ 確認」帶過。GPT-4.1 是非推理模型，無法推理「確認 dialog 後應該按什麼」。
+
+修正的 agent configs：
+- `manage-notebook.md`：delete 流程加 `find("刪除") → click`，rename 加 `find("input") → click`（確保 focus）
+- `remove-source.md`：加 `find("移除來源") → click` 確認
+
+### Finding #45 — 模型選擇：不需要 reasoning model
+
+Planner（分類 + 參數抽取）和 Executor（照 recipe 執行）都用 GPT-4.1 足夠。
+- Planner 13/13 選對 agent，零誤判 — 意圖分類不是推理任務
+- Executor 成功率取決於 prompt 品質，不取決於模型能力
+- 意圖不明時應回問用戶，不是靠更強模型猜測
+
+### Finding #46 — 任務完成驗證用截圖確認
+
+Agent 判斷任務是否成功完成的方式：**截圖 + 預期畫面描述**，不是結構化 `reportResult` tool。
+LLM 有 vision 能力，截圖是最直接的客觀驗證。
 
 ### 總結
 
-**可以回到主線開發。** 9 tools + TabManager 基礎設施 = 完整覆蓋所有 spec 操作。
+**Spike 完成。** 所有核心驗證通過：
 
-Agent 架構確認：custom tools 需透過 MCP 暴露給 sub-agents，這與 spec 的 MCP Server daemon 設計一致。`agents/*.md` config、`_knowledge.md` 共享模板、UI map i18n 機制皆已驗證可用。
+1. ✅ 9 browser tools 覆蓋所有 40+ spec 操作（Phase D）
+2. ✅ Agent config 載入 + template rendering + UI map i18n（Phase E）
+3. ✅ Two-Session Planner+Executor 架構（Phase F）
+4. ✅ Composite 操作拆解 + 依序執行（Phase F）
+5. ✅ 13/13 全操作 batch test 通過（Phase F batch）
+
+**可以回到主線開發。** 架構確定：
+- `customAgents` sub-agent → 不用（SDK 限制）
+- Planner session（意圖解析）+ Executor session（browser 操作）
+- `agents/*.md` = prompt template library（step-by-step recipe，零留白）
+- `_knowledge.md` + UI maps = 共享知識 + i18n
+- 模型：GPT-4.1 雙層都夠用，prompt 品質 > 模型能力

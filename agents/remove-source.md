@@ -28,12 +28,15 @@ find("more_vert")  → 選來源面板的（x < 300, aria="更多"）→ click
 find("{{remove_source}}")  → click
 ```
 
-如果出現確認 dialog → 確認刪除。
+  → 確認 dialog 出現：「確認移除…」
+find("{{remove_source}}")  → 點 dialog 內的「移除來源」按鈕確認
+wait(2)
 
 ## 驗證
 
 ```
 read(".source-panel")  → 確認來源已移除
+screenshot()  → 截圖確認來源面板不再顯示該來源
 ```
 
 ## 多個來源時定位正確的 more_vert

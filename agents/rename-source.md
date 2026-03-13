@@ -42,6 +42,7 @@ find("{{save_button}}")  → click
 
 ```
 read(".source-panel")  → 確認新名稱出現
+screenshot()  → 截圖確認來源面板顯示新名稱
 ```
 
 ## 多個來源時定位
