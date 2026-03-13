@@ -203,6 +203,40 @@
 
 ---
 
+## Phase 5.5: Two-Session Planner+Executor 架構 🎯 MVP
+
+**Goal**: 將 session-runner 從單 session 重構為 Planner+Executor 雙 session 編排，接通 daemon runTask，使 exec tool 可以端到端執行 agent 操作。
+
+**Background**: Phase F Spike 驗證 CustomAgent sub-agent 無法存取 `defineTool()` custom tools（Finding #39）。改用 Two-Session 架構（Finding #41）：Planner 做意圖解析 + agent 選擇，Executor 帶 browser tools 執行。
+
+**Independent Test**: exec(prompt="列出來源") → Planner 解析 → 選 list-sources agent → Executor 執行 browser 操作 → 返回結果
+
+### Types & Agent Loader
+
+- [ ] T068A [P] Add `ExecutionStep` and `ExecutionPlan` interfaces to `src/shared/types.ts` (agentName, executorPrompt, tools[], reasoning)
+- [ ] T068B [P] Implement `buildPlannerCatalog(configs: AgentConfig[]) → string` in `src/agent/agent-loader.ts` (generates agent summary for Planner systemMessage: name, description, tools, parameters per agent)
+- [ ] T068C [P] Unit tests for `buildPlannerCatalog` in `tests/unit/agent/config/agent-loader.test.ts` (verify catalog format, empty configs, tool lists)
+
+### Session Runner Dual Session
+
+- [ ] T068D Unit tests for `runPlannerSession` in `tests/unit/agent/session-runner.test.ts` (submitPlan tool capture, plan validation, no-plan error, non-NotebookLM request rejection)
+- [ ] T068E Unit tests for `runExecutorSession` in `tests/unit/agent/session-runner.test.ts` (tool filtering by step.tools, tool constraint preamble injection, agent config lookup, unknown agent error)
+- [ ] T068F Unit tests for `runDualSession` in `tests/unit/agent/session-runner.test.ts` (end-to-end: planner → executor → aggregate results, multi-step plan, executor failure propagation)
+- [ ] T068G Implement `runPlannerSession` in `src/agent/session-runner.ts` (create submitPlan tool with closure capture, build Planner systemMessage from catalog + routing rules + locale, call existing `runSession()`, extract captured ExecutionPlan)
+- [ ] T068H Implement `runExecutorSession` in `src/agent/session-runner.ts` (lookup agent config by name, filter tools by step.tools, prepend tool constraint preamble to agent prompt, call existing `runSession()`)
+- [ ] T068I Implement `runDualSession` in `src/agent/session-runner.ts` (orchestrate: runPlannerSession → for each step runExecutorSession → aggregate SessionResult)
+
+### Daemon Wiring
+
+- [ ] T068J Wire `runTask` in `src/daemon/index.ts` — replace placeholder with actual dual-session execution (resolve tabHandle for notebook, build tools via `buildToolsForTab`, load agent configs with locale, call `runDualSession`)
+- [ ] T068K [P] Integration test for exec end-to-end in `tests/integration/daemon/exec-e2e.test.ts` (exec MCP tool → scheduler → dual session → mock agent result → task complete notification)
+
+**Checkpoint**: exec tool fully wired end-to-end. Planner+Executor architecture operational. Ready for Phase 6 agent configs.
+
+**🔍 Review Point 1.5**: 開發者主動發起 `/reviewCode`（Constitution IX）。雙 session 架構是 MVP 核心改動。
+
+---
+
 ## Phase 6: US3 — 將專案程式碼餵入 NotebookLM (Priority: P3) 🎯 MVP
 
 **Goal**: 透過 exec tool 將 git repo 轉換並新增為 NotebookLM 來源
@@ -211,17 +245,17 @@
 
 ### Tests for US3
 
-- [ ] T068 [P] [US3] Unit tests for repo-to-text in `tests/unit/content/repo-to-text.test.ts` (repomix wrapper, word count, gitignore respect, 500K limit check)
-- [ ] T069 [P] [US3] Unit tests for content-tools in `tests/unit/agent/tools/content-tools.test.ts` (repoToText defineTool, parameter validation)
-- [ ] T070 [P] [US3] Integration test for add-source flow in `tests/integration/agent/add-source.test.ts` (exec → agent → repoToText → UI paste → source added)
+- [ ] T069 [P] [US3] Unit tests for repo-to-text in `tests/unit/content/repo-to-text.test.ts` (repomix wrapper, word count, gitignore respect, 500K limit check)
+- [ ] T070 [P] [US3] Unit tests for content-tools in `tests/unit/agent/tools/content-tools.test.ts` (repoToText defineTool, parameter validation)
+- [ ] T071 [P] [US3] Integration test for add-source flow in `tests/integration/agent/add-source.test.ts` (exec → dual session → repoToText → UI paste → source added)
 
 ### Implementation for US3
 
-- [ ] T071 [US3] Implement repo-to-text in `src/content/repo-to-text.ts` (repomix programmatic API wrapper, word count, 500K limit validation, error handling for non-git paths)
-- [ ] T072 [US3] Implement repoToText in `src/agent/tools/content-tools.ts` (defineTool + Zod, call repo-to-text, return text result)
-- [ ] T073 [US3] Write `agents/add-source.md` agent config (prompt: screenshot → click "Add source" → select "Copied text" → paste content → confirm → rename source per naming rules → update cache)
-- [ ] T074 [US3] Implement source update flow in agent prompt (delete old source → re-convert → add new → rename, per spec AS4)
-- [ ] T075 [US3] Implement source delete flow in agent prompt (find source in UI → delete, per spec AS5)
+- [ ] T072 [US3] Implement repo-to-text in `src/content/repo-to-text.ts` (repomix programmatic API wrapper, word count, 500K limit validation, error handling for non-git paths)
+- [ ] T073 [US3] Implement repoToText in `src/agent/tools/content-tools.ts` (defineTool + Zod, call repo-to-text, return text result)
+- [ ] T074 [US3] Verify `agents/add-source.md` agent config works with dual session (Planner selects add-source → Executor runs paste flow → source added → cache updated)
+- [ ] T075 [US3] Implement source update flow in agent prompt (delete old source → re-convert → add new → rename, per spec AS4)
+- [ ] T076 [US3] Implement source delete flow in agent prompt (find source in UI → delete, per spec AS5)
 
 **Checkpoint**: Core value proposition works — can feed repo code into NotebookLM as a source.
 
@@ -235,12 +269,12 @@
 
 ### Tests for US10
 
-- [ ] T076 [P] [US10] Integration test for query flow in `tests/integration/agent/query.test.ts` (exec query → agent types in chat → waits for response → extracts answer + citations)
+- [ ] T077 [P] [US10] Integration test for query flow in `tests/integration/agent/query.test.ts` (exec query → dual session → agent types in chat → waits for response → extracts answer + citations)
 
 ### Implementation for US10
 
-- [ ] T077 [US10] Write `agents/query.md` agent config (prompt: screenshot current state → type question in chat area → wait for Gemini response → extract answer text + citations → return structured result)
-- [ ] T078 [US10] Handle query edge cases in agent prompt (no sources error, timeout with screenshot, empty/refused answer)
+- [ ] T078 [US10] Verify `agents/query.md` agent config works with dual session (Planner selects query → Executor runs chat flow → extract answer + citations → return structured result)
+- [ ] T079 [US10] Handle query edge cases in agent prompt (no sources error, timeout with screenshot, empty/refused answer)
 
 **Checkpoint**: MVP core flow complete — feed repo → query → get grounded answer. 🎉
 
@@ -256,16 +290,16 @@
 
 ### Tests for US4+US5
 
-- [ ] T079 [P] [US4] Unit tests for url-to-text in `tests/unit/content/url-to-text.test.ts` (readability + jsdom extraction, word count)
-- [ ] T080 [P] [US5] Unit tests for pdf-to-text in `tests/unit/content/pdf-to-text.test.ts` (pdf-parse wrapper, page count, error handling for corrupt PDF)
+- [ ] T080 [P] [US4] Unit tests for url-to-text in `tests/unit/content/url-to-text.test.ts` (readability + jsdom extraction, word count)
+- [ ] T081 [P] [US5] Unit tests for pdf-to-text in `tests/unit/content/pdf-to-text.test.ts` (pdf-parse wrapper, page count, error handling for corrupt PDF)
 
 ### Implementation for US4+US5
 
-- [ ] T081 [P] [US4] Implement url-to-text in `src/content/url-to-text.ts` (readability + jsdom, extract article body to Markdown)
-- [ ] T082 [P] [US5] Implement pdf-to-text in `src/content/pdf-to-text.ts` (pdf-parse wrapper, page count, word count)
-- [ ] T083 [US4] Implement urlToText in `src/agent/tools/content-tools.ts` (defineTool + Zod)
-- [ ] T084 [US5] Implement pdfToText in `src/agent/tools/content-tools.ts` (defineTool + Zod)
-- [ ] T085 [US4] Handle URL-native source flow in add-source agent prompt (detect "加入連結來源" intent → use NotebookLM native Link option instead of crawl+paste)
+- [ ] T082 [P] [US4] Implement url-to-text in `src/content/url-to-text.ts` (readability + jsdom, extract article body to Markdown)
+- [ ] T083 [P] [US5] Implement pdf-to-text in `src/content/pdf-to-text.ts` (pdf-parse wrapper, page count, word count)
+- [ ] T084 [US4] Implement urlToText in `src/agent/tools/content-tools.ts` (defineTool + Zod)
+- [ ] T085 [US5] Implement pdfToText in `src/agent/tools/content-tools.ts` (defineTool + Zod)
+- [ ] T086 [US4] Handle URL-native source flow in add-source agent prompt (detect "加入連結來源" intent → use NotebookLM native Link option instead of crawl+paste)
 
 **Checkpoint**: All three content types (repo, URL, PDF) can be fed into NotebookLM.
 
@@ -279,13 +313,13 @@
 
 ### Tests for US6
 
-- [ ] T086 [P] [US6] Integration test for audio flow in `tests/integration/agent/audio.test.ts` (generate → poll status → download)
+- [ ] T087 [P] [US6] Integration test for audio flow in `tests/integration/agent/audio.test.ts` (generate → poll status → download)
 
 ### Implementation for US6
 
-- [ ] T087 [US6] Write `agents/generate-audio.md` agent config (prompt: screenshot → click generate audio button → confirm → report generating status)
-- [ ] T088 [US6] Write `agents/download-audio.md` agent config (prompt: screenshot → check audio ready → click download → intercept download via CDP → save to specified path → return path + size)
-- [ ] T089 [US6] Implement downloadFile browser tool in `src/agent/tools/browser-tools.ts` (CDP download interception, save to local path)
+- [ ] T088 [US6] Write `agents/generate-audio.md` agent config (prompt: screenshot → click generate audio button → confirm → report generating status)
+- [ ] T089 [US6] Write `agents/download-audio.md` agent config (prompt: screenshot → check audio ready → click download → intercept download via CDP → save to specified path → return path + size)
+- [ ] T090 [US6] Implement downloadFile browser tool in `src/agent/tools/browser-tools.ts` (CDP download interception, save to local path)
 
 **Checkpoint**: Audio Overview end-to-end: generate, wait, download.
 
@@ -299,8 +333,8 @@
 
 ### Implementation for US7+US8
 
-- [ ] T090 [P] [US7] Write `agents/list-sources.md` agent config (prompt: screenshot source panel → extract source names, status, count → return structured list)
-- [ ] T091 [P] [US8] Write `agents/screenshot.md` agent config (prompt: take screenshot → return base64 or save to path)
+- [ ] T091 [P] [US7] Write `agents/list-sources.md` agent config (prompt: screenshot source panel → extract source names, status, count → return structured list)
+- [ ] T092 [P] [US8] Write `agents/screenshot.md` agent config (prompt: take screenshot → return base64 or save to path)
 
 **Checkpoint**: Observability tools available — source listing and screenshot debugging.
 
@@ -314,11 +348,11 @@
 
 ### Implementation for US20+US21+US22
 
-- [ ] T092 [US20] Write `agents/rename-source.md` agent config (prompt: find source in UI → click rename → type new name per naming rules → confirm)
-- [ ] T093 [US20] Ensure naming rules enforced in add-source agent (repo: `<name> (repo)`, PDF: `<filename> (PDF)`, URL: `<domain/path> (web)`)
-- [ ] T094 [US21] Implement cache query capabilities in exec handler (query SourceRecord/ArtifactRecord from cache-manager, return structured index)
-- [ ] T095 [US22] Implement operation log recording in session-runner (on task complete, write OperationLogEntry to cache-manager with command, actionType, status, resultSummary, durationMs)
-- [ ] T095.1 [US21] Write `agents/sync.md` agent config and register `sync_notebook` MCP tool in scheduler (FR-044: re-scan notebook, diff local cache vs UI state, update SourceRecord/ArtifactRecord)
+- [ ] T093 [US20] Write `agents/rename-source.md` agent config (prompt: find source in UI → click rename → type new name per naming rules → confirm)
+- [ ] T094 [US20] Ensure naming rules enforced in add-source agent (repo: `<name> (repo)`, PDF: `<filename> (PDF)`, URL: `<domain/path> (web)`)
+- [ ] T095 [US21] Implement cache query capabilities in exec handler (query SourceRecord/ArtifactRecord from cache-manager, return structured index)
+- [ ] T096 [US22] Implement operation log recording in session-runner (on task complete, write OperationLogEntry to cache-manager with command, actionType, status, resultSummary, durationMs)
+- [ ] T096.1 [US21] Write `agents/sync.md` agent config and register `sync_notebook` MCP tool in scheduler (FR-044: re-scan notebook, diff local cache vs UI state, update SourceRecord/ArtifactRecord)
 
 **Checkpoint**: Resource management complete — naming, indexing, audit trail.
 
@@ -332,9 +366,9 @@
 
 ### Implementation for US11+US12
 
-- [ ] T096 [US11] Extend query agent to support multi-turn (session reuse within same notebook, conversation context preserved in Copilot session)
-- [ ] T097 [US11] Implement "新對話" intent detection in query agent (clear NotebookLM chat history before asking)
-- [ ] T098 [US12] Implement file output detection in exec handler (detect "存到" / "output to" path in prompt → write Markdown file after query, include question title + answer + citations)
+- [ ] T097 [US11] Extend query agent to support multi-turn (session reuse within same notebook, conversation context preserved in Copilot session)
+- [ ] T098 [US11] Implement "新對話" intent detection in query agent (clear NotebookLM chat history before asking)
+- [ ] T099 [US12] Implement file output detection in exec handler (detect "存到" / "output to" path in prompt → write Markdown file after query, include question title + answer + citations)
 
 **Checkpoint**: Query experience complete — multi-turn dialogue and file output.
 
@@ -346,11 +380,11 @@
 
 ### Implementation for US15+US19+US23+US24
 
-- [ ] T099 [P] [US15] Register `list_agents` MCP tool in `src/daemon/mcp-server.ts` (return loaded agent configs with name, description)
-- [ ] T100 [US19] Implement smart notebook selection in exec handler (when no notebook specified and no default, match prompt against notebook descriptions + source names, suggest and confirm)
-- [ ] T101 [P] [US23] Add notebook title rename to exec agent capabilities (detect "改標題" intent → rename in NotebookLM UI → update cache)
-- [ ] T102 [P] [US24] Add human-readable output format option in exec handler (detect "表格" / "Markdown" format requests → format response as table/Markdown)
-- [ ] T102.1 [P] [US14] Implement OS notification for async task completion (FR-160: macOS notification via node-notifier or native API, FR-161: configurable on/off in config, default on)
+- [ ] T100 [P] [US15] Register `list_agents` MCP tool in `src/daemon/mcp-server.ts` (return loaded agent configs with name, description)
+- [ ] T101 [US19] Implement smart notebook selection in exec handler (when no notebook specified and no default, match prompt against notebook descriptions + source names, suggest and confirm)
+- [ ] T102 [P] [US23] Add notebook title rename to exec agent capabilities (detect "改標題" intent → rename in NotebookLM UI → update cache)
+- [ ] T103 [P] [US24] Add human-readable output format option in exec handler (detect "表格" / "Markdown" format requests → format response as table/Markdown)
+- [ ] T103.1 [P] [US14] Implement OS notification for async task completion (FR-160: macOS notification via node-notifier or native API, FR-161: configurable on/off in config, default on)
 
 **Checkpoint**: All user stories implemented.
 
@@ -360,10 +394,10 @@
 
 **Purpose**: Quality, security, validation
 
-- [ ] T103 [P] File permission enforcement on startup — verify `~/.nbctl/` tree is 700/600, auto-fix with warning per data-model.md
-- [ ] T104 Security review — ensure no command injection in content pipeline, validate all user-provided paths, sanitize agent prompts
-- [ ] T105 Run quickstart.md validation — full workflow: start daemon → add notebook → feed source → query → async task → shutdown
-- [ ] T106 Performance baseline — measure daemon startup time (<10s), management tool latency (<100ms), simple agent operation (<15s)
+- [ ] T104 [P] File permission enforcement on startup — verify `~/.nbctl/` tree is 700/600, auto-fix with warning per data-model.md
+- [ ] T105 Security review — ensure no command injection in content pipeline, validate all user-provided paths, sanitize agent prompts
+- [ ] T106 Run quickstart.md validation — full workflow: start daemon → add notebook → feed source → query → async task → shutdown
+- [ ] T107 Performance baseline — measure daemon startup time (<10s), management tool latency (<100ms), simple agent operation (<15s)
 
 **🔍 Review Point 3**: 開發者主動發起 `/audit` + `/codetour` + `/reviewCode`（Constitution IX）。全部完成，production readiness 審查。
 
@@ -378,7 +412,8 @@
 - **US1 (Phase 3)**: Depends on Foundational — daemon must exist first
 - **US2 (Phase 4)**: Depends on US1 — needs running daemon + MCP Server
 - **US13+US14 (Phase 5)**: Depends on Phase 2 (Foundational) + US1 — needs running daemon + exec tool + scheduler
-- **US3 (Phase 6)**: Depends on US2 + US13 — needs notebook management + exec tool
+- **Dual Session (Phase 5.5)**: Depends on Phase 5 — refactors session-runner for Planner+Executor, wires daemon runTask
+- **US3 (Phase 6)**: Depends on US2 + US13 + Phase 5.5 — needs notebook management + exec tool + dual session wiring
 - **US10 (Phase 7)**: Depends on US3 — needs sources in notebook to query
 - **US4+US5 (Phase 8)**: Depends on US3 — extends content pipeline
 - **US6-US24 (Phase 9-13)**: Depends on core MVP (US1+US2+US3+US10+US13)
@@ -395,7 +430,9 @@ Phase 3: US1 (Daemon)
   ↓
 Phase 4: US2 (Notebook Mgmt) ←── Phase 5: US13+US14 (Async+Notify)
   ↓                                   ↓
-Phase 6: US3 (Repo Source) ←──────────┘
+Phase 5.5: Dual Session (Planner+Executor) ←─┘
+  ↓
+Phase 6: US3 (Repo Source)
   ↓
 Phase 7: US10 (Query)
   ↓
@@ -469,6 +506,7 @@ Task T031+T032: "state-tools tests + impl"      # parallel
 3. Complete Phase 3: US1 — Daemon lifecycle
 4. Complete Phase 4: US2 — Notebook management
 5. Complete Phase 5: US13+US14 — Async operations + notifications
+5.5. Complete Phase 5.5: Dual Session — Planner+Executor architecture + daemon wiring
 6. Complete Phase 6: US3 — Repo source feeding
 7. Complete Phase 7: US10 — Query grounded answers
 8. **STOP and VALIDATE**: Run quickstart.md full workflow
@@ -483,7 +521,7 @@ Task T031+T032: "state-tools tests + impl"      # parallel
 
 ### MVP Scope
 
-MVP = **US1 + US2 + US3 + US10 + US13+US14** = Phases 1-7 (T001-T078)
+MVP = **US1 + US2 + US3 + US10 + US13+US14 + Dual Session** = Phases 1-7 (T001-T079, including Phase 5.5)
 
 This covers the core flow: 啟動 → 認證 → 納管 → 餵入 repo → 查詢 → 取得 grounded 回答
 
@@ -493,12 +531,13 @@ This covers the core flow: 啟動 → 認證 → 納管 → 餵入 repo → 查�
 
 | Metric | Value |
 |--------|-------|
-| Total tasks | 114 |
+| Total tasks | 117 |
 | Phase 1 (Setup) | 4 |
 | Phase 2 (Foundational) | 36 |
 | Phase 3 US1 (Daemon) | 11 |
 | Phase 4 US2 (Notebook) | 13 |
 | Phase 5 US13+US14 (Async+Notify) | 9 |
+| Phase 5.5 Dual Session (Planner+Executor) | 11 |
 | Phase 6 US3 (Repo Source) | 8 |
 | Phase 7 US10 (Query) | 3 |
 | Phase 8 US4+US5 (URL+PDF) | 7 |
@@ -508,7 +547,7 @@ This covers the core flow: 啟動 → 認證 → 納管 → 餵入 repo → 查�
 | Phase 12 US11+US12 (Multi-turn+File) | 3 |
 | Phase 13 US15+US19+US23+US24 | 5 |
 | Phase 14 (Polish) | 4 |
-| MVP tasks (Phases 1-7) | 84 |
+| MVP tasks (Phases 1-7, incl. 5.5) | 95 |
 | Post-MVP tasks (Phases 8-14) | 30 |
-| Review points | 3 (Phase 2 ✓ / Phase 7 ✓ / Phase 14 ✓) |
+| Review points | 4 (Phase 2 ✓ / Phase 5.5 / Phase 7 / Phase 14) |
 | Parallel opportunities | 15+ batches identified |
