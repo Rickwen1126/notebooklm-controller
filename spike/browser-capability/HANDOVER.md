@@ -751,6 +751,26 @@ Planner（分類 + 參數抽取）和 Executor（照 recipe 執行）都用 GPT-
 Agent 判斷任務是否成功完成的方式：**截圖 + 預期畫面描述**，不是結構化 `reportResult` tool。
 LLM 有 vision 能力，截圖是最直接的客觀驗證。
 
+### Finding #47 — Planner 同時作為 Input Gate（23/23 通過）
+
+Planner session 加入 `rejectInput` tool，同時負責意圖解析和輸入過濾。6 個拒絕類別：
+
+| 類別 | 測試數 | 結果 | 範例 |
+|------|--------|------|------|
+| off_topic | 4 | 全過 | 寫程式、天氣、翻譯、數學 |
+| ambiguous | 3 | 全過 | 「幫我處理一下」「改一下」 |
+| missing_params | 3 | 全過 | 「重新命名來源」缺名字 |
+| unsupported | 3 | 全過 | 分享、匯出 PDF、音訊翻譯 |
+| dangerous_bulk | 3 | 全過 | 「刪除所有筆記本」 |
+| injection | 4 | 全過 | prompt injection、角色扮演繞過 |
+| **正常輸入** | **3** | **全過** | 列出來源、提問、刪除筆記本 |
+
+**重點**：
+- 被拒絕時 task 終止在 Planner，不建立 Executor session — 零成本
+- `rejectInput` 的 `userMessage` 直接回傳 client，包含引導修正的建議
+- GPT-4.1 分類準確率 100%，每個判斷 ~10s
+- 正常輸入不受影響，仍走 `submitPlan` 路徑
+
 ### 總結
 
 **Spike 完成。** 所有核心驗證通過：
@@ -760,10 +780,12 @@ LLM 有 vision 能力，截圖是最直接的客觀驗證。
 3. ✅ Two-Session Planner+Executor 架構（Phase F）
 4. ✅ Composite 操作拆解 + 依序執行（Phase F）
 5. ✅ 13/13 全操作 batch test 通過（Phase F batch）
+6. ✅ Planner input gate 23/23 通過（Phase F guard）
 
 **可以回到主線開發。** 架構確定：
 - `customAgents` sub-agent → 不用（SDK 限制）
-- Planner session（意圖解析）+ Executor session（browser 操作）
+- Planner session（意圖解析 + 輸入過濾）+ Executor session（browser 操作）
 - `agents/*.md` = prompt template library（step-by-step recipe，零留白）
 - `_knowledge.md` + UI maps = 共享知識 + i18n
 - 模型：GPT-4.1 雙層都夠用，prompt 品質 > 模型能力
+- Planner 雙職責：submitPlan（路由）+ rejectInput（防護）
