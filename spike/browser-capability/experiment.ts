@@ -209,15 +209,20 @@ async function doRead(selector: string) {
     process.exit(1);
   }
   const { browser, page } = await connectToPage();
-  const text = await page.evaluate((q) => {
+  const result = await page.evaluate((q) => {
     // Try CSS selector first
     try {
       const els = document.querySelectorAll(q);
       if (els.length > 0) {
-        return Array.from(els)
-          .map((e) => e.textContent?.trim())
-          .filter(Boolean)
-          .join("\n---\n");
+        const items = Array.from(els).map((el) => {
+          const style = getComputedStyle(el);
+          return {
+            tag: el.tagName,
+            text: (el.textContent?.trim() ?? "").slice(0, 500),
+            visible: style.visibility !== "hidden" && style.display !== "none",
+          };
+        });
+        return { count: items.length, items };
       }
     } catch {
       // Not a valid selector
@@ -227,18 +232,36 @@ async function doRead(selector: string) {
       document.body,
       NodeFilter.SHOW_ELEMENT,
     );
-    const matches: string[] = [];
+    const items: Array<{ tag: string; text: string; visible: boolean }> = [];
     let node: Node | null;
     while ((node = walker.nextNode())) {
       const el = node as Element;
       if (el.children.length === 0 || el.matches?.("p, li, h1, h2, h3, span, div.response, [class*=message], [class*=answer], [class*=response]")) {
         const t = el.textContent?.trim();
-        if (t && t.includes(q)) matches.push(t);
+        if (t && t.includes(q)) {
+          const style = getComputedStyle(el);
+          items.push({
+            tag: el.tagName,
+            text: t.slice(0, 500),
+            visible: style.visibility !== "hidden" && style.display !== "none",
+          });
+        }
       }
     }
-    return matches.join("\n---\n") || "(no match)";
+    return { count: items.length, items };
   }, selector);
-  console.log(text);
+
+  if (result.count === 0) {
+    console.log("(no match)");
+  } else {
+    console.log(`Found ${result.count} element(s):`);
+    for (let i = 0; i < result.items.length; i++) {
+      const item = result.items[i];
+      const vis = item.visible ? "" : " (HIDDEN)";
+      const preview = item.text.length > 200 ? item.text.slice(0, 200) + "..." : item.text;
+      console.log(`[${i + 1}] ${item.tag}${vis}: ${preview}`);
+    }
+  }
   browser.disconnect();
 }
 
@@ -254,18 +277,26 @@ async function doFind(query: string) {
       tag: string;
       text: string;
       ariaLabel: string | null;
+      disabled: boolean;
+      ariaExpanded: string | null;
       center: { x: number; y: number };
       rect: { x: number; y: number; w: number; h: number };
     }> = [];
 
-    const all = document.querySelectorAll(
-      "button, a, input, textarea, [role=button], [role=link], tr[tabindex], select, [contenteditable]",
-    );
+    const INTERACTIVE = [
+      "button", "a", "input", "textarea", "select",
+      "[role=button]", "[role=link]", "[role=tab]", "[role=menuitem]",
+      "[role=option]", "[role=checkbox]", "[role=radio]", "[role=switch]",
+      "[role=combobox]", "[tabindex]:not([tabindex='-1'])", "[contenteditable]",
+    ].join(", ");
+    const all = document.querySelectorAll(INTERACTIVE);
     for (const el of all) {
       const text = el.textContent?.trim() ?? "";
       const ariaLabel = el.getAttribute("aria-label") ?? "";
       const r = el.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) continue;
+      const style = getComputedStyle(el);
+      if (style.visibility === "hidden" || style.display === "none") continue;
       if (
         text.includes(q) ||
         ariaLabel.includes(q) ||
@@ -275,6 +306,8 @@ async function doFind(query: string) {
           tag: el.tagName,
           text: text.slice(0, 60),
           ariaLabel: el.getAttribute("aria-label"),
+          disabled: el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true",
+          ariaExpanded: el.getAttribute("aria-expanded"),
           center: {
             x: Math.round(r.x + r.width / 2),
             y: Math.round(r.y + r.height / 2),
@@ -296,10 +329,14 @@ async function doFind(query: string) {
         for (const el of els) {
           const r = el.getBoundingClientRect();
           if (r.width === 0 || r.height === 0) continue;
+          const style = getComputedStyle(el);
+          if (style.visibility === "hidden" || style.display === "none") continue;
           matches.push({
             tag: el.tagName,
             text: (el.textContent?.trim() ?? "").slice(0, 60),
             ariaLabel: el.getAttribute("aria-label"),
+            disabled: el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true",
+            ariaExpanded: el.getAttribute("aria-expanded"),
             center: {
               x: Math.round(r.x + r.width / 2),
               y: Math.round(r.y + r.height / 2),
@@ -324,8 +361,13 @@ async function doFind(query: string) {
     console.log(`No elements found for: "${query}"`);
   } else {
     for (const r of results) {
+      const attrs = [
+        r.ariaLabel ? `aria="${r.ariaLabel}"` : "",
+        r.disabled ? "DISABLED" : "",
+        r.ariaExpanded !== null ? `expanded=${r.ariaExpanded}` : "",
+      ].filter(Boolean).join(" ");
       console.log(
-        `[${r.tag}] "${r.text}" → click(${r.center.x}, ${r.center.y})  rect(${r.rect.x},${r.rect.y} ${r.rect.w}x${r.rect.h})${r.ariaLabel ? `  aria="${r.ariaLabel}"` : ""}`,
+        `[${r.tag}] "${r.text}" → click(${r.center.x}, ${r.center.y})  rect(${r.rect.x},${r.rect.y} ${r.rect.w}x${r.rect.h})${attrs ? `  ${attrs}` : ""}`,
       );
     }
   }

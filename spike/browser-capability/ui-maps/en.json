@@ -1,0 +1,41 @@
+{
+  "locale": "en",
+  "verified": true,
+  "note": "Core elements verified via hl=en (2026-03-13). New elements estimated from zh-TW.",
+  "elements": {
+    "create_notebook": { "text": "Create new" },
+    "paste_source_type": { "text": "Copied text" },
+    "paste_textarea": { "text": "Paste text here", "match": "placeholder" },
+    "insert_button": { "text": "Insert" },
+    "submit_button": { "text": "Submit", "disambiguate": "y > 400" },
+    "chat_input": { "text": "Start typing", "match": "placeholder" },
+    "add_source": { "text": "Add source" },
+    "collapse_source": { "text": "collapse_content" },
+    "remove_source": { "text": "Remove source" },
+    "rename_source": { "text": "Rename source" },
+    "delete_chat": { "text": "Delete chat history" },
+    "audio_overview": { "text": "Audio Overview" },
+    "customize_audio": { "text": "Customize Audio Overview", "match": "aria-label" },
+    "url_source_type": { "text": "Website" },
+    "upload_source_type": { "text": "Upload files" },
+    "drive_source_type": { "text": "Google Drive" },
+    "url_textarea": { "text": "Paste any link", "match": "placeholder" },
+    "save_button": { "text": "Save" },
+    "cancel_button": { "text": "Cancel" },
+    "edit_title": { "text": "Edit title" },
+    "delete_notebook": { "text": "Delete" },
+    "download_audio": { "text": "Download" },
+    "play_audio": { "text": "Play", "match": "aria-label" },
+    "notebook_settings": { "text": "Set up notebook", "match": "aria-label" },
+    "conversation_options": { "text": "Chat options", "match": "aria-label" }
+  },
+  "selectors": {
+    "answer": ".to-user-container .message-content",
+    "question": ".from-user-container",
+    "suggestions": ".suggestions-container",
+    "source_panel": ".source-panel",
+    "studio_panel": "studio-panel",
+    "notebook_title": "h1",
+    "notebook_rows": "tr[tabindex]"
+  }
+}

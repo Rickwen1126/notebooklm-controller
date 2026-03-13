@@ -242,10 +242,205 @@ These are managed by the SDK runtime, not by us.
 | 5 | Cross-source question | ✅ | 5 (same as #3) |
 | 6 | Multi-turn conversation | ✅ | same as #3 per turn |
 | 7 | **Full flow via Copilot SDK agent** | ✅ | **20 (autonomous, 86-136s)** |
+| 8 | **Full flow via GPT-4.1 (free model)** | ✅ | **24 (autonomous, 60.7s)** |
+
+## Phase B+ — Model Comparison (2026-03-13, session 3)
+
+### 19. GPT-4.1 (free model) outperforms default — PASS
+
+Ran full flow (create notebook → add source → query → read answer) with `model: "gpt-4.1"` specified in `createSession()`.
+
+**Result: PASS** — 24 tool calls, 60.7s, complete flow with correct answer.
+
+| Metric | Default model | GPT-4.1 |
+|--------|--------------|---------|
+| Total time | 95.4s | **60.7s** (36% faster) |
+| Tool calls | 20 | 24 (4 extra `report_intent`) |
+| Setup total | 6,340ms | **1,294ms** (5x faster) |
+| createSession() | 5,669ms | **513ms** (11x faster) |
+| client.start() | 741ms | 741ms (same) |
+| Result | PASS | **PASS** |
+
+### 20. GPT-4.1 parallel tool calling
+
+GPT-4.1 issues multiple tool calls per turn (parallel execution):
+- Turn 1: `report_intent` + `screenshot` + `find` (3 tools simultaneously)
+- Turn 4: `report_intent` + `find` (2 tools)
+- Turn 6: `find` + `report_intent` (2 tools)
+
+This explains the faster completion despite more total tool calls — fewer round-trips.
+
+### 21. createSession() 11x faster with explicit model
+
+When `model` is specified, `createSession()` drops from 5.6s to 513ms. Likely skips model negotiation/selection on the GitHub API side.
+
+**Production implication**: Always specify model explicitly in `createSession()`.
+
+### 22. GPT-4.1 is free on GitHub Copilot
+
+GPT-4.1 is a free-tier model on GitHub Copilot. Combined with its strong performance on mechanical tool-calling tasks, this means:
+- **Execution agent cost = $0** for the browser automation layer
+- Non-reasoning model is sufficient for find → click → paste → read loops
+- Intelligence budget should go to task planning (deciding WHAT to do), not execution (HOW to click)
+
+### 23. Available models via `client.listModels()`
+
+SDK `--model` flag now supported in `phase-b.ts`. Full model list retrieved:
+
+| Model ID | Vision | Reasoning | Notes |
+|----------|--------|-----------|-------|
+| gpt-4.1 | ✅ | ❌ | **Free, verified for browser automation** |
+| gpt-5-mini | ✅ | ✅ | Reasoning model |
+| gpt-5.1 | ✅ | ✅ | |
+| gpt-5.1-codex | ✅ | ✅ | |
+| gpt-5.1-codex-mini | ✅ | ✅ | |
+| gpt-5.1-codex-max | ✅ | ✅ | |
+| gpt-5.2 | ✅ | ✅ | |
+| gpt-5.2-codex | ✅ | ✅ | |
+| gpt-5.3-codex | ✅ | ✅ | |
+| gpt-5.4 | ✅ | ✅ | |
+| claude-haiku-4.5 | ✅ | ❌ | |
+| claude-sonnet-4 | ✅ | ❌ | |
+| claude-sonnet-4.5 | ✅ | ❌ | |
+| claude-sonnet-4.6 | ✅ | ✅ | |
+| claude-opus-4.5 | ✅ | ❌ | |
+| claude-opus-4.6 | ✅ | ✅ | |
+| gemini-3-pro-preview | ✅ | ❌ | |
+
+## Phase A++ — No-Screenshot Flow (2026-03-13, session 3)
+
+### 24. Screenshot is NOT required for happy path — PASS
+
+Ran complete flow (create notebook → add source → query → read answer) with **zero screenshots**. All state verification done via DOM queries.
+
+| Step | Action | Verification (DOM only) | Screenshot? |
+|------|--------|------------------------|-------------|
+| Confirm home page | — | `find("新建")` returns button | ❌ |
+| Create notebook | `click(新建)` | `find("複製的文字")` appears | ❌ |
+| Add source | `click → paste → click(插入)` | `find("開始輸入")` appears (chat input) | ❌ |
+| Ask question | `click → paste → click(提交)` | — | ❌ |
+| Read answer | `sleep 15` | `read(".to-user-container .message-content")` non-empty | ❌ |
+
+**Result**: Full flow completed, correct answer returned, 0 screenshots taken, 0 vision tokens consumed.
+
+### 25. Screenshot role redefined: debug-only, not operational
+
+Previous assumption: screenshot is needed for "understanding visual state" before each action.
+
+**New understanding**: Screenshots serve NO operational purpose in the happy path.
+- **Coordinates**: `find()` gives precise coordinates — screenshots cause 2-5x estimation errors
+- **State verification**: `find()` and `read()` confirm UI state via DOM — faster and cheaper than vision
+- **Answer extraction**: `read(selector)` gets text directly — no OCR needed
+
+**Screenshots are debug tools, not operational tools.** They should be:
+1. **Never sent to LLM during happy path** — zero vision token cost
+2. **Triggered on anomaly** — when `find()` returns empty, `read()` returns unexpected content, or click produces no expected DOM change
+3. **Saved to disk periodically** — for human post-mortem debugging, not for agent consumption
+
+### 26. Anomaly-triggered debug capture design
+
+When an operation produces unexpected results, capture a debug snapshot:
+
+```
+Trigger conditions:
+- find(expected_text) returns [] (element not found)
+- read(selector) returns "" or contains loading indicators ("Refining...", "Thinking...")
+- Expected DOM state not observed after click + wait
+
+Debug snapshot contents:
+1. screenshot → save to disk (PNG)
+2. DOM dump → read("body") or page.evaluate(() => document.body.innerHTML) → save to disk
+3. Structured log entry with: timestamp, step, expected state, actual state
+
+Storage: ~/.nbctl/debug/<notebook-alias>/<timestamp>/
+```
+
+This gives full context for debugging without consuming vision tokens during normal operation.
+
+### 27. ~~Cost implication: execution agent can be non-vision model~~ → 修正見 #29
+
+~~Remove screenshot from default tool set~~ → 不再適用。見 #29 agent 自主判斷原則。
+
+## Phase C — Enhanced Tools + Agent Autonomy (2026-03-13, session 4)
+
+### 28. Enhanced find/read v2 + agent autonomy — PASS
+
+增強 find（selector 從 9→16 種，加 disabled/ariaExpanded/visibility 過濾）和 read（結構化回傳 count + items with tag/text/visible）。加入「狀態確認原則」讓 agent 自主選擇觀測方式。
+
+**GPT-4.1 跑 enhanced tools**：
+
+| Metric | Phase B+ (v1 tools) | Phase C (v2 tools) |
+|--------|--------------------|--------------------|
+| Tool calls | 24 | **22** |
+| Duration | 60.7s | **55.7s** |
+| Result | PASS | **PASS** |
+
+Agent 自然選擇 DOM 確認狀態，screenshot 只在初始探索用了一次。
+
+### 29. Agent 自主判斷原則（設計決策）
+
+**修正 #24-#27 的結論**：screenshot 不應被標記為 "debug only"。
+
+正確設計：find、read、screenshot 是三個平等的觀測工具。Agent 自行判斷何時用什麼確認頁面狀態。Prompt 只設目標（「確認狀態正確」），不限手段。不預存 success pattern，agent 自己判斷成功/失敗。
+
+之前的「happy path 0 vision tokens」修正為「agent 自行決定 vision 用量」。
+之前的「non-vision model 足夠」修正為「model 需有 vision 能力，但 agent 可選擇不用」。
+
+### 30. i18n discovery layer（設計筆記）
+
+目前 prompt 中的 UI element table 是中文 locale-specific（`find("新建")`, `find("提交")` 等）。公開專案需要三層設計：
+
+1. **Discovery**（vision）：首次進入未知 locale → screenshot → 辨識 UI 元素語義
+2. **Targeting**（DOM）：用 discovery 結果的 text → find → 精確座標
+3. **Cache**：UI map → `~/.nbctl/ui-maps/<locale>.json`，breakage 時重新 discover
+
+Vision 的真正角色是「語義理解」（這個按鈕做什麼），不是「座標定位」（它在哪裡）。
+
+### 31. find/read v2 增強
+
+**find v2**：
+- Selector 擴大：加入 `[role=tab]`, `[role=menuitem]`, `[role=option]`, `[role=checkbox]`, `[role=radio]`, `[role=switch]`, `[role=combobox]`, `[tabindex]:not([tabindex='-1'])`
+- 新增回傳：`disabled`（disabled attr / aria-disabled）、`ariaExpanded`
+- 新增過濾：`visibility: hidden` / `display: none`
+
+**read v2**：
+- 回傳結構化：`Found N element(s):\n[1] TAG: text...`
+- 含 `count`、`visible` 狀態
+- 兼顧狀態驗證和內容提取
 
 ## Remaining
 
 - `dispatchType` not tested for special keys (Enter, Tab, Escape)
 - Multi-tab scenarios
-- Error recovery (element not found, page not loaded)
-- Model selection (SDK currently uses default model, not configurable in spike)
+- ~~Error recovery~~ Partially addressed: anomaly-triggered debug capture designed (#26)
+- ~~Model selection~~ ✅ Resolved: `--model` flag added, GPT-4.1 verified
+- ~~Screenshot necessity~~ ✅ Resolved: agent 自主判斷，不預設限制 (#29)
+- ~~Tool coverage~~ ✅ Resolved: find/read v2 增強 (#31)
+- i18n discovery layer（#30，設計完成，未實作）
+- ~~Full operation coverage~~ ✅ Resolved: Phase D 全操作實測通過 (#32-#38)
+
+## Phase D — Full Operation Test (session 5)
+
+**Date**: 2026-03-13
+**Verdict**: ALL PASS — 所有 spec 操作均可通過 DOM tools 完成
+
+### Summary
+
+用 find v2 + read v2 + click 手動測試所有 spec 要求的 NotebookLM 操作：
+
+- **Homepage**: 列筆記本(106)、新建、menu(編輯標題/刪除)、進入筆記本 ✅
+- **Source**: 列來源、新增(4 types)、移除、重命名、展開/收合、checkbox ✅
+- **Chat**: 輸入、提交、讀回答、建議問題、儲存記事、刪除對話記錄 ✅
+- **Audio**: 觸發生成、狀態偵測、播放、下載、速度調整 ✅
+- **Studio**: 面板讀取(自訂元素)、收合/展開面板 ✅
+- **Title**: 讀取(h1) ✅、直接編輯 ❌(需從 homepage menu) ✅
+
+### Key findings (#32-#38)
+
+32. 筆記本標題只能從 homepage menu → 編輯標題修改
+33. 語音摘要點擊即觸發生成（~5-10 min），status 用 `read "studio-panel"` 偵測 "sync"
+34. 下載音訊是 `<A>` tag（非 button），觸發瀏覽器下載
+35. 對話選項只有「刪除對話記錄」，無「新對話」
+36. find v2 正確偵測 disabled 狀態
+37. Studio 面板是 `<studio-panel>` 自訂 web component
+38. Source item 有 BUTTON(展開詳情) + INPUT(checkbox) 兩個 interactive，需區分

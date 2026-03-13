@@ -1,0 +1,41 @@
+{
+  "locale": "zh-CN",
+  "verified": false,
+  "note": "Estimated from zh-TW — needs verification with tools repair",
+  "elements": {
+    "create_notebook": { "text": "新建" },
+    "paste_source_type": { "text": "复制的文字" },
+    "paste_textarea": { "text": "在此处粘贴文字", "match": "placeholder" },
+    "insert_button": { "text": "插入" },
+    "submit_button": { "text": "提交", "disambiguate": "y > 400" },
+    "chat_input": { "text": "开始输入", "match": "placeholder" },
+    "add_source": { "text": "添加来源" },
+    "collapse_source": { "text": "collapse_content" },
+    "remove_source": { "text": "移除来源" },
+    "rename_source": { "text": "重新命名来源" },
+    "delete_chat": { "text": "删除对话记录" },
+    "audio_overview": { "text": "语音摘要" },
+    "customize_audio": { "text": "自定义语音摘要", "match": "aria-label" },
+    "url_source_type": { "text": "网站" },
+    "upload_source_type": { "text": "上传文件" },
+    "drive_source_type": { "text": "云端硬盘" },
+    "url_textarea": { "text": "粘贴任何链接", "match": "placeholder" },
+    "save_button": { "text": "保存" },
+    "cancel_button": { "text": "取消" },
+    "edit_title": { "text": "编辑标题" },
+    "delete_notebook": { "text": "删除" },
+    "download_audio": { "text": "下载" },
+    "play_audio": { "text": "播放", "match": "aria-label" },
+    "notebook_settings": { "text": "设置笔记本", "match": "aria-label" },
+    "conversation_options": { "text": "对话选项", "match": "aria-label" }
+  },
+  "selectors": {
+    "answer": ".to-user-container .message-content",
+    "question": ".from-user-container",
+    "suggestions": ".suggestions-container",
+    "source_panel": ".source-panel",
+    "studio_panel": "studio-panel",
+    "notebook_title": "h1",
+    "notebook_rows": "tr[tabindex]"
+  }
+}

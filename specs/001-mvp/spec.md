@@ -1103,8 +1103,14 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-007**: Agent MUST 能透過 vision model 理解 NotebookLM UI 狀態。
 - **FR-008**: Agent MUST 擁有獨立的 tab（CDP session），透過 CDP 底層 API
   （Input.dispatchMouseEvent, Page.captureScreenshot, Input.dispatchKeyEvent 等）
-  及 browser tools（screenshot, click, type, scroll, paste, downloadFile）自主操作，
-  具備截圖分析、retry、關 modal 等自我修復能力。
+  及 browser tools 自主操作，具備截圖分析、retry、關 modal 等自我修復能力。
+  Browser tools 完整清單（Spike 1 驗證，9 個）：
+  - **Core 5**（CDP helpers）：screenshot, click, type, scroll, paste
+  - **DOM query 2**（page.evaluate）：find（元素定位 + 座標）, read（CSS selector 文字擷取）
+  - **Navigation 2**：navigate（URL 跳轉）, wait（等待 + 截圖）
+  - downloadFile（Phase 9 US6 實作，暫不含）
+  Tool factory 接收 `TabHandle`（已含 cdpSession + page），直接複製 spike 驗證過的 tool 實作。
+  Spike playground 保持獨立（不 import src/），後續 repair 機制再處理 single source of truth。
 - **FR-009**: Agent MUST 提供 content tools：
   - repoToText：將 git repo 轉換為單一文字
   - urlToText：將網頁轉換為 Markdown
@@ -1411,14 +1417,27 @@ notebook 包含哪些來源是一種認知負擔。
   取得獨立 tab（CDP session），透過 CDP 底層 API 操作，具備自主截圖分析、
   retry、關 modal 的完整自我修復能力。操作前 MUST 透過 NetworkGate acquirePermit()。
   不能自行啟動/關閉 Chrome（由 daemon 管理）。
-  Agent 透過 Copilot SDK 註冊 tools（含 screenshot、click 等），
-  Copilot CLI agent 自主決定何時呼叫哪個 tool。Tool 自包操作邏輯
-  （例：screenshot tool 自行透過 CDP 截圖 + 格式轉換），daemon 不中轉。
+  Agent 透過 Copilot SDK 註冊 9 個 browser tools（screenshot, click, type, scroll, paste,
+  find, read, navigate, wait），Copilot CLI agent 自主決定何時呼叫哪個 tool。
+  Tool 自包操作邏輯（例：screenshot tool 自行透過 CDP 截圖 + 格式轉換），daemon 不中轉。
   Daemon 是指揮者：調度任務、提供工具、設定目標。Agent 是執行者。
+  Execution agent 使用 GPT-4.1 模型（免費、支援平行 tool calling、Spike 1 驗證 60s 完成完整 flow）。
+  `createSession()` MUST 明確指定 `model` 參數（跳過模型協商，setup 從 5.6s 降至 0.5s）。
 
-- **Agent Config**：參數化的 agent 操作定義（YAML → SDK 的 `CustomAgentConfig`）。
+- **Agent Config**：參數化的 agent 操作定義（YAML frontmatter + Markdown prompt → SDK 的 `CustomAgentConfig`）。
   包含 prompt template、所需 tool 清單、操作依賴宣告。
-  以 YAML 檔案形式存在（`agents/` 目錄），可不重編譯修改。
+  以 `.md` 檔案形式存在（`agents/` 目錄），可不重編譯修改。
+  需要操作 NotebookLM UI 的 agent config MUST 在 prompt 中引用 `{{NOTEBOOKLM_KNOWLEDGE}}`
+  template variable，agent-loader 解析時從 UI map config 載入 locale-specific 的
+  UI 元素表、CSS selectors、消歧規則、狀態確認原則。
+
+- **兩層 Agent 架構**：
+  - **Main Agent**（路由層）：Copilot CLI runtime 內建，接收 session systemMessage。
+    只做 intent → agent mapping（輕量 prompt，列出可用 agents + 描述）。不操作瀏覽器，不需要 KNOWLEDGE。
+  - **Subagent**（執行層）：CustomAgent 陣列的每個 entry，對應 `agents/*.md`。
+    每個 subagent 是一個 focused execution unit（= spike 的 production 版本）：
+    focused prompt + KNOWLEDGE + task-specific tools。
+    Subagent 只看到自己的 prompt 和自己的 tool 子集，不繼承 session systemMessage。
 
 - **MCP Tool**：MCP Server 暴露的工具定義。每個 tool 透過 `tools/list` 自描述，
   包含名稱、描述與 Zod-validated input schema。AI client 連線後即可自動探索。
@@ -1504,6 +1523,18 @@ notebook 包含哪些來源是一種認知負擔。
 - Q: 移除了哪些 FR？ → A: FR-120~127（Notification Adapter 全系列）、FR-130~133（AI Skill Template 全系列）、FR-114/FR-115（Inbox 原子寫入/consume rename）。
 - Q: 新增了哪些 FR？ → A: FR-200~205（MCP Server 系列）。
 - Q: Daemon 如何啟動？ → A: `npx nbctl` thin launcher 啟動 daemon process，或透過 MCP client 設定（如 Claude Code MCP config）直接啟動。不再需要完整 CLI 框架。
+
+### Session 2026-03-13 (Spike 1: Browser Capability)
+
+- Q: 5 個 browser tool 夠嗎？ → A: 不夠。Spike 驗證需要 9 個：原有 5 個（screenshot, click, type, scroll, paste）+ find（DOM query 取精確座標）、read（CSS selector 文字擷取）、navigate（URL 跳轉）、wait（延遲 + 截圖）。find 和 read 走 `page.evaluate()`，不需要新增 CDP helper。
+- Q: Tool factory 為什麼維持 TabHandle？ → A: TabHandle 已含 `cdpSession` + `page`，不需要額外抽介面。直接複製 spike 驗證過的 tool code 進 src/，在 handler 內取 `tabHandle.page` 和 `tabHandle.cdpSession`。Spike playground 保持獨立（不 import src/），後續 repair 機制再處理 single source of truth。
+- Q: Execution agent 用什麼模型？ → A: GPT-4.1（GitHub Copilot 免費模型）。Spike 驗證：24 tool calls / 60.7s 完成完整 flow（建立筆記本 → 加來源 → 提問 → 讀回答），支援平行 tool calling，比預設模型快 36%。非推理模型足夠，因為 execution 是機械的 find → click → paste → read 循環。智慧在 task planning，不在 tool execution。
+- Q: createSession() 為什麼要指定 model？ → A: 不指定時 createSession() 花 5.6s（模型協商），指定後降至 0.5s（11x 加速）。Production MUST 明確指定。
+- Q: NotebookLM UI 有哪些陷阱？ → A: (1) 來源展開遮蔽「新增來源」按鈕 → find("collapse_content") 收合恢復。(2) 兩個「提交」按鈕 → 選 y > 400 的（Chat 區）。(3) 回答需等 10-15s → wait 後 read，若含 "Refining..." 重試。這些規則 MUST 寫入 agent prompt。
+- Q: Spike playground 的定位？ → A: 獨立的驗證操作台，不 import src/。保有自己的 tool 實作副本，用於 (1) 新 tool 的快速驗證 (2) NotebookLM UI 變動的定期偵測。Production tool 從 spike 複製進 src/ 並適配 TabHandle。後續 repair 機制再統一。
+- Q: NOTEBOOKLM_KNOWLEDGE 放哪裡？ → A: **CustomAgent prompt（agents/*.md）**，不是 session systemMessage。Main agent 是路由器（intent → agent mapping），不操作瀏覽器，不需要 UI 知識。每個需要操作 NotebookLM UI 的 subagent 在 prompt 中引用 `{{NOTEBOOKLM_KNOWLEDGE}}`，agent-loader 解析時從 UI map config 載入 locale-specific 內容（elements + selectors + 狀態確認原則）。
+- Q: 為什麼用兩層架構（main agent + subagents）而不是 spike 的扁平模式？ → A: Spike 成功因為 prompt 只做一件事。如果把所有操作（create-notebook, add-source, query, rename, delete, sync...）寫在同一份 system prompt 裡，prompt 太肥且 agent 會 lost focus。每個 subagent = 一個 focused spike session（focused prompt + task tools），main agent 只做輕量路由。
+- Q: i18n 怎麼處理？ → A: MVP 內建 3 locale（zh-TW, en, zh-CN）。UI map config（`src/config/ui-maps/*.json`）存放 locale-specific 元素文字和 CSS selectors。Daemon 啟動時偵測 Chrome locale → 載入對應 UI map → 注入 KNOWLEDGE template。Post-MVP 支援 `tools repair` 自動 discover 新 locale。
 
 ### Session 2026-03-10 (SHIP B/R/N 解除)
 
