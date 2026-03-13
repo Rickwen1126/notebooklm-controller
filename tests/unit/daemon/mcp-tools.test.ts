@@ -173,13 +173,17 @@ describe("registerDaemonTools", () => {
   // -----------------------------------------------------------------------
 
   describe("shutdown", () => {
-    it("returns success response", async () => {
+    it("returns success response and calls shutdownFn", async () => {
       const handler = server.getHandler("shutdown");
       const result = await handler({}) as { content: Array<{ text: string }> };
 
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.success).toBe(true);
       expect(parsed.message).toBe("Daemon stopped");
+
+      // shutdownFn is called via setImmediate, so flush the queue.
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(deps.shutdownFn).toHaveBeenCalledTimes(1);
     });
 
     it("has destructiveHint annotation", () => {

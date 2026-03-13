@@ -124,8 +124,8 @@
 
 ### Tests for US1
 
-- [ ] T037 [P] [US1] Integration test for daemon startup in `tests/integration/daemon/lifecycle.test.ts` (start daemon, verify MCP Server listening, Chrome launched, shutdown clean)
-- [ ] T038 [P] [US1] Integration test for reauth flow in `tests/integration/daemon/reauth.test.ts` (detect expired session, reauth tool, mode switching)
+- [x] T037 [P] [US1] Integration test for daemon startup in `tests/integration/daemon/lifecycle.test.ts` (start daemon, verify MCP Server listening, Chrome launched, shutdown clean)
+- [x] T038 [P] [US1] Integration test for reauth flow in `tests/integration/daemon/reauth.test.ts` (detect expired session, reauth tool, mode switching)
 - [x] T039 [P] [US1] Contract test for get_status tool in `tests/contract/mcp-tools/get-status.test.ts` (DaemonStatusResult schema validation)
 - [x] T040 [P] [US1] Contract test for shutdown tool in `tests/contract/mcp-tools/shutdown.test.ts` (response schema validation)
 
