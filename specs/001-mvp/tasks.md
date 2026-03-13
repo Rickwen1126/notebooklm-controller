@@ -19,10 +19,10 @@
 
 **Purpose**: Project scaffolding, dependencies, toolchain configuration
 
-- [ ] T001 Create project directory structure per plan.md (`src/daemon/`, `src/tab-manager/`, `src/network-gate/`, `src/agent/`, `src/agent/tools/`, `src/content/`, `src/state/`, `src/notification/`, `src/shared/`, `agents/`, `tests/unit/`, `tests/integration/`, `tests/contract/`)
-- [ ] T002 Initialize TypeScript project with package.json, tsconfig.json, and install dependencies (`@github/copilot-sdk`, `puppeteer-core`, `@modelcontextprotocol/sdk`, `repomix`, `zod`, `@mozilla/readability`, `jsdom`, `pdf-parse`)
-- [ ] T003 [P] Configure Vitest in vitest.config.ts with unit/integration/contract test paths
-- [ ] T004 [P] Configure ESLint and Prettier for TypeScript 5.x
+- [x] T001 Create project directory structure per plan.md (`src/daemon/`, `src/tab-manager/`, `src/network-gate/`, `src/agent/`, `src/agent/tools/`, `src/content/`, `src/state/`, `src/notification/`, `src/shared/`, `agents/`, `tests/unit/`, `tests/integration/`, `tests/contract/`)
+- [x] T002 Initialize TypeScript project with package.json, tsconfig.json, and install dependencies (`@github/copilot-sdk`, `puppeteer-core`, `@modelcontextprotocol/sdk`, `repomix`, `zod`, `@mozilla/readability`, `jsdom`, `pdf-parse`)
+- [x] T003 [P] Configure Vitest in vitest.config.ts with unit/integration/contract test paths
+- [x] T004 [P] Configure ESLint and Prettier for TypeScript 5.x
 
 ---
 
@@ -34,63 +34,63 @@
 
 ### Shared Utilities
 
-- [ ] T005 [P] Define all shared TypeScript interfaces from data-model.md in `src/shared/types.ts` (DaemonState, NotebookEntry, NotebookStatus, SourceRecord, SourceOrigin, ArtifactRecord, OperationLogEntry, OperationActionType, AsyncTask, TaskStatus, TaskStatusChange, TaskNotificationPayload, TabHandle, NetworkHealth, AgentConfig, AgentParameter, AsyncSubmitResult, DaemonStatusResult)
-- [ ] T006 [P] Implement unified error types and format in `src/shared/errors.ts` (NbctlError base, ChromeError, NotebookNotFoundError, AuthExpiredError, TabLimitError, InvalidUrlError, ContentTooLargeError, TaskNotFoundError, DaemonAlreadyRunningError)
-- [ ] T007 [P] Implement configuration module in `src/shared/config.ts` (port 19224, max tabs 10, timeouts, Chrome path discovery for macOS, model selection, `~/.nbctl/` paths, file permissions 700/600)
-- [ ] T007.1 [P] Implement structured logging in `src/shared/logger.ts` (FR-051: JSON format, log levels, operation context)
+- [x] T005 [P] Define all shared TypeScript interfaces from data-model.md in `src/shared/types.ts` (DaemonState, NotebookEntry, NotebookStatus, SourceRecord, SourceOrigin, ArtifactRecord, OperationLogEntry, OperationActionType, AsyncTask, TaskStatus, TaskStatusChange, TaskNotificationPayload, TabHandle, NetworkHealth, AgentConfig, AgentParameter, AsyncSubmitResult, DaemonStatusResult)
+- [x] T006 [P] Implement unified error types and format in `src/shared/errors.ts` (NbctlError base, ChromeError, NotebookNotFoundError, AuthExpiredError, TabLimitError, InvalidUrlError, ContentTooLargeError, TaskNotFoundError, DaemonAlreadyRunningError)
+- [x] T007 [P] Implement configuration module in `src/shared/config.ts` (port 19224, max tabs 10, timeouts, Chrome path discovery for macOS, model selection, `~/.nbctl/` paths, file permissions 700/600)
+- [x] T007.1 [P] Implement structured logging in `src/shared/logger.ts` (FR-051: JSON format, log levels, operation context)
 
 ### State Management (covers US9 — State Persistence)
 
-- [ ] T008 Unit tests for state-manager in `tests/unit/state/state-manager.test.ts` (atomic write, CRUD, crash recovery, file permissions)
-- [ ] T009 Implement DaemonState CRUD + atomic write (temp + rename) in `src/state/state-manager.ts`
-- [ ] T010 [P] Unit tests for task-store in `tests/unit/state/task-store.test.ts` (CRUD, state machine transitions, TTL cleanup)
-- [ ] T011 [P] Implement AsyncTask CRUD + TTL cleanup + state machine in `src/state/task-store.ts`
-- [ ] T012 [P] Unit tests for cache-manager in `tests/unit/state/cache-manager.test.ts` (per-notebook source/artifact/operation CRUD)
-- [ ] T013 [P] Implement per-notebook local cache in `src/state/cache-manager.ts` (SourceRecord, ArtifactRecord, OperationLogEntry CRUD)
+- [x] T008 Unit tests for state-manager in `tests/unit/state/state-manager.test.ts` (atomic write, CRUD, crash recovery, file permissions)
+- [x] T009 Implement DaemonState CRUD + atomic write (temp + rename) in `src/state/state-manager.ts`
+- [x] T010 [P] Unit tests for task-store in `tests/unit/state/task-store.test.ts` (CRUD, state machine transitions, TTL cleanup)
+- [x] T011 [P] Implement AsyncTask CRUD + TTL cleanup + state machine in `src/state/task-store.ts`
+- [x] T012 [P] Unit tests for cache-manager in `tests/unit/state/cache-manager.test.ts` (per-notebook source/artifact/operation CRUD)
+- [x] T013 [P] Implement per-notebook local cache in `src/state/cache-manager.ts` (SourceRecord, ArtifactRecord, OperationLogEntry CRUD)
 
 ### TabManager (covers US17 — TabManager Abstraction)
 
-- [ ] T014 Unit tests for cdp-helpers in `tests/unit/tab-manager/cdp-helpers.test.ts` (click, type, screenshot, scroll via CDP mock)
-- [ ] T015 Implement CDP helpers in `src/tab-manager/cdp-helpers.ts` (dispatchMouseEvent, captureScreenshot, dispatchKeyEvent, scroll — all CDP 底層 API)
-- [ ] T016 Unit tests for tab-manager in `tests/unit/tab-manager/tab-manager.test.ts` (launch, openTab, closeTab, listTabs, tab timeout, Chrome crash detection)
-- [ ] T017 Implement TabHandle type + CDP session wrapper in `src/tab-manager/tab-handle.ts`
-- [ ] T018 Implement TabManager in `src/tab-manager/tab-manager.ts` (Chrome launch with userDataDir, tab lifecycle, max tab limit, timeout enforcement, `browser.on('disconnected')` crash detection, headed/headless mode switching)
+- [x] T014 Unit tests for cdp-helpers in `tests/unit/tab-manager/cdp-helpers.test.ts` (click, type, screenshot, scroll via CDP mock)
+- [x] T015 Implement CDP helpers in `src/tab-manager/cdp-helpers.ts` (dispatchMouseEvent, captureScreenshot, dispatchKeyEvent, scroll — all CDP 底層 API)
+- [x] T016 Unit tests for tab-manager in `tests/unit/tab-manager/tab-manager.test.ts` (launch, openTab, closeTab, listTabs, tab timeout, Chrome crash detection)
+- [x] T017 Implement TabHandle type + CDP session wrapper in `src/tab-manager/tab-handle.ts`
+- [x] T018 Implement TabManager in `src/tab-manager/tab-manager.ts` (Chrome launch with userDataDir, tab lifecycle, max tab limit, timeout enforcement, `browser.on('disconnected')` crash detection, headed/headless mode switching)
 
 ### NetworkGate
 
-- [ ] T019 Unit tests for network-gate in `tests/unit/network-gate/network-gate.test.ts` (acquirePermit, reportAnomaly, backoff, health status)
-- [ ] T020 Implement NetworkGate in `src/network-gate/network-gate.ts` (acquirePermit, reportAnomaly, getHealth, exponential backoff with jitter, global backoff state)
+- [x] T019 Unit tests for network-gate in `tests/unit/network-gate/network-gate.test.ts` (acquirePermit, reportAnomaly, backoff, health status)
+- [x] T020 Implement NetworkGate in `src/network-gate/network-gate.ts` (acquirePermit, reportAnomaly, getHealth, exponential backoff with jitter, global backoff state)
 
 ### Agent Runtime (covers US18 — Agent Config Parameterization)
 
-- [ ] T021 [P] Unit tests for agent-loader in `tests/unit/agent/config/agent-loader.test.ts` (YAML frontmatter parse, template rendering, invalid config skip)
-- [ ] T022 [P] Implement agent-loader in `src/agent/agent-loader.ts` (load `agents/*.md` YAML frontmatter + Markdown body → template rendering → `CustomAgentConfig[]`, including `infer` field for Copilot CLI inference)
-- [ ] T023 Unit tests for CopilotClient singleton in `tests/unit/agent/client.test.ts` (start, stop, autoRestart, singleton lifecycle)
-- [ ] T024 Implement CopilotClient singleton in `src/agent/client.ts` (start/stop, autoRestart: true, singleton pattern)
-- [ ] T025 Unit tests for SessionHooks in `tests/unit/agent/hooks.test.ts` (onPreToolUse → acquirePermit, onErrorOccurred retry/skip/abort, fail-open behavior)
-- [ ] T026 Implement SessionHooks in `src/agent/hooks.ts` (onPreToolUse → NetworkGate acquirePermit, onErrorOccurred three-way routing, onSessionEnd cleanup, acquirePermit timeout < sendAndWait timeout constraint)
-- [ ] T027 Unit tests for session-runner in `tests/unit/agent/session-runner.test.ts` (createSession → sendAndWait → disconnect → result collection)
-- [ ] T028 Implement session-runner in `src/agent/session-runner.ts` (per-task: createSession with tools + agent + hooks, sendAndWait with configurable timeout per FR-031, disconnect, result collection)
+- [x] T021 [P] Unit tests for agent-loader in `tests/unit/agent/config/agent-loader.test.ts` (YAML frontmatter parse, template rendering, invalid config skip)
+- [x] T022 [P] Implement agent-loader in `src/agent/agent-loader.ts` (load `agents/*.md` YAML frontmatter + Markdown body → template rendering → `CustomAgentConfig[]`, including `infer` field for Copilot CLI inference)
+- [x] T023 Unit tests for CopilotClient singleton in `tests/unit/agent/client.test.ts` (start, stop, autoRestart, singleton lifecycle)
+- [x] T024 Implement CopilotClient singleton in `src/agent/client.ts` (start/stop, autoRestart: true, singleton pattern)
+- [x] T025 Unit tests for SessionHooks in `tests/unit/agent/hooks.test.ts` (onPreToolUse → acquirePermit, onErrorOccurred retry/skip/abort, fail-open behavior)
+- [x] T026 Implement SessionHooks in `src/agent/hooks.ts` (onPreToolUse → NetworkGate acquirePermit, onErrorOccurred three-way routing, onSessionEnd cleanup, acquirePermit timeout < sendAndWait timeout constraint)
+- [x] T027 Unit tests for session-runner in `tests/unit/agent/session-runner.test.ts` (createSession → sendAndWait → disconnect → result collection)
+- [x] T028 Implement session-runner in `src/agent/session-runner.ts` (per-task: createSession with tools + agent + hooks, sendAndWait with configurable timeout per FR-031, disconnect, result collection)
 
 ### Agent Tools — Browser & State
 
-- [ ] T029 [P] Unit tests for browser-tools in `tests/unit/agent/tools/browser-tools.test.ts` (screenshot, click, type, scroll, paste — mock CDP session, verify Tool 自包：screenshot tool returns binaryResultsForLlm)
-- [ ] T030 [P] Implement browser-tools in `src/agent/tools/browser-tools.ts` (defineTool + Zod for screenshot, click, type, scroll, paste — all CDP-based, each tool self-contained with screenshot return via ToolResultObject.binaryResultsForLlm)
-- [ ] T031 [P] Unit tests for state-tools in `tests/unit/agent/tools/state-tools.test.ts` (reportRateLimit, updateCache, writeFile)
-- [ ] T032 [P] Implement state-tools in `src/agent/tools/state-tools.ts` (defineTool + Zod for reportRateLimit → NetworkGate, updateCache → cache-manager, writeFile)
-- [ ] T032.1 [P] Unit tests for tool-registry in `tests/unit/agent/tools/tool-registry.test.ts` (buildToolsForTab factory, tool combination, tool isolation per tab)
-- [ ] T033 Implement tool registry in `src/agent/tools/index.ts` (buildToolsForTab(tabHandle) → Tool[] factory function, combining browser + content + state tools)
+- [x] T029 [P] Unit tests for browser-tools in `tests/unit/agent/tools/browser-tools.test.ts` (screenshot, click, type, scroll, paste — mock CDP session, verify Tool 自包：screenshot tool returns binaryResultsForLlm)
+- [x] T030 [P] Implement browser-tools in `src/agent/tools/browser-tools.ts` (defineTool + Zod for screenshot, click, type, scroll, paste — all CDP-based, each tool self-contained with screenshot return via ToolResultObject.binaryResultsForLlm)
+- [x] T031 [P] Unit tests for state-tools in `tests/unit/agent/tools/state-tools.test.ts` (reportRateLimit, updateCache, writeFile)
+- [x] T032 [P] Implement state-tools in `src/agent/tools/state-tools.ts` (defineTool + Zod for reportRateLimit → NetworkGate, updateCache → cache-manager, writeFile)
+- [x] T032.1 [P] Unit tests for tool-registry in `tests/unit/agent/tools/tool-registry.test.ts` (buildToolsForTab factory, tool combination, tool isolation per tab)
+- [x] T033 Implement tool registry in `src/agent/tools/index.ts` (buildToolsForTab(tabHandle) → Tool[] factory function, combining browser + content + state tools)
 
 ### MCP Server Skeleton & Scheduler
 
-- [ ] T033.1 Unit tests for scheduler in `tests/unit/daemon/scheduler.test.ts` (queue dispatch, cross-notebook parallel, same-notebook serial, task cancellation)
-- [ ] T034 Implement scheduler in `src/daemon/scheduler.ts` (per-notebook operation queue, task dispatch to session-runner, cross-notebook parallel / same-notebook serial)
-- [ ] T035 Implement MCP Server skeleton in `src/daemon/mcp-server.ts` (Streamable HTTP transport setup with `@modelcontextprotocol/sdk`, tool registration framework, 127.0.0.1:19224)
+- [x] T033.1 Unit tests for scheduler in `tests/unit/daemon/scheduler.test.ts` (queue dispatch, cross-notebook parallel, same-notebook serial, task cancellation)
+- [x] T034 Implement scheduler in `src/daemon/scheduler.ts` (per-notebook operation queue, task dispatch to session-runner, cross-notebook parallel / same-notebook serial)
+- [x] T035 Implement MCP Server skeleton in `src/daemon/mcp-server.ts` (Streamable HTTP transport setup with `@modelcontextprotocol/sdk`, tool registration framework, 127.0.0.1:19224)
 
 ### Notification
 
-- [ ] T035.1 [P] Unit tests for notifier in `tests/unit/notification/notifier.test.ts` (fire-and-forget push, urgent flag, client disconnect handling)
-- [ ] T036 [P] Implement notifier in `src/notification/notifier.ts` (fire-and-forget MCP notification push, TaskNotificationPayload, urgent flag for failures)
+- [x] T035.1 [P] Unit tests for notifier in `tests/unit/notification/notifier.test.ts` (fire-and-forget push, client disconnect handling)
+- [x] T036 [P] Implement notifier in `src/notification/notifier.ts` (fire-and-forget MCP notification push, TaskNotificationPayload, client uses `status` field to identify failures)
 
 **Checkpoint**: Foundation ready — all infrastructure modules implemented and unit tested. User story implementation can begin.
 
@@ -171,7 +171,7 @@
 - [ ] T063 [US13] Implement sync/async branching in exec tool (sync: await scheduler result; async: return taskId + hint immediately)
 - [ ] T064 [US13] Register `cancel_task` MCP tool in `src/daemon/mcp-server.ts` (cancel queued task from queue, signal running agent to stop at safe point, reject terminal state)
 - [ ] T065 [US13] Extend `get_status` MCP tool with task query modes (taskId → single task, all → recent tasks list, recent → undelivered tasks, notebook filter, limit)
-- [ ] T066 [US14] Integrate notifier with scheduler — on task complete/fail, push MCP notification to connected clients (fire-and-forget, urgent flag for failures)
+- [ ] T066 [US14] Integrate notifier with scheduler — on task complete/fail, push MCP notification to connected clients (fire-and-forget, no priority — client uses `status` field)
 - [ ] T067 [US14] Handle client disconnection gracefully (notification not sent, result preserved in task store for get_status pull)
 
 **Checkpoint**: Async operations work end-to-end. Can submit, track, cancel tasks, and receive notifications.

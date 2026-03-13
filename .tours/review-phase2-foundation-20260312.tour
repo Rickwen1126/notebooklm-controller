@@ -1,0 +1,122 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Code Review: Phase 2 Foundation 2026-03-12",
+  "steps": [
+    {
+      "title": "Review Summary",
+      "description": "## Review Summary\n\n🔴 Critical: 3\n🟡 Suggestions: 7\n✅ Good Practices: 6\n\n### Scope\nAll 19 source files across 8 modules implemented in Phase 2 Foundational (T001-T036).\n\n### Focus\nSecurity, correctness, architecture boundaries, error handling, test coverage."
+    },
+    {
+      "file": "src/daemon/mcp-server.ts",
+      "line": 266,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "🔴 JSON.parse without error handling — malformed body returns 500 instead of -32700",
+      "description": "## Problem\n\n`JSON.parse(body)` will throw a `SyntaxError` if the body is malformed JSON. The outer try/catch on line 237 catches it and returns a generic 500 Internal Server Error.\n\nHowever, the JSON-RPC 2.0 specification (Section 5) requires a **-32700 Parse error** response for invalid JSON.\n\n## Fix\n\n```typescript\nprivate async handlePost(req, res): Promise<void> {\n  const body = await this.readBody(req);\n  let parsed: unknown;\n  try {\n    parsed = JSON.parse(body);\n  } catch {\n    res.writeHead(400, { \"Content-Type\": \"application/json\" });\n    res.end(JSON.stringify({\n      jsonrpc: \"2.0\",\n      error: { code: -32700, message: \"Parse error\" },\n      id: null,\n    }));\n    return;\n  }\n  // ... rest of handler\n}\n```\n\n## Rationale\n\nMCP clients (Claude, ChatGPT) that send malformed requests will get a generic 500 instead of the spec-compliant error code. This makes debugging harder and violates the JSON-RPC spec that MCP is built on."
+    },
+    {
+      "file": "src/agent/tools/state-tools.ts",
+      "line": 146,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "🔴 writeFile tool allows arbitrary path — no path validation",
+      "description": "## Problem\n\nThe `writeFile` tool accepts any `path` string and writes to it. An agent (driven by LLM) could be prompt-injected or hallucinate a path like `/etc/cron.d/malicious` or `~/.ssh/authorized_keys`.\n\nThe tool description says \"Absolute or relative file path\" — this gives the agent maximum freedom, which is the maximum risk surface.\n\n## Fix\n\n```typescript\nimport { NBCTL_HOME } from \"../../shared/config.js\";\nimport { resolve, relative } from \"node:path\";\n\nhandler: async (args) => {\n  const resolved = resolve(args.path);\n  const rel = relative(NBCTL_HOME, resolved);\n  if (rel.startsWith(\"..\") || resolve(rel) !== resolved) {\n    return errorResult(\n      `Path must be within ${NBCTL_HOME}. Got: ${args.path}`,\n    );\n  }\n  // ... proceed with write\n}\n```\n\n## Rationale\n\nThis is the third line of defense (after tool whitelist and handler scope). Even if the agent prompt says \"only write to ~/.nbctl\", the LLM can be tricked. The handler itself must enforce the boundary. OWASP Top 10: Path Traversal (A01:2021)."
+    },
+    {
+      "file": "src/daemon/scheduler.ts",
+      "line": 296,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "🔴 Task result/error set on object but never persisted back to disk",
+      "description": "## Problem\n\nAfter `taskStore.transition(taskId, 'completed')` returns the task object, lines 302-303 set `finalTask.result = result.result`. Similarly, line 311 sets `finalTask.error`. But neither calls `taskStore.writeTask()` or equivalent to persist these changes.\n\nThe task file on disk will show `status: \"completed\"` but `result: null` and `error: null`.\n\n## Fix\n\nOption A — Add a `taskStore.update(taskId, fields)` method:\n```typescript\nif (result.success) {\n  finalTask = await this.taskStore.transition(task.taskId, \"completed\");\n  if (result.result) {\n    await this.taskStore.update(task.taskId, { result: result.result });\n  }\n}\n```\n\nOption B — Extend `transition()` to accept additional fields:\n```typescript\nasync transition(taskId, to, reason?, updates?: Partial<AsyncTask>)\n```\n\n## Rationale\n\n`get_task_status` MCP tool (Phase 4) will read from TaskStore. If result/error isn't persisted, the user will see `\"result\": null` even for completed tasks. This breaks the core async workflow: submit → poll → get result."
+    },
+    {
+      "file": "src/daemon/mcp-server.ts",
+      "line": 296,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "🟡 Multiple sessions share one McpServer — connect() may detach previous transport",
+      "description": "## Problem\n\nEach new initialize request calls `this.mcpServer.connect(transport)` (line 296). The `@modelcontextprotocol/sdk` `McpServer.connect()` is designed for a single transport connection. Calling it again may close or detach the previously connected transport.\n\nThis means the first session may silently stop receiving responses when a second client connects.\n\n## Fix\n\nEither:\n1. Create a new `McpServer` instance per session (tools need to be re-registered)\n2. Verify the SDK supports multi-transport — check `McpServer.connect()` source\n3. Reject concurrent sessions with a clear error until multi-session is supported\n\n## Rationale\n\nPhase 3 integration testing should verify this. For MVP, single-client usage is likely fine, but this is a latent issue for production."
+    },
+    {
+      "file": "src/state/state-manager.ts",
+      "line": 64,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "🟡 load-save race in mutation methods — concurrent addNotebook() can lose writes",
+      "description": "## Problem\n\nEvery mutation method (addNotebook, updateNotebook, removeNotebook, setDefault, updateDaemon) follows the pattern:\n```\nload() → mutate in memory → save()\n```\n\nIf two calls to `addNotebook()` overlap at the `await readFile()` inside `load()`, both will read the same state, mutate independently, and the second `save()` will overwrite the first's changes.\n\n## Fix\n\nAdd a simple mutex/lock:\n```typescript\nprivate writeLock = Promise.resolve();\n\nasync addNotebook(entry: NotebookEntry): Promise<void> {\n  this.writeLock = this.writeLock.then(async () => {\n    const state = await this.load();\n    state.notebooks[entry.alias] = entry;\n    await this.save(state);\n  });\n  await this.writeLock;\n}\n```\n\n## Rationale\n\nCurrently safe because Scheduler ensures same-notebook serial access and daemon startup is single-threaded. But as more MCP tools are registered (get_status reads while exec writes), the risk increases. Low priority for MVP but should be addressed before production."
+    },
+    {
+      "file": "src/agent/client.ts",
+      "line": 157,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "🟡 _handleUnexpectedExit is defined but never wired to SDK lifecycle events",
+      "description": "## Problem\n\nThe comment on line 157 says \"production code wires this up via SDK lifecycle events\" but no code does this wiring. The SDK's `autoRestart: true` (line 22) handles restarts internally, so `_handleUnexpectedExit` may be redundant.\n\nCurrently, `_handleUnexpectedExit` and `autoRestart` could potentially conflict — both trying to restart the same process.\n\n## Fix\n\nEither:\n1. Wire it to SDK's exit event in Phase 3 daemon entry point and disable `autoRestart`\n2. Remove `_handleUnexpectedExit` entirely and rely on SDK's `autoRestart`\n3. Document the relationship clearly\n\n## Rationale\n\nDead code that claims to be wired creates false confidence. Phase 3 should resolve whether we use SDK autoRestart or our own restart logic, not both."
+    },
+    {
+      "file": "src/network-gate/network-gate.ts",
+      "line": 124,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "🟡 recentLatencyMs hardcoded to 0 — NetworkHealth field never populated",
+      "description": "## Problem\n\n`getHealth()` always returns `recentLatencyMs: 0`. The field exists in the `NetworkHealth` interface but nothing tracks actual latency.\n\n## Fix\n\nEither:\n1. Track latency in `onPostToolUse` hook and expose via getter\n2. Remove `recentLatencyMs` from the interface until it's needed\n\n## Rationale\n\nA monitoring field that always returns 0 is misleading. Anyone checking `getHealth()` for performance diagnostics will get incorrect data. For MVP, removing the field is cleaner than implementing latency tracking."
+    },
+    {
+      "file": "src/tab-manager/tab-manager.ts",
+      "line": 143,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "🟡 switchMode() destroys all active tabs without warning or check",
+      "description": "## Problem\n\n`switchMode()` calls `shutdown()` (closes all tabs and browser) then `launch()` with the new mode. If any agent session is actively using a tab, their CDP session becomes invalid immediately.\n\nThe hooks will classify this as `abort` (FATAL_PATTERNS: `target.*closed`), but the scheduler may still have queued tasks for those notebooks.\n\n## Fix\n\n```typescript\nasync switchMode(headless: boolean): Promise<void> {\n  if (this.tabs.size > 0) {\n    throw new ChromeError(\n      `Cannot switch mode: ${this.tabs.size} active tab(s). Close them first.`\n    );\n  }\n  // ... proceed\n}\n```\n\n## Rationale\n\nDestructive operations should fail loudly rather than silently invalidating other components' state. The reauth flow (US1) needs headed mode, but it should wait for active operations to complete."
+    },
+    {
+      "file": "src/agent/hooks.ts",
+      "line": 87,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "🟡 SCREAMING_SNAKE loop variable in classifyError",
+      "description": "## Problem\n\nLine 87: `for (const TRANSIENT_PATTERN of TRANSIENT_PATTERNS)` — the loop variable uses SCREAMING_SNAKE_CASE, which is conventionally reserved for constants, not loop variables.\n\n## Fix\n\n```typescript\nfor (const pattern of TRANSIENT_PATTERNS) {\n  if (pattern.test(error)) return \"retry\";\n}\n```\n\n## Rationale\n\nMinor style inconsistency. The other loops (lines 84 and 90) correctly use lowercase `pattern`."
+    },
+    {
+      "file": "src/agent/tools/state-tools.ts",
+      "line": 84,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "🟡 updateCache data parameter uses z.record — no schema validation on record contents",
+      "description": "## Problem\n\n`data: z.record(z.string(), z.unknown())` accepts any object. The handler then casts it with `args.data as unknown as SourceRecord`. If the agent sends incomplete or malformed data, it will be stored as-is — missing required fields like `id`, `notebookAlias`, `addedAt`.\n\n## Fix\n\nDefine separate Zod schemas for `SourceRecord` and `ArtifactRecord` inputs, or at minimum validate required fields before casting:\n\n```typescript\ncase \"add\": {\n  const record = args.data as Record<string, unknown>;\n  if (!record.id || !record.notebookAlias || !record.displayName) {\n    return errorResult(\"Missing required fields: id, notebookAlias, displayName\");\n  }\n  await cacheManager.addSource(record as unknown as SourceRecord);\n}\n```\n\n## Rationale\n\nThe LLM constructs tool call arguments. Without validation, a hallucinated field name or missing field propagates silently into persisted state."
+    },
+    {
+      "file": "src/shared/errors.ts",
+      "line": 1,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "✅ Clean error hierarchy with typed subclasses and context",
+      "description": "## What's Good\n\n- `NbctlError` base class with `code` and `toJSON()` provides consistent serialization for MCP error responses\n- Each subclass carries relevant context (`alias`, `url`, `maxTabs`, `wordCount + limit`) — callers get structured error info without parsing messages\n- Error codes are string constants (`CHROME_ERROR`, `TAB_LIMIT_REACHED`) — easy to match in error handlers without instanceof chains\n- `toJSON()` returns `{success: false, error: message}` — ready for MCP tool error responses\n\n## Rationale\n\nThis is a textbook discriminated error hierarchy. The `code` field enables programmatic error handling while `message` stays human-readable."
+    },
+    {
+      "file": "src/state/state-manager.ts",
+      "line": 54,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "✅ Consistent atomic write pattern across all state modules",
+      "description": "## What's Good\n\nAll three state modules (StateManager, TaskStore, CacheManager) use the same pattern:\n1. `writeFile(tmpPath, data)` — write to temp file\n2. `chmod(tmpPath, FILE_PERMISSION)` — set 0o600 before rename\n3. `rename(tmpPath, destination)` — atomic POSIX rename\n\nThe pattern is **consistent** across modules but **not abstracted** — each module implements it independently. This is the right call for Phase 2: premature extraction would add indirection without reducing bugs.\n\n## Rationale\n\nAtomic writes prevent data corruption on crash. Setting permissions before rename ensures the final file is never world-readable even momentarily."
+    },
+    {
+      "file": "src/network-gate/network-gate.ts",
+      "line": 57,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "✅ Fail-open acquirePermit — gate bugs never block operations",
+      "description": "## What's Good\n\nThe entire `acquirePermit()` body is wrapped in try/catch (lines 58-86). Any internal error — bad timer, NaN duration, unexpected exception — results in a warning log and successful return.\n\nThis is the correct implementation of FR-195. The gate exists to **protect** operations from rate limiting, not to **prevent** operations from running. A gate bug should degrade to no-gate, not to blocked.\n\n## Rationale\n\nContrast with fail-closed: if `sleep()` rejects (e.g., in test environments with fake timers), a fail-closed gate would stop all operations. Fail-open means the worst case is hitting the rate limit, which is recoverable."
+    },
+    {
+      "file": "src/agent/tools/browser-tools.ts",
+      "line": 83,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "✅ Tool self-containment — click and scroll auto-return screenshots",
+      "description": "## What's Good\n\nAfter dispatching a click (line 98) or scroll (line 136), the tool automatically captures and returns a screenshot. The agent sees the result of its action without needing a separate `screenshot` tool call.\n\nThis cuts tool-call round-trips in half for visual operations and makes the agent loop tighter:\n- Without self-containment: `click → screenshot → analyze → click → screenshot → ...` (2 calls per action)\n- With self-containment: `click → analyze → click → ...` (1 call per action)\n\n## Rationale\n\nFor a vision-based agent operating on NotebookLM (no stable DOM selectors), screenshots are the primary feedback mechanism. Making them automatic removes a common failure mode: the agent forgets to screenshot and operates blind."
+    },
+    {
+      "file": "src/daemon/scheduler.ts",
+      "line": 39,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "✅ Clean dependency injection — runTask is injected, not imported",
+      "description": "## What's Good\n\n`SchedulerDeps.runTask` is a function parameter, not a direct import of session-runner. This means:\n- Tests provide a mock `runTask` that resolves immediately\n- The Scheduler has zero dependency on Copilot SDK, CDP, or Chrome\n- All 12 scheduler tests run in <100ms with no mocking framework magic\n\nSimilarly, `onTaskComplete` callback decouples the Scheduler from the Notifier — the daemon wires them together, not the Scheduler.\n\n## Rationale\n\nThis is the **Dependency Inversion Principle** applied correctly. The high-level policy module (Scheduler) defines the interface it needs (`runTask: (task) => Promise<SessionResult>`), and the low-level module (session-runner) conforms to it."
+    },
+    {
+      "file": "src/shared/logger.ts",
+      "line": 50,
+      "ref": "157bae12d93932e241a337e33763bd307847a9b2",
+      "title": "✅ Logger outputs to stderr — keeps stdout clean for MCP protocol",
+      "description": "## What's Good\n\nLine 62: `process.stderr.write(JSON.stringify(entry) + \"\\n\")` — all log output goes to stderr.\n\nThis is critical because MCP Streamable HTTP uses the HTTP server (not stdio), but the Copilot SDK CLI process communicates via stdin/stdout. Mixing log output with SDK protocol traffic would corrupt the communication channel.\n\n`child()` loggers (line 38) merge context fields — a child created with `{module: 'scheduler'}` automatically includes that field in every log entry, plus any parent context.\n\n## Rationale\n\nSimple but correct. No fancy log framework, no runtime overhead beyond JSON.stringify. The structured format enables future log aggregation without changing the logger."
+    }
+  ]
+}

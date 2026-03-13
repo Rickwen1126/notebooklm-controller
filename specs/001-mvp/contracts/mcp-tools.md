@@ -253,7 +253,7 @@ or operation-specific result (sourceAdded, screenshot, etc.)
 **Output**:
 ```json
 [
-  { "name": "add-source", "version": "1.0.0", "description": "..." },
+  { "name": "add-source", "displayName": "Add Source", "description": "...", "tools": ["repoToText", "urlToText", "pdfToText", "click", "type", "screenshot", "paste"] },
   ...
 ]
 ```
@@ -290,7 +290,7 @@ or operation-specific result (sourceAdded, screenshot, etc.)
 **行為**:
 - Fire-and-forget：不補發。
 - Client 斷線時結果保留在 task store，可透過 `get_status` tool 查詢。
-- 失敗操作標記為 urgent 優先推送。
+- Client 可透過 `status` 欄位判斷成功或失敗（`"completed"` / `"failed"`）。
 
 ---
 

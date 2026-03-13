@@ -111,6 +111,8 @@ interface SourceOrigin {
 | `url-native` | 原始 URL（NotebookLM 原生 Link 功能） |
 | `manual` | 使用者自訂 |
 
+**Soft delete 查詢行為**：`removedAt !== null` 的 SourceRecord 和 ArtifactRecord 預設不出現在查詢結果中（list-sources、資源索引等）。使用者明確要求時（如「列出包含已刪除的來源」）才包含。
+
 ### ArtifactRecord
 
 **Storage**: `~/.nbctl/cache/<notebook-alias>/artifacts.json`
@@ -134,11 +136,10 @@ interface ArtifactRecord {
 ### OperationLogEntry
 
 **Storage**: `~/.nbctl/cache/<notebook-alias>/operations.json`
-**Purpose**: 所有透過 nbctl exec 執行的操作歷程（FR-042~043）。
-  雙重用途：(1) 人類查歷史；(2) **agent 的外部記憶體**——
-  因為 agent 是 stateless per run，session memory 不可靠（compact/restart 會丟失）。
-  OperationLog 讓任何無記憶的新 agent 能精確接手中斷的任務，
-  不依賴 session persistence，不從頭重做。
+**Purpose**: Client 工單紀錄（FR-042~043）。
+  記錄每個 exec call 的輸入與結果——「誰對這本 notebook 下了什麼指令、結果如何、花多久」。
+  一個 exec call = 一筆 entry。Daemon 在 session 結束後寫入。
+  用途：(1) 人類查歷史；(2) agent 接手任務時了解「這本 notebook 之前被做過什麼」。
 
 ```typescript
 interface OperationLogEntry {
@@ -178,19 +179,23 @@ type OperationActionType =
   需要歷史回顧時才按需載入 OperationLog。合併會讓歷史 log 污染任務上下文，
   浪費 token 並干擾 agent 決策。資料模型設計為 agent context 管理服務。
 
-> **⚠️ 開發注意：AsyncTask.history vs OperationLogEntry 的粒度差異**
+> **⚠️ 開發注意：三層紀錄模型**
 >
-> 兩者容易混淆，但粒度和目的完全不同，**不可合併實作**：
+> 系統有三層紀錄，各自視角不同，**不可合併實作**：
 >
-> | | AsyncTask.history | OperationLogEntry |
-> |---|---|---|
-> | 粒度 | 高層（狀態機轉換） | 低層（每個具體動作）|
-> | 內容 | 決策節點：為什麼到這一步、reason | 操作流水帳：截圖、點擊、填表、等待 |
-> | 整理程度 | 結構化摘要（LLM 整理過的思路） | 原始詳細記錄（真實發生順序）|
-> | 類比 | 案件摘要（判決節點與原因） | 監視器錄影（每秒發生什麼）|
+> | 層級 | 實體 | 視角 | 粒度 | 誰寫 | 類比 |
+> |------|------|------|------|------|------|
+> | 工單 | OperationLogEntry | Client | 1 筆 / exec call | Daemon（session 結束後） | 外送單（下單→送達） |
+> | 調度 | AsyncTask.history | Daemon | 狀態機轉換 | Daemon（狀態變更時） | 調度系統（接單→派車→送達） |
+> | 執行 | Structured Logs (FR-051) | Agent | 每個 tool call | Hooks (`onPreToolUse`) | 外送員 GPS 軌跡 |
 >
-> Agent 重接中斷任務時：先讀 history 知道「任務在哪個階段、為什麼」，
-> 再按需載入 OperationLog 知道「上一步具體做到哪」。兩者服務不同查詢需求。
+> **恢復流程**：Agent 失敗或中斷後重接任務時：
+> 1. 讀 AsyncTask.history 知道「任務狀態：failed, reason」
+> 2. 讀 OperationLogEntry 知道「這本 notebook 之前被做過什麼」
+> 3. **截圖分析當前 UI 狀態**（最可靠的恢復手段）
+> 4. 自主決定從哪一步繼續——不需要精密 checkpoint，vision agent 看一眼就知道
+>
+> Structured Logs 對恢復是 nice-to-have，不是必要。Agent 最可靠的恢復工具是 screenshot。
 
 ```typescript
 interface AsyncTask {

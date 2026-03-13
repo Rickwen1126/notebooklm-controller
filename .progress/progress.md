@@ -1,3 +1,157 @@
+## 2026-03-13 11:49 — Phase A+ 補充驗證通過 + Phase B 準備開始
+
+**Goal**: Browser capability spike — 驗證 CDP helpers 能否操控 NotebookLM
+
+**Done**:
+- Phase A 三條 flow 全部通過（create notebook / query / add source）
+- Experiment script 完成（`spike/browser-capability/experiment.ts`）
+- Viewport 除錯：puppeteer `defaultViewport: null` 必須設定，否則強制 800x600
+- 發現第六個必要 tool：DOM 查詢（getBoundingClientRect），純 screenshot 座標估算不可行
+- Results 記錄完成（`spike/browser-capability/results.md`）
+- **Tool 化 clean demo**：14 tool calls, 0 行 code，完成建立筆記本→加來源→提問完整流程
+- 新增 `find` command：text/selector/ariaLabel 查詢 → 回傳 center 座標 + rect
+- 新增 `shot` command：screenshot + find 合一（省 round-trip）
+- 新增 `read` command：CSS selector 取頁面文字（回答提取用 `.message-content`）
+- **驗證 read 能力**：`read .message-content` 成功取回 NotebookLM 純文字回答
+- **Haiku 模型驗證 PASS**：切換 Claude Code 到 haiku，完整跑 create→add source→query→read，13 tool calls
+- **多來源驗證 PASS**：同筆記本加第二個來源（Copilot SDK 說明），成功
+- **跨來源 grounding PASS**：問跨兩份來源的問題，NotebookLM 正確引用兩份來源（標記 1/2）
+- **UI 狀態陷阱發現**：來源展開後「新增來源」按鈕被遮蔽，`find "collapse_content"` 可恢復
+- **交接文件完成**：HANDOVER.md + results.md 更新至最新（含 findings #6-#13）
+
+**Decisions**:
+- **座標不能從 screenshot 目測**：估算誤差可達 2-5 倍，agent 必須用 DOM query 定位元素
+- **需要第六個 tool：findElement**：`{ text?, selector?, ariaLabel? } → { tag, text, rect }[]`
+- **需要第七個 tool：readText**：`{ selector } → string`（回答提取、狀態檢查、錯誤訊息）
+- **dispatchPaste > dispatchType**：大量文字用 paste 更快更穩，type 留給特殊按鍵
+- **agent 互動迴圈**：screenshot（視覺理解）→ find（精確座標）→ click/paste（動作）→ read（取結果）→ repeat
+- **笨模型可行（已實測）**：Haiku 完整跑通 flow，execution 層不需要強推理
+- **NotebookLM 回答 selector**：`.to-user-container .message-content` = 只取回答（不含問題）
+- **提交按鈕消歧**：頁面有 2 個「提交」，選 y>400 的（chat 區）
+- **來源展開遮蔽恢復**：`find "collapse_content"` → click → 重新露出「新增來源」
+- **回答載入等待**：跨來源問題需 10-15s，首次 read 可能出現 "Refining..."，需重試
+
+**State**: Phase A+ 全部驗證 PASS。Chrome 在跑（port 9222）。HANDOVER.md/results.md 已更新。準備 commit spike 成果後進入 Phase B（Copilot SDK runtime）。
+
+**Next**:
+- [ ] Commit spike 成果（spike/ 目錄全部）
+- [ ] Phase B：在 spike/ 內建 Copilot SDK 實驗腳本（不污染 src/）
+- [ ] 回灌結論到主專案 task/plan（新增 find + read tools）
+- [ ] 修 3 個 critical issues
+
+**User Notes**:
+- 用戶提出核心問題：tool 化 + 視覺分析 + Bounding 分析，能否讓 agent 不寫 code 推進任務 → 已驗證：可以
+- 用戶要求交接文件放 spike 內部，不污染 repo 主任務
+- 用戶關注回答提取 + cache 能力：agent 需要 read → cache flow，不只是操作
+- 用戶強調 Phase B 實驗腳本必須在 spike/ 資料夾內，不能污染 repo code
+- 用戶故意觸發 UI 狀態陷阱（展開來源）測試 agent 恢復能力 → 發現 collapse_content 恢復路徑
+
+---
+
+## 2026-03-13 10:34 — Review Point 1 完成 + Spike 決策
+
+**Goal**: Phase 2 code review + 決定 spike 實驗方案
+
+**Done**:
+- Sky Eye CodeTour 產出（`.tours/01-sky-eye-phase2-foundation.tour`，14 steps，用戶已填寫思考回答 + 4 份深度 review insight）
+- Code Review 產出（`.tours/review-phase2-foundation-20260312.tour`，3 critical / 7 suggestions / 6 good）
+- Review Point 1 的深度 review findings（client.ts autoRestart 衝突分析、session-runner boundary validation 缺失、hooks FR-051 logging gap、browser-tools spike 提案）
+- Brainstorm 決策：主線暫停，先跑 browser capability spike
+
+**Decisions**:
+- **主線 Phase 3 暫停，spike 先行**：核心假設（LLM + browser tools 能不能穩定操控 NotebookLM）未驗證前，繼續堆架構沒有意義
+- **兩階段實驗**：Phase A（puppeteer-core + CDP helpers 直接驗證）→ Phase B（Copilot SDK runtime 驗證）
+- **必須用 puppeteer-core + CDP**：不能用 Playwright（失真，與主專案架構不符）
+- **Phase A 工具約束**：只用已寫好的 5 個 CDP helper（captureScreenshot, dispatchClick, dispatchType, dispatchScroll, dispatchPaste），agent 不能自己創造工具
+- **驗證 3 條 flow**：create notebook / query / add source
+- **A 通過後可繼續 Phase 3**（接線不是功能），B 在 Phase 4 前完成
+
+**State**: Review Point 1 完成。Spike 設計已存 memory（`project_spike_browser_capability.md`）。Brainstorm design doc 尚未寫入 `docs/superpowers/specs/`。
+
+**Next**:
+- [ ] 寫 experiment script：puppeteer-core launch → CDP session → 5 helper 包成可呼叫介面
+- [ ] Phase A 實驗：3 flow × 探索 + 工具化 + 純工具重跑（45-60 min）
+- [ ] Phase B 實驗：搬進 Copilot SDK runtime（30-45 min）
+- [ ] 回灌結論到主專案 task/plan
+- [ ] 修 3 個 critical issues（JSON parse、writeFile path validation、scheduler result persist）
+
+**User Notes**:
+- 「自動分析點擊的這條實驗必須要先跑通，我們有個底氣確認核心功能可運作無誤，我們再往下做才有意義」
+- 實驗必須完全依照主專案架構使用的工具（puppeteer-core + CDP），不能用 Playwright
+- 兩階段都跑，值得花 1-2 小時確認清楚
+
+---
+
+## 2026-03-12 16:00 — Phase 2 Foundational 實作完成，Review Point 1
+
+**Goal**: `/speckit.implement` Phase 1 Setup + Phase 2 Foundational 全部實作
+
+**Done**:
+- Phase 1 (T001-T004): project scaffolding, tsconfig, vitest, eslint, prettier
+- Phase 2 (T005-T036 + T007.1/T032.1/T033.1/T035.1): 全部 36 tasks 完成
+- 15 test files, **227 tests passing**, TypeScript compilation clean
+- Modules implemented:
+  - `src/shared/` — types (17 interfaces), errors (8 error types), config, logger
+  - `src/state/` — state-manager (atomic write), task-store (state machine), cache-manager
+  - `src/tab-manager/` — cdp-helpers (5 CDP ops), tab-handle, tab-manager (EventEmitter)
+  - `src/network-gate/` — acquirePermit (fail-open), reportAnomaly (backoff+jitter)
+  - `src/agent/` — agent-loader (YAML frontmatter), client (singleton), hooks (4 lifecycle), session-runner
+  - `src/agent/tools/` — browser-tools (5 tools), state-tools (3 tools), index (factory)
+  - `src/daemon/` — scheduler (per-notebook queues), mcp-server (Streamable HTTP skeleton)
+  - `src/notification/` — notifier (fire-and-forget MCP notification)
+
+**Decisions**:
+- SDK hook types (`SessionHooks`, `PreToolUseHookInput` etc.) defined locally — not re-exported from `@github/copilot-sdk`
+- `PermissionHandler` returns `{ kind: "approved" }` not `{ result: "allow" }`
+- Tool<T> covariance workaround: `as any as Tool<unknown>[]`
+- Zod v4: `z.record()` requires key schema → `z.record(z.string(), z.unknown())`
+- MCP server uses raw `node:http` for Streamable HTTP transport (SDK limitation)
+
+**State**: Branch `001-mvp`. 227 tests pass. At **Review Point 1** — user requested stop for code review before Phase 3.
+
+**Next**:
+- [ ] User code review (Review Point 1)
+- [ ] Phase 3: US1 Daemon lifecycle (T037-T046)
+- [ ] Phases 4-7 for MVP completion
+
+**User Notes**:
+- 「記得做完到第一個 checkpoint 要停下來 review」— 明確要求 Phase 2 完成後停下
+
+---
+
+## 2026-03-12 11:28 — Analyze 修正完成 + Constitution v1.7.0 + Checklist 重建
+
+**Goal**: 處理 analyze report 所有 issues，修正 Constitution，重建 checklist 準備 implement
+
+**Done**:
+- Constitution v1.6.0 → v1.7.0：移除 CodeTour (IX) 和 Review hard gate (X)，精簡為 9 條原則
+  - 核心決策：CodeTour/audit/review 是開發者主動活動，不是 AI executor 約束
+  - 開發迴圈精簡為 4 步：tests → implement → tests pass → commit
+- tasks.md 107 → 114 tasks：補 analyze HIGH issues（+6 tasks, -1 T103 CodeTour）
+  - 新增：T007.1 logging, T032.1/T033.1/T035.1 unit tests, T058.1 description, T095.1 sync
+  - 3 個 Review Point：Phase 2 done → Phase 7 done → Phase 14 done
+- Analyze M1-M5 全部修正：quickstart skills/→agents/, spec profiles/chrome/→profiles/, data-model infer 描述, T102.1 OS notification, 4 組重複 FR alias 標注
+- L2 add_all_notebooks 標注 postponed（傾向 Preview+confirm 兩步模式，MVP 後決定）
+- Checklist 重建：刪除 v1-v2 舊版 3 份，產出對齊 spec v7 的 3 份新版（48 items）
+  - `mcp-agent.md` (17), `browser-state.md` (16), `flow-coverage.md` (15)
+
+**Decisions**:
+- **Review 不是 executor 約束**：Constitution 只管 AI executor 做的事，開發者自己決定何時 /codetour /audit /reviewCode
+- **Review 三個時間點**：Phase 2 (foundational) → Phase 7 (MVP) → Phase 14 (all done)
+- **Checklist 是 pre-planning 產物**：spec 品質檢查，不是 implement gate。但 implement 腳本會看，所以要對齊
+
+**State**: Branch `001-mvp` at `157bae1`。所有 analyze issues 已清完。Checklist 48 items 未勾。準備 `/speckit.implement`。
+
+**Next**:
+- [ ] 勾 checklist（時機待定）
+- [ ] `/speckit.implement` 開始實作 Phase 1 Setup
+
+**User Notes**:
+- Checklist 不需要在 implement 前全部勾完，是開發過程中發現 spec 需要補充的指引
+- Review Point 是告訴 executor 停下來等使用者，不是開發者的備忘
+
+---
+
 ## 2026-03-12 00:13 — SHIP 筆記整理 + tasks.md 產出 + analyze 完成
 
 **Goal**: 整理 SHIP 學習筆記、產出 tasks.md、跑 cross-artifact consistency check
@@ -17,9 +171,9 @@
 **State**: Branch `001-mvp` at `99fe458`。tasks.md 已產出但尚未 commit。analyze 報告已產出（未寫入檔案）。
 
 **Next**:
-- [ ] 決定 analyze 報告的 2 個 CRITICAL（CodeTour 時機、Review gate）處理策略
-- [ ] 補缺失 tasks（FR-044 sync、FR-045~047 description、FR-051 logging、FR-031 timeout、T033-T036 unit tests）
-- [ ] Commit tasks.md
+- [x] 決定 analyze 報告的 2 個 CRITICAL（CodeTour 時機、Review gate）處理策略
+- [x] 補缺失 tasks
+- [x] Commit tasks.md
 - [ ] 開始實作 Phase 1 Setup
 
 **User Notes**:
@@ -28,124 +182,3 @@
 
 ---
 
-## 2026-03-11 17:29 — SHIP 9/9 完成 + Data Model Review + 設計修正
-
-**Goal**: 完成 SHIP 剩餘驗證 + review data model 10 個 entity + 記錄設計洞察
-
-**Done**:
-- SHIP #8 驗證通過（approveAll 安全邊界）— SDK 只有 approveAll，不是選擇題；安全靠三道防線；approveAll 和 onPreToolUse 是不同層級
-- SHIP 9/9 知識點全部完成，學習紀錄更新
-- Commit `dec2275`: Spec v7 + SHIP 完成 + Plan/Research/Quickstart cascade
-- Commit `d8f6750`: 命名修正 skill → agent config（cascade 所有 artifacts）
-- Data model insight-learning review 10 個 entity 全部過完
-- Commit `99fe458`: Data model review 設計修正（7 個修正 + 3 個文件補強）
-- 筆記存到 Obsidian vault
-
-**Decisions**:
-- **approveAll 不是選擇題**：SDK 只提供 approveAll，per-call 機制不存在。安全靠前三道防線，不靠 permission model
-- **AsyncTask vs OperationLog 分離**：context 污染防治。agent 執行時只載入 task（集中），歷史按需載入
-- **OperationLog 是 agent 外部記憶體**：stateless per run 設計下，agent 靠它精確接手中斷任務
-- **ArtifactRecord 補 soft delete**：雲端資料需追溯（與 SourceRecord 同理）
-- **Notification 是 best-effort**：任務完成是我們的責任，通知送達是對方的責任。Pull（get_status）是可靠通道
-- **Main Agent vs Subagent**：Daemon 不是 agent，是 createSession 呼叫者。Main agent 是 Copilot runtime。customAgents 全部是 subagent，只看到自己 config 列的 tools
-- **Agent config 格式 .yaml → .md**：YAML frontmatter + Markdown prompt body，prompt 長文本更自然
-- **AgentConfig 對齊 SDK**：name, displayName, description, tools, prompt, infer + 我們的 parameters 擴展。砍掉 version（YAGNI）
-
-**State**: Branch `001-mvp` at `99fe458`。SHIP 全部完成。Data model review 完成。所有 artifacts 已 commit。
-
-**Next**:
-- [ ] 整理 SHIP 知識點為 Obsidian 筆記
-- [ ] Run `/speckit.tasks` → generate implementation tasks
-- [ ] Run `/speckit.analyze` → cross-artifact consistency check
-- [ ] 開始實作
-
-**User Notes**:
-- SHIP + insight-learning 比 speckit 更深——檢查的是「設計 vs 現實」的矛盾，不只是 artifacts 一致性
-- 資料模型設計要為 agent context 服務（最小 context 精確接手）
-- content/ 模組是 utils layer，agent/tools/ 才是 SDK wrapper
-- 不要依賴 notification 太重，使用者自己負責記得拉結果
-
-## 2026-03-11 00:12 — Copilot SDK insight-learning 完成 8/9 知識點
-
-**Goal**: 用 insight-learning 深入研究 @github/copilot-sdk，建立 9 個機制級心智模型
-
-**Done**:
-- 讀完 SDK source code（client.ts, session.ts, types.ts, generated/rpc.ts）from GitHub API
-- 完成 8/9 知識點（#0~#7 全過，#8 教完待驗證）
-- SHIP Section 7 新增 SDK 深入學習紀錄 + 知識點清單
-- **命名修正決策**：skill → agent config（YAML 就是 CustomAgentConfig，不需另外發明詞）
-  - `skills/` → `agents/`、`skill-loader.ts` → `agent-loader.ts`、`src/skill/` → 併入 `src/agent/`
-- **精確定位**：這是 agent team program（daemon 調度多個 agent），不是 daemon agent program
-
-**Decisions**:
-- SDK 是薄皮，能力在 Copilot CLI（認證、context 管理、infinite sessions、guardrails）
-- BYOK 可用（在 SDK 框架內換 LLM），繞過 CLI 等於重寫 CLI
-- Tool schema 過 JSON-RPC 但 handler 留 Daemon 側（一次 tool call = 兩次 process boundary）
-- fail-open hook 設計（hook crash = 不干預，tool 照跑）→ 對 NetworkGate 可接受
-- **acquirePermit max wait 必須 < sendAndWait timeout**，否則層級反轉（gate > task）
-- Infinite sessions compact 是黑盒不可依賴 → 再次印證「不依賴 session 記憶」正確
-- approveAll 安全性靠前三道防線（tool 白名單 + handler 註冊 + handler 範圍限制）
-- **Vision agent 自我修復 = screenshot + 座標點擊**，不需要 bash/script，不開後門
-- Recovery agent 用同樣 tool 白名單但不同 prompt，搞不定就 escalate
-
-**State**: Branch `001-mvp` at `eed3faa`。SHIP Section 7 已更新。#8 驗證三題待回答。spec v7 + plan.md 仍未 commit。
-
-**Next**:
-- [ ] 完成 #8 驗證（approveAll 安全邊界）→ 更新 SHIP 學習紀錄
-- [ ] Commit spec v7 + SHIP 更新 + plan.md
-- [ ] 更新 plan.md/spec.md/CLAUDE.md 的 skill → agent 命名
-- [ ] Run `/speckit.tasks` to generate implementation tasks
-- [ ] Run `/speckit.analyze` for cross-artifact consistency check
-- [ ] 開始實作
-
-**User Notes**:
-- 用戶對 SDK 與 spec 的高度契合感到驚喜
-- 用戶認為 Skill 應該叫 agent config，因為 agent 只有一種定義（SDK 的 CustomAgentConfig）
-- 「Agent team program」比「daemon agent program」更精確
-- Vision agent 座標點擊是萬能修復工具，不需要給 agent 寫 script 的能力
-
-## 2026-03-10 18:42 — Cascade 完成 + Constitution 精簡 + Agent SDK 修正 + SHIP 完成
-
-**Goal**: 完成所有設計 artifacts 的 cascade 更新，準備進入實作階段
-
-**Done**:
-- Cascade 更新 data-model.md（BrowserInstance→TabHandle, CLI Response→MCP Tool Response, NotificationMessage→MCP Notification Payload, AuthManager/CookieStore 移除）
-- Cascade 更新 research.md（Browser Automation 重寫, Fastify→MCP SDK, Commander.js 移除, Inbox→MCP notification, Hooks 移除, 風險表更新）
-- Cascade 更新 CLAUDE.md（-fastify -commander +@modelcontextprotocol/sdk, 8 模組結構）
-- Commit `28e39e0`: MCP Server 架構 pivot cascade
-- Constitution v1.5.0 → v1.6.0：Principle III 精簡（27→5 行，移除 MCP/TabManager 實作細節下放 spec）；Principle VII 新增 per-resource 寫入保護（禁止 global serialization）；移除「並行與資料流設計約束」章節
-- Commit `c9ceebd`: Constitution v1.6.0
-- **Agent SDK 修正**：所有 artifacts 中 `@anthropic-ai/claude-agent-sdk` → `@github/copilot-sdk`（GitHub Copilot SDK）。CLAUDE.md 新增 CRITICAL 標記，auto memory 寫入防止再次搞混
-- Commit `eed3faa`: Agent SDK 修正
-- SHIP 草稿完成（Problem Statement, Solution Space, 技術決策清單, 橫向掃描）
-- **SHIP B/R/N 全部解除**：用 /insight-learning 走完 10 個知識點，用戶確認所有分類
-- **Spec v6 → v7**：補充 SHIP 解除後的 8 個設計決策（Clarifications Session 2026-03-10 + Edge Cases + Key Entities 更新）
-- **SHIP 文件更新**：`.ship/SHIP-notebooklm-controller@20260310.md` — 所有 Block 解除、Spike 1 範圍縮小、新增 Section 6 設計洞察
-
-**Decisions**:
-- Constitution 不放實作細節（MCP、TabManager、CDP）→ 只放原則，具體架構在 spec
-- 磁碟 I/O 保護改為 per-resource per-file，禁止 global serialization（避免過度設計）
-- Agent SDK: `@github/copilot-sdk`（GitHub Copilot SDK），不是 Claude Agent SDK — 用戶多次強調
-- MCP 和 CLI 不衝突：MVP 先用 MCP，日後可加 thin CLI wrapper
-- **Daemon vs Agent 分工**：Daemon 是指揮者（調度、全局狀態），Agent 是執行者（自主使用 tool）
-- **Agent conceptually stateless per run**：Task 切細粒度、每步進度外部化、任何 agent 可接手
-- **Shutdown = 直接殺**：不做 graceful shutdown，task queue 恢復
-- **Chrome must stay alive**：disconnected → 通知 agent → 重啟 → task queue 接手
-- **429 偵測是 agent 的事**：不規範方式，提供 reportRateLimit tool
-- **MCP notification fire-and-forget**：不補發，client pull-based
-- **PID file 雙重檢查**：{ pid, startedAt } 防 PID 重用
-- **Tool 自包原則**：screenshot tool 自行截圖+轉換，daemon 不中轉
-
-**State**: Branch `001-mvp` at `eed3faa`（未 commit spec v7 和 SHIP 更新）。SHIP 開工條件滿足。用戶嘗試 `/speckit.plan` 但中斷。
-
-**Next**:
-- [ ] Commit spec v7 + SHIP 更新
-- [ ] Run `/speckit.plan` to generate implementation plan
-- [ ] Run `/speckit.tasks` to generate implementation tasks
-- [ ] Run `/speckit.analyze` for cross-artifact consistency check
-- [ ] 開始實作
-
-**User Notes**:
-- 用戶要求「把 SHIP 全存起來」
-- SHIP 產出是 notebooklm-controller daemon（不只是 MCP 研究），MCP 是其中一環
-- Agent SDK 是 GitHub Copilot SDK，已反覆強調，寫入 CLAUDE.md CRITICAL 區塊和 auto memory

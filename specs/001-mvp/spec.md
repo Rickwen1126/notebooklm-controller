@@ -734,7 +734,7 @@ MCP client 自動收到完成通知。
 
 3. **Given** 非同步操作 abc123 失敗，
    **When** daemon 完成操作，
-   **Then** daemon 透過 MCP notification 推送錯誤通知（標記為 urgent），
+   **Then** daemon 透過 MCP notification 推送錯誤通知（`status: "failed"`），
    AI 工具收到錯誤通知，能向使用者說明失敗原因。
 
 4. **Given** 沒有任何待處理通知，
@@ -1040,7 +1040,7 @@ notebook 包含哪些來源是一種認知負擔。
   每步進度外部化，因此最多重做一個小步驟。
 - **使用者主動取消 `running` 任務**：agent 在安全點停止（不保證立即中止），
   視覺操作可能已部分完成，不自動回滾。
-- **通知優先級**：失敗操作（urgent）優先推送。
+- **通知無優先級**：所有通知 fire-and-forget，client 透過 `status` 欄位區分成功/失敗。
 
 **瀏覽器抽象**:
 - **底層實作切換後**：daemon 重建 TabManager，
@@ -1051,7 +1051,8 @@ notebook 包含哪些來源是一種認知負擔。
 **內容與互動**:
 - **NotebookLM UI 更新**：vision-based agent 應能適應 UI 變化，
   若關鍵元素無法辨識，回報錯誤而非崩潰。
-- **超大內容超過 500K 字限制**：回報錯誤建議使用者手動分割。
+- **超大內容超過 500K 字限制**：所有 text source（repo、URL、PDF）皆適用 NotebookLM 的 500K 字限制。
+  超過時回報錯誤建議使用者手動分割。具體限制值需實測確認，以實測結果為準。
 - **無效 notebook URL**：驗證 URL 格式，拒絕非 NotebookLM 網域。
 - **網路斷線中途**：agent 操作應有 timeout，失敗時回報當前狀態截圖。
 - **NotebookLM 回答含圖片或表格**：純文字擷取，圖片以佔位符替代，
@@ -1139,6 +1140,10 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-022**: 系統 MUST 在每次操作後更新 notebook 狀態快取（post-op sync）。
 - **FR-023**: 系統 MUST 將已註冊 notebook 清單持久化至磁碟，支援重啟後復原。
 - **FR-024**: 系統 MUST 在無法啟動 Chrome 或連線中斷時提供清楚錯誤訊息，不崩潰。
+- **FR-025**: `exec` tool 對非 `ready`/`operating` 狀態的 notebook MUST 依狀態區分處理：
+  - `stale`（URL 無效）：直接回報錯誤 `{ "success": false, "error": "Notebook '<alias>' is stale (URL invalid). 呼叫 remove_notebook 移除或重新確認 URL。" }`，不嘗試連線。
+  - `error`（連線錯誤）：嘗試重新開 tab 連線一次，成功則繼續執行，失敗則回報錯誤。
+  - `closed`（非 active）：自動 open（標記 active + 開 tab），然後繼續執行。
 
 **智慧選擇**:
 - **FR-028**: Agent MUST 能在使用者未指定 notebook 時，根據指令內容
@@ -1211,6 +1216,9 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-051**: Daemon MUST 對每個 agent 操作步驟記錄結構化日誌
   （進入/退出時間、tool 呼叫、截圖事件、錯誤），
   確保能事後診斷卡住或異常的操作。
+  每條日誌 MUST 帶 correlation fields：`taskId`、`notebookAlias`、`actionType`，
+  確保可從工單（OperationLogEntry）追蹤到完整的 agent 執行細節。
+  日誌格式 MUST 為 JSON，MUST 區分 log levels（info/warn/error）。
 
 **建立新筆記本**:
 - **FR-052**: Agent MUST 能透過 NotebookLM UI 建立新的筆記本
@@ -1235,11 +1243,13 @@ notebook 包含哪些來源是一種認知負擔。
 **非同步操作** (FR-100 series):
 - **FR-100**: 系統 MUST 支援 `exec` MCP tool 帶 `async: true` 參數模式，
   立即返回 `{ "taskId": "<id>", "status": "queued", "notebook": "<notebook-id>", "hint": "..." }`。
-- **FR-101**: `get_status` MCP tool MUST 依據參數區分三種模式：
+- **FR-101**: `get_status` MCP tool MUST 依據參數區分查詢模式：
   - 無參數：回報 daemon 級別狀態（running、browser、network health、task 摘要）。
   - `taskId`：查詢特定非同步操作的狀態與結果。
   - `all: true`：列出所有近期操作（預設最近 20 筆），MUST 支援 `notebook` 參數篩選。
   - `recent: true`：列出近期已完成但未被通知推送的操作（client 斷線 fallback）。
+  - 參數衝突時優先級：`all` > `recent` > `taskId` > 無參數。
+    設計原則：fail-open，衝突時回傳更多資料（浪費 token 可接受，漏資訊不行）。
 - **FR-103**: `exec` tool 不帶 `async` 參數時 MUST 維持同步行為。
 - **FR-104**: `exec` tool 帶 `async: true` 時 SHOULD 支援 `context` 參數，
   附帶操作情境描述，出現在完成通知中。
@@ -1313,6 +1323,8 @@ notebook 包含哪些來源是一種認知負擔。
   自動繼承已登入的 Google session，無需 cookie injection。
 - **FR-147**: 系統 MUST 偵測 session 過期（302 redirect to login），
   通知使用者呼叫 `reauth` tool 重新認證。
+- **FR-148**: `reauth` tool 只負責恢復 Google session，不自動重試先前因認證失敗的操作。
+  使用者 MUST 自行重新提交先前失敗的操作。設計原則：不做過度設計，避免「哪些 task 該重試」的複雜度。
 
 **Agent Config 參數化** (FR-150 series):
 - **FR-150**: Agent 操作定義 MUST 以外部化的 agent config（YAML → CustomAgentConfig）描述，
@@ -1345,6 +1357,8 @@ notebook 包含哪些來源是一種認知負擔。
   偵測後 `reportAnomaly()` 觸發全域 backoff，所有 agent 暫停操作。
 - **FR-192**: 偵測到 throttling 時 MUST 套用 exponential backoff（初始 5s，
   上限 5 min），backoff 期間 `acquirePermit()` 等待直到 backoff 結束。
+- **FR-195**: `acquirePermit()` 本身異常（NetworkGate 內部錯誤）時 MUST fail-open——
+  操作繼續執行，不因 gate 故障阻塞 agent。記錄警告日誌。
 - **FR-193**: NetworkGate MUST 監控網路斷線與恢復，
   斷線時暫停所有操作並通知使用者，恢復後自動恢復 permit 發放。
 - **FR-194**: NetworkGate MUST 透過 `getHealth()` 和 `get_status` tool 回報
