@@ -245,6 +245,41 @@ describe("StateManager", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Concurrent mutation safety (write mutex)
+  // -------------------------------------------------------------------------
+
+  describe("concurrent mutation safety", () => {
+    it("two concurrent addNotebook calls both persist", async () => {
+      const entryA = makeNotebookEntry("nb-a");
+      const entryB = makeNotebookEntry("nb-b");
+
+      // Fire both without awaiting — they run concurrently
+      await Promise.all([
+        manager.addNotebook(entryA),
+        manager.addNotebook(entryB),
+      ]);
+
+      const state = await manager.load();
+      expect(state.notebooks["nb-a"]).toEqual(entryA);
+      expect(state.notebooks["nb-b"]).toEqual(entryB);
+    });
+
+    it("concurrent updateDaemon + addNotebook both persist", async () => {
+      const entry = makeNotebookEntry("nb-c");
+
+      await Promise.all([
+        manager.updateDaemon({ pid: 7777, port: 5555 }),
+        manager.addNotebook(entry),
+      ]);
+
+      const state = await manager.load();
+      expect(state.pid).toBe(7777);
+      expect(state.port).toBe(5555);
+      expect(state.notebooks["nb-c"]).toEqual(entry);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Crash recovery
   // -------------------------------------------------------------------------
 

@@ -279,4 +279,39 @@ describe("runSession", () => {
     const createArg = mockCreateSession.mock.calls[0][0];
     expect(createArg.model).toBe(DEFAULT_AGENT_MODEL);
   });
+
+  // T041.6: Response validation
+  it("warns when sendAndWait returns null response", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    mockSendAndWait.mockResolvedValue(null);
+
+    const result = await runSession(makeOptions(), "silent prompt");
+
+    expect(result.success).toBe(true);
+    expect(result.result).toBeUndefined();
+
+    // Verify the warning was logged (structured JSON to stderr).
+    const warnCall = stderrSpy.mock.calls.find((call) => {
+      const line = String(call[0]);
+      return line.includes('"level":"warn"') && line.includes("sendAndWait returned null response");
+    });
+    expect(warnCall).toBeDefined();
+
+    stderrSpy.mockRestore();
+  });
+
+  // T041.7: Disconnect hang guard
+  it("disconnect timeout does not block session result", async () => {
+    // Mock disconnect to never resolve (simulates a hang).
+    mockDisconnect.mockReturnValue(new Promise(() => {}));
+
+    const start = Date.now();
+    const result = await runSession(makeOptions(), "test prompt");
+    const elapsed = Date.now() - start;
+
+    expect(result.success).toBe(true);
+    expect(result.result).toBe("Hello from agent");
+    // The 5s disconnect timeout should fire; total time should be well under 10s.
+    expect(elapsed).toBeLessThan(10_000);
+  }, 15_000);
 });

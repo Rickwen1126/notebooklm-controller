@@ -106,6 +106,14 @@ export async function runSession(
     // 3. Send prompt and wait for completion with timeout.
     const response = await session.sendAndWait({ prompt }, timeoutMs);
 
+    // T041.6: Response validation — log response shape for debugging.
+    if (!response) {
+      log.warn("sendAndWait returned null response", {
+        sessionId: session.sessionId,
+      });
+    }
+
+    const content = response?.data?.content ?? undefined;
     const durationMs = Date.now() - startTime;
 
     log.info("Session completed successfully", {
@@ -116,7 +124,7 @@ export async function runSession(
 
     return {
       success: true,
-      result: response?.data?.content ?? undefined,
+      result: content,
       durationMs,
     };
   } catch (err: unknown) {
@@ -136,9 +144,15 @@ export async function runSession(
     };
   } finally {
     // 4. Always disconnect the session to release resources.
+    //    T041.7: Wrap with timeout guard so a hanging disconnect() doesn't block the scheduler.
     if (session) {
       try {
-        await session.disconnect();
+        await Promise.race([
+          session.disconnect(),
+          new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error("disconnect timeout")), 5_000),
+          ),
+        ]);
       } catch (disconnectErr: unknown) {
         const msg =
           disconnectErr instanceof Error

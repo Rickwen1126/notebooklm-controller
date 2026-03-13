@@ -5,9 +5,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // We simulate the CopilotClient from @github/copilot-sdk.
 // ---------------------------------------------------------------------------
 
-/** Fake process-exit callback captured during construction. */
-let onProcessExitCallback: (() => void) | null = null;
-
 const mockStart = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
 const mockStop = vi
   .fn<() => Promise<Error[]>>()
@@ -42,7 +39,6 @@ vi.mock("@github/copilot-sdk", () => ({
 }));
 
 // Import after mock is set up.
-// eslint-disable-next-line @typescript-eslint/consistent-type-imports
 let CopilotClientSingleton: typeof import("../../../src/agent/client.js").CopilotClientSingleton;
 
 beforeEach(async () => {
@@ -56,7 +52,6 @@ beforeEach(async () => {
   // Reset all mocks.
   vi.clearAllMocks();
   mockGetState.mockReturnValue("disconnected");
-  onProcessExitCallback = null;
 });
 
 afterEach(() => {
@@ -192,37 +187,13 @@ describe("CopilotClientSingleton", () => {
   });
 
   describe("autoRestart", () => {
-    it("should restart the client when it exits unexpectedly", async () => {
+    it("should pass autoRestart: true to the SDK client", () => {
       const client = CopilotClientSingleton.getInstance();
-
-      // Simulate: start succeeds, then process exits, triggering auto-restart.
-      mockGetState.mockReturnValue("connected");
-      await client.start();
-      expect(mockStart).toHaveBeenCalledOnce();
-
-      // Simulate the underlying client disconnecting unexpectedly.
-      // Our implementation polls getState or uses the SDK's event system.
-      // We simulate by changing state to "disconnected" and triggering
-      // the restart check.
-      mockGetState.mockReturnValue("disconnected");
-
-      // Trigger the restart logic.
-      await client._handleUnexpectedExit();
-
-      // The SDK client.start() should have been called again.
-      expect(mockStart).toHaveBeenCalledTimes(2);
-    });
-
-    it("should not restart when stop is called intentionally", async () => {
-      const client = CopilotClientSingleton.getInstance();
-      mockGetState.mockReturnValue("connected");
-      await client.start();
-
-      mockGetState.mockReturnValue("disconnected");
-      await client.stop();
-
-      // After intentional stop, start should not have been called again.
-      expect(mockStart).toHaveBeenCalledOnce();
+      // The underlying FakeCopilotClient captures constructor options.
+      // Verify autoRestart is delegated to the SDK.
+      const underlying = (client as unknown as { client: FakeCopilotClient })
+        .client;
+      expect(underlying.options.autoRestart).toBe(true);
     });
   });
 });

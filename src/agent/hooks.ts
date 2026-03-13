@@ -108,6 +108,9 @@ export function createSessionHooks(context: HooksContext): SessionHooks {
   });
 
   const sessionStartTime = Date.now();
+  let toolCallCount = 0;
+  let errorCount = 0;
+  let lastToolStartTime = 0;
 
   // -------------------------------------------------------------------------
   // onPreToolUse
@@ -118,12 +121,15 @@ export function createSessionHooks(context: HooksContext): SessionHooks {
     invocation: { sessionId: string },
   ): Promise<PreToolUseHookOutput | void> => {
     const { toolName } = input;
+    toolCallCount++;
+    lastToolStartTime = Date.now();
 
     // Structured logging with correlation context (FR-051).
     log.info("Tool invocation starting", {
       actionType: toolName,
       sessionId: invocation.sessionId,
       toolName,
+      toolCallIndex: toolCallCount,
     });
 
     // Acquire a network permit before each tool call.
@@ -149,9 +155,13 @@ export function createSessionHooks(context: HooksContext): SessionHooks {
     input: PostToolUseHookInput,
     _invocation: { sessionId: string },
   ): Promise<PostToolUseHookOutput | void> => {
+    const toolDurationMs = lastToolStartTime > 0 ? Date.now() - lastToolStartTime : undefined;
+
     log.info("Tool invocation completed", {
       actionType: input.toolName,
       resultType: input.toolResult.resultType,
+      toolDurationMs,
+      toolCallIndex: toolCallCount,
     });
 
     return undefined;
@@ -167,12 +177,14 @@ export function createSessionHooks(context: HooksContext): SessionHooks {
   ): Promise<ErrorOccurredHookOutput | void> => {
     const { error, errorContext, recoverable } = input;
     const handling = classifyError(error);
+    errorCount++;
 
     log.error("Error occurred during session", {
       error,
       errorContext,
       recoverable,
       handling,
+      errorIndex: errorCount,
     });
 
     return {
@@ -198,12 +210,14 @@ export function createSessionHooks(context: HooksContext): SessionHooks {
     log.info("Session ended", {
       reason: input.reason,
       durationMs,
+      totalToolCalls: toolCallCount,
+      totalErrors: errorCount,
       finalMessage: input.finalMessage,
       error: input.error,
     });
 
     return {
-      sessionSummary: `Session completed in ${durationMs}ms (reason: ${input.reason})`,
+      sessionSummary: `Session completed in ${durationMs}ms (reason: ${input.reason}, tools: ${toolCallCount}, errors: ${errorCount})`,
     };
   };
 

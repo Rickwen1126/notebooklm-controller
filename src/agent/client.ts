@@ -4,7 +4,7 @@
  * Responsibilities:
  *   - Singleton access via getInstance() / resetInstance()
  *   - start() / stop() lifecycle (guards against double-start)
- *   - autoRestart on unexpected process exit
+ *   - Delegates restart to SDK via `autoRestart: true`
  *   - Exposes the underlying SDK CopilotClient for session creation
  */
 
@@ -54,8 +54,6 @@ export class CopilotClientSingleton {
 
   private client: CopilotClient;
   private started = false;
-  private intentionalStop = false;
-  private restartInProgress = false;
 
   private constructor(options?: CopilotClientOptions) {
     this.client = new CopilotClient({
@@ -80,8 +78,6 @@ export class CopilotClientSingleton {
       );
     }
 
-    this.intentionalStop = false;
-
     log.info("Starting Copilot CLI client");
     await this.client.start();
     this.started = true;
@@ -98,7 +94,6 @@ export class CopilotClientSingleton {
       return;
     }
 
-    this.intentionalStop = true;
     log.info("Stopping Copilot CLI client");
 
     const errors = await this.client.stop();
@@ -141,45 +136,4 @@ export class CopilotClientSingleton {
     return this.client;
   }
 
-  // -----------------------------------------------------------------------
-  // Auto-restart
-  // -----------------------------------------------------------------------
-
-  /**
-   * Handle an unexpected process exit (auto-restart logic).
-   *
-   * Called when the SDK reports that the CLI process exited without an
-   * intentional `stop()` call. If `autoRestart` is enabled (default),
-   * this will attempt to restart the client.
-   *
-   * Exposed with an underscore prefix so tests can trigger it directly;
-   * production code wires this up via SDK lifecycle events.
-   */
-  async _handleUnexpectedExit(): Promise<void> {
-    if (this.intentionalStop) {
-      log.info("Copilot CLI exited after intentional stop — no restart");
-      return;
-    }
-
-    if (this.restartInProgress) {
-      log.warn("Restart already in progress — skipping");
-      return;
-    }
-
-    log.warn("Copilot CLI exited unexpectedly — attempting restart");
-    this.restartInProgress = true;
-
-    try {
-      // Mark as not started so start() guard passes.
-      this.started = false;
-      await this.start();
-      log.info("Copilot CLI restarted successfully");
-    } catch (err) {
-      log.error("Failed to restart Copilot CLI", {
-        error: String(err),
-      });
-    } finally {
-      this.restartInProgress = false;
-    }
-  }
 }

@@ -206,8 +206,23 @@ describe("createSessionHooks", () => {
           toolName: "screenshot",
           actionType: "screenshot",
           sessionId: "sess-123",
+          toolCallIndex: 1,
         }),
       );
+    });
+
+    it("increments toolCallIndex across multiple invocations", async () => {
+      mockChildLogger.info.mockClear();
+      const hooks = createSessionHooks(context);
+
+      await hooks.onPreToolUse!(makePreToolUseInput({ toolName: "tool_a" }), INVOCATION);
+      await hooks.onPreToolUse!(makePreToolUseInput({ toolName: "tool_b" }), INVOCATION);
+
+      const calls = mockChildLogger.info.mock.calls.filter(
+        (c: unknown[]) => c[0] === "Tool invocation starting",
+      );
+      expect(calls[0][1].toolCallIndex).toBe(1);
+      expect(calls[1][1].toolCallIndex).toBe(2);
     });
   });
 
@@ -223,6 +238,27 @@ describe("createSessionHooks", () => {
         INVOCATION,
       );
       expect(result).toBeUndefined();
+    });
+
+    it("logs tool duration and call index (FR-051)", async () => {
+      mockChildLogger.info.mockClear();
+      const hooks = createSessionHooks(context);
+
+      // Pre → Post sequence to get timing
+      await hooks.onPreToolUse!(makePreToolUseInput({ toolName: "click" }), INVOCATION);
+      await hooks.onPostToolUse!(makePostToolUseInput({ toolName: "click" }), INVOCATION);
+
+      const postCall = mockChildLogger.info.mock.calls.find(
+        (c: unknown[]) => c[0] === "Tool invocation completed",
+      );
+      expect(postCall).toBeDefined();
+      expect(postCall![1]).toEqual(
+        expect.objectContaining({
+          actionType: "click",
+          toolDurationMs: expect.any(Number),
+          toolCallIndex: 1,
+        }),
+      );
     });
   });
 
@@ -426,6 +462,25 @@ describe("createSessionHooks", () => {
       expect(result?.sessionSummary).toMatch(/completed in \d+ms/);
     });
 
+    it("includes aggregate tool and error counts in summary (FR-051)", async () => {
+      const hooks = createSessionHooks(context);
+
+      // Simulate 2 tool calls and 1 error
+      await hooks.onPreToolUse!(makePreToolUseInput({ toolName: "click" }), INVOCATION);
+      await hooks.onPostToolUse!(makePostToolUseInput({ toolName: "click" }), INVOCATION);
+      await hooks.onPreToolUse!(makePreToolUseInput({ toolName: "type" }), INVOCATION);
+      await hooks.onPostToolUse!(makePostToolUseInput({ toolName: "type" }), INVOCATION);
+      await hooks.onErrorOccurred!(makeErrorInput({ error: "timeout" }), INVOCATION);
+
+      const result = await hooks.onSessionEnd!(
+        makeSessionEndInput(),
+        INVOCATION,
+      );
+
+      expect(result?.sessionSummary).toContain("tools: 2");
+      expect(result?.sessionSummary).toContain("errors: 1");
+    });
+
     it("logs session end with duration", async () => {
       // Reset the child logger spies so we get a clean slate.
       mockChildLogger.info.mockClear();
@@ -442,6 +497,8 @@ describe("createSessionHooks", () => {
         expect.objectContaining({
           reason: "error",
           durationMs: expect.any(Number),
+          totalToolCalls: expect.any(Number),
+          totalErrors: expect.any(Number),
           error: "boom",
         }),
       );
@@ -464,6 +521,8 @@ describe("createSessionHooks", () => {
         );
 
         expect(result?.sessionSummary).toContain(`reason: ${reason}`);
+        expect(result?.sessionSummary).toContain("tools:");
+        expect(result?.sessionSummary).toContain("errors:");
       }
     });
   });

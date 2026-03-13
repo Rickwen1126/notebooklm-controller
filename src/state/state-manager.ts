@@ -26,9 +26,28 @@ function createDefaultState(): DaemonState {
 
 class StateManager {
   private readonly statePath: string;
+  private _lock: Promise<void> = Promise.resolve();
 
   constructor(statePath?: string) {
     this.statePath = statePath ?? STATE_FILE;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Write mutex — serializes load→mutate→save sequences
+  // ---------------------------------------------------------------------------
+
+  private async withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = this._lock;
+    let release!: () => void;
+    this._lock = new Promise<void>((r) => {
+      release = r;
+    });
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -70,32 +89,38 @@ class StateManager {
   }
 
   async addNotebook(entry: NotebookEntry): Promise<void> {
-    const state = await this.load();
-    state.notebooks[entry.alias] = entry;
-    await this.save(state);
+    return this.withLock(async () => {
+      const state = await this.load();
+      state.notebooks[entry.alias] = entry;
+      await this.save(state);
+    });
   }
 
   async updateNotebook(alias: string, updates: Partial<NotebookEntry>): Promise<void> {
-    const state = await this.load();
-    const existing = state.notebooks[alias];
-    if (!existing) {
-      throw new NotebookNotFoundError(alias);
-    }
-    state.notebooks[alias] = { ...existing, ...updates };
-    await this.save(state);
+    return this.withLock(async () => {
+      const state = await this.load();
+      const existing = state.notebooks[alias];
+      if (!existing) {
+        throw new NotebookNotFoundError(alias);
+      }
+      state.notebooks[alias] = { ...existing, ...updates };
+      await this.save(state);
+    });
   }
 
   async removeNotebook(alias: string): Promise<void> {
-    const state = await this.load();
-    if (!state.notebooks[alias]) {
-      throw new NotebookNotFoundError(alias);
-    }
-    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
-    delete state.notebooks[alias];
-    if (state.defaultNotebook === alias) {
-      state.defaultNotebook = null;
-    }
-    await this.save(state);
+    return this.withLock(async () => {
+      const state = await this.load();
+      if (!state.notebooks[alias]) {
+        throw new NotebookNotFoundError(alias);
+      }
+      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+      delete state.notebooks[alias];
+      if (state.defaultNotebook === alias) {
+        state.defaultNotebook = null;
+      }
+      await this.save(state);
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -103,12 +128,14 @@ class StateManager {
   // ---------------------------------------------------------------------------
 
   async setDefault(alias: string | null): Promise<void> {
-    const state = await this.load();
-    if (alias !== null && !state.notebooks[alias]) {
-      throw new NotebookNotFoundError(alias);
-    }
-    state.defaultNotebook = alias;
-    await this.save(state);
+    return this.withLock(async () => {
+      const state = await this.load();
+      if (alias !== null && !state.notebooks[alias]) {
+        throw new NotebookNotFoundError(alias);
+      }
+      state.defaultNotebook = alias;
+      await this.save(state);
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -120,11 +147,13 @@ class StateManager {
     startedAt?: string | null;
     port?: number;
   }): Promise<void> {
-    const state = await this.load();
-    if (updates.pid !== undefined) state.pid = updates.pid;
-    if (updates.startedAt !== undefined) state.startedAt = updates.startedAt;
-    if (updates.port !== undefined) state.port = updates.port;
-    await this.save(state);
+    return this.withLock(async () => {
+      const state = await this.load();
+      if (updates.pid !== undefined) state.pid = updates.pid;
+      if (updates.startedAt !== undefined) state.startedAt = updates.startedAt;
+      if (updates.port !== undefined) state.port = updates.port;
+      await this.save(state);
+    });
   }
 
   // ---------------------------------------------------------------------------
