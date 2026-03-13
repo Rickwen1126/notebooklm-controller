@@ -18,12 +18,12 @@ vi.mock("@github/copilot-sdk", () => ({
 
 // Import module under test after mocks are established.
 import { runSession } from "../../../src/agent/session-runner.js";
-import type {
-  SessionRunnerOptions,
-  SessionResult,
-} from "../../../src/agent/session-runner.js";
+import type { SessionRunnerOptions } from "../../../src/agent/session-runner.js";
 import type { CopilotClientSingleton } from "../../../src/agent/client.js";
-import { DEFAULT_SESSION_TIMEOUT_MS } from "../../../src/shared/config.js";
+import {
+  DEFAULT_SESSION_TIMEOUT_MS,
+  DEFAULT_AGENT_MODEL,
+} from "../../../src/shared/config.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -260,5 +260,23 @@ describe("runSession", () => {
 
     const createArg = mockCreateSession.mock.calls[0][0];
     expect(createArg.onPermissionRequest).toBe(customHandler);
+  });
+
+  it("passes model to createSession when specified", async () => {
+    const options = makeOptions({ model: "gpt-4o" });
+
+    await runSession(options, "test prompt");
+
+    expect(mockCreateSession).toHaveBeenCalledOnce();
+    const createArg = mockCreateSession.mock.calls[0][0];
+    expect(createArg.model).toBe("gpt-4o");
+  });
+
+  it("uses DEFAULT_AGENT_MODEL when model is not specified", async () => {
+    await runSession(makeOptions(), "test prompt");
+
+    expect(mockCreateSession).toHaveBeenCalledOnce();
+    const createArg = mockCreateSession.mock.calls[0][0];
+    expect(createArg.model).toBe(DEFAULT_AGENT_MODEL);
   });
 });

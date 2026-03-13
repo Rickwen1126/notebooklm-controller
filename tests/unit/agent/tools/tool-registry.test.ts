@@ -78,8 +78,8 @@ function createMockCacheManager() {
 // Expected tool names
 // ---------------------------------------------------------------------------
 
-/** Browser tools: screenshot, click, type, scroll, paste */
-const BROWSER_TOOL_NAMES = ["screenshot", "click", "type", "scroll", "paste"];
+/** Browser tools: screenshot, click, type, scroll, paste, find, read, navigate, wait */
+const BROWSER_TOOL_NAMES = ["screenshot", "click", "type", "scroll", "paste", "find", "read", "navigate", "wait"];
 
 /** State tools: reportRateLimit, updateCache, writeFile */
 const STATE_TOOL_NAMES = ["reportRateLimit", "updateCache", "writeFile"];
@@ -145,7 +145,7 @@ describe("tool-registry (buildToolsForTab)", () => {
     }
   });
 
-  it("tools count matches expected total (5 browser + 3 state = 8)", () => {
+  it("tools count matches expected total (9 browser + 3 state = 12)", () => {
     const tabHandle = createMockTabHandle();
     const tools = buildToolsForTab(tabHandle, "my-notebook", {
       networkGate: createMockNetworkGate() as any,
@@ -153,7 +153,7 @@ describe("tool-registry (buildToolsForTab)", () => {
     });
 
     expect(tools).toHaveLength(BROWSER_TOOL_NAMES.length + STATE_TOOL_NAMES.length);
-    expect(tools).toHaveLength(8);
+    expect(tools).toHaveLength(12);
   });
 
   it("browser tools appear before state tools in the returned array", () => {
@@ -165,9 +165,9 @@ describe("tool-registry (buildToolsForTab)", () => {
 
     const names = tools.map((t) => t.name);
 
-    // First 5 should be browser tools, last 3 should be state tools
-    expect(names.slice(0, 5)).toEqual(BROWSER_TOOL_NAMES);
-    expect(names.slice(5)).toEqual(STATE_TOOL_NAMES);
+    // First 9 should be browser tools, last 3 should be state tools
+    expect(names.slice(0, 9)).toEqual(BROWSER_TOOL_NAMES);
+    expect(names.slice(9)).toEqual(STATE_TOOL_NAMES);
   });
 
   it("each tool has name, description, parameters, and handler", () => {

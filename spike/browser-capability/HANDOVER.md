@@ -19,6 +19,8 @@
 | Phase B（Copilot SDK runtime） | ✅ PASS — 20 tool calls, 86-136s, 完整 flow |
 | Phase B+（GPT-4.1 免費模型） | ✅ PASS — 24 tool calls, 60.7s, 比預設快 36% |
 | Phase C（Enhanced tools v2 + agent autonomy） | ✅ PASS — 22 tool calls, 55.7s |
+| Phase D（全操作實測） | ✅ PASS — 40+ 操作全通過，9 tools 充分 |
+| Phase E（CustomAgents 生產模擬） | ⚠️ 架構限制 — sub-agent 無法取得 custom tools |
 | Chrome | 仍在跑 port 9222，spike profile |
 
 ## 檔案結構
@@ -27,7 +29,8 @@
 spike/browser-capability/
 ├── experiment.ts          # 主實驗 script（7 個 tool commands）
 ├── phase-b.ts             # Copilot SDK runtime 驗證腳本
-├── results.md             # Phase A-D 詳細結果
+├── phase-e.ts             # CustomAgents 生產模擬腳本
+├── results.md             # Phase A-E 詳細結果
 ├── HANDOVER.md            # 本文件
 ├── agent-guide.md         # Agent system prompt 操作準則（→ 主線 agent prompt 基礎）
 ├── ui-maps/               # i18n UI element config
@@ -574,6 +577,59 @@ browser.on("targetcreated", async (target) => {
 
 **MVP 影響**：Google Drive 來源需要，但 MVP 只做 paste/URL，可延後。
 
+## Phase E — CustomAgents 生產模擬 (2026-03-13, session 6)
+
+### 目標
+
+驗證 Copilot SDK `customAgents[]` 架構：載入 `agents/*.md` config → `CustomAgentConfig[]`，用自然語言讓 main agent 自動路由到 sub-agent 執行 browser 操作。
+
+### 測試腳本
+
+`phase-e.ts` — 載入 10 個 agent config（add-source, clear-chat, download-audio, generate-audio, list-sources, manage-notebook, query, remove-source, rename-source, sync-notebook），解析 YAML frontmatter + Markdown body，渲染 `{{NOTEBOOKLM_KNOWLEDGE}}` 模板，建立 session 並送自然語言 prompt。
+
+### 測試結果
+
+| 測試 | 配置 | 結果 | 耗時 | Tool calls |
+|------|------|------|------|-----------|
+| Test 1: filtered tools | `tools: ["read", "find", "screenshot"]` | ⚠️ Sub-agent 無 custom tools → main agent fallback 自己完成 | 42s | 5 |
+| Test 2: all tools | `tools: undefined` (= all) | ❌ 無限 sub-agent 遞迴 + 用 bash 完成 | 5min (timeout) | 66 |
+
+### 關鍵發現 — Finding #39
+
+**`defineTool()` 定義的 custom external tools 不會被注入到 sub-agents。**
+
+Sub-agents 只看到 built-in tools（bash, view, edit 等），不看到 session 層的 custom tools（find, read, click, screenshot 等）。
+
+證據：
+- Test 1：sub-agent prompt 說要用 `read(".source-panel")`，但實際呼叫了 built-in `view`（permission.requested），不是 custom `read`（external_tool.requested）
+- Test 2：sub-agent 給了 `tools: undefined`（所有 tools），但仍未呼叫任何 custom tool，最終靠 `bash` 完成
+- Main agent 的 fallback 正確使用了 custom tools（external_tool.requested + external_tool.completed）
+
+### 架構影響 — Finding #40
+
+`CustomAgentConfig.tools` 只過濾 built-in tools，custom tools 需要走 **MCP** 才能暴露給 sub-agents。
+
+**可行方案（按優先順序）：**
+
+1. **MCP Tools**：把 browser tools 註冊為 MCP server tools，sub-agents 透過 `mcpServers` 設定取得 → 符合 spec 原始設計（daemon = MCP Server）
+2. **Main agent 單層**：不用 sub-agents，main agent 直接用 custom tools + 操作指令集（system prompt routing）→ 簡單但失去模組化
+3. **Bash wrapper**：包 browser tools 為 CLI scripts，sub-agents 透過 bash 呼叫 → hack，不推薦
+
+**推薦方案 1（MCP Tools）**：這與 spec 設計一致 — daemon 本身就是 MCP Server（Streamable HTTP），browser tools 本來就要以 MCP tool 形式暴露。Sub-agents 透過 `customAgents[].mcpServers` 連接 daemon 取得 tools。
+
+### 驗證通過的部分
+
+儘管 sub-agent 無法使用 custom tools，以下部分已驗證成功：
+- ✅ Agent config 載入（YAML frontmatter parsing, template rendering）
+- ✅ UI map locale 解析 + template variable 注入
+- ✅ `{{NOTEBOOKLM_KNOWLEDGE}}` 共享知識模板渲染
+- ✅ Main agent 意圖辨識 + 路由判斷（正確選擇 task:list-sources）
+- ✅ CopilotClient lifecycle（start → createSession → sendAndWait → disconnect → stop）
+- ✅ Event observer 完整捕捉所有 session events
+- ✅ Main agent fallback 正確使用 custom tools 完成任務
+
 ### 總結
 
-**可以回到主線開發。** 9 tool + 上述 TabManager 基礎設施 = 完整覆蓋所有 spec 操作。
+**可以回到主線開發。** 9 tools + TabManager 基礎設施 = 完整覆蓋所有 spec 操作。
+
+Agent 架構確認：custom tools 需透過 MCP 暴露給 sub-agents，這與 spec 的 MCP Server daemon 設計一致。`agents/*.md` config、`_knowledge.md` 共享模板、UI map i18n 機制皆已驗證可用。

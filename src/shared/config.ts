@@ -101,3 +101,9 @@ export const NOTEBOOKLM_URL_PATTERN =
 export function isValidNotebookUrl(url: string): boolean {
   return NOTEBOOKLM_URL_PATTERN.test(url);
 }
+
+// ---------------------------------------------------------------------------
+// Agent model
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_AGENT_MODEL = "gpt-4.1" as const;

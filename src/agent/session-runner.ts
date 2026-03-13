@@ -16,7 +16,7 @@ import type {
   PermissionHandler,
 } from "@github/copilot-sdk";
 import type { CopilotClientSingleton } from "./client.js";
-import { DEFAULT_SESSION_TIMEOUT_MS } from "../shared/config.js";
+import { DEFAULT_SESSION_TIMEOUT_MS, DEFAULT_AGENT_MODEL } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
 
 // ---------------------------------------------------------------------------
@@ -30,6 +30,8 @@ export interface SessionRunnerOptions {
   hooks: Record<string, unknown>;
   /** Permission handler forwarded to createSession. Defaults to auto-approve. */
   onPermissionRequest?: PermissionHandler;
+  /** Model to use for the session. Defaults to DEFAULT_AGENT_MODEL. */
+  model?: string;
   /** Timeout in ms for sendAndWait. Defaults to DEFAULT_SESSION_TIMEOUT_MS (5 min). */
   timeoutMs?: number;
 }
@@ -68,6 +70,7 @@ export async function runSession(
     customAgents,
     hooks,
     onPermissionRequest = autoApprove,
+    model = DEFAULT_AGENT_MODEL,
     timeoutMs = DEFAULT_SESSION_TIMEOUT_MS,
   } = options;
 
@@ -80,6 +83,7 @@ export async function runSession(
     const sdkClient = client.getClient();
 
     log.info("Creating session", {
+      model,
       toolCount: tools.length,
       agentCount: customAgents.length,
       timeoutMs,
@@ -87,6 +91,7 @@ export async function runSession(
 
     // 2. Create a session with tools, custom agents, hooks, and permission handler.
     session = await sdkClient.createSession({
+      model,
       tools,
       customAgents,
       hooks,

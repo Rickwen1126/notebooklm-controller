@@ -71,17 +71,17 @@
 - [x] T026 Implement SessionHooks in `src/agent/hooks.ts` (onPreToolUse → NetworkGate acquirePermit, onErrorOccurred three-way routing, onSessionEnd cleanup, acquirePermit timeout < sendAndWait timeout constraint)
 - [x] T027 Unit tests for session-runner in `tests/unit/agent/session-runner.test.ts` (createSession → sendAndWait → disconnect → result collection)
 - [x] T028 Implement session-runner in `src/agent/session-runner.ts` (per-task: createSession with tools + agent + hooks, sendAndWait with configurable timeout per FR-031, disconnect, result collection)
-- [ ] T028.1 [P] **Spike backfill**: Add `model: "gpt-4.1"` to `createSession()` call in session-runner (Spike 1: explicit model skips negotiation, 5.6s → 0.5s setup). Model configurable via `config.ts`
+- [x] T028.1 [P] **Spike backfill**: Add `model: "gpt-4.1"` to `createSession()` call in session-runner (Spike 1: explicit model skips negotiation, 5.6s → 0.5s setup). Model configurable via `config.ts`
 
 ### Agent Tools — Browser & State
 
 - [x] T029 [P] Unit tests for browser-tools in `tests/unit/agent/tools/browser-tools.test.ts` (screenshot, click, type, scroll, paste — mock CDP session, verify Tool 自包：screenshot tool returns binaryResultsForLlm)
 - [x] T030 [P] Implement browser-tools in `src/agent/tools/browser-tools.ts` (defineTool + Zod for screenshot, click, type, scroll, paste — all CDP-based, each tool self-contained with screenshot return via ToolResultObject.binaryResultsForLlm)
-- [ ] T030.2 [P] **Spike backfill**: Copy find tool v2 from spike into `src/agent/tools/browser-tools.ts`. Adapt to TabHandle (`tabHandle.page.evaluate()`). v2 spec: 16 interactive selectors (button/a/input/textarea/select + 6 ARIA roles + tabindex + contenteditable), returns tag/text/center coordinates/rect + disabled + ariaExpanded, filters visibility:hidden and display:none. Agent MUST use find before click — never guess coordinates from screenshots.
-- [ ] T030.3 [P] **Spike backfill**: Copy read tool v2 from spike into `src/agent/tools/browser-tools.ts`. Adapt to TabHandle. v2 spec: structured return { count, items[] } with tag/text/visible per item. Dual purpose: state verification (element count, visibility check) + content extraction (answer text). Key selector: `.to-user-container .message-content`
-- [ ] T030.4 [P] **Spike backfill**: Copy navigate tool from spike into `src/agent/tools/browser-tools.ts`. Adapt to TabHandle (`tabHandle.page.goto()` + waitUntil networkidle2 + screenshot return)
-- [ ] T030.5 [P] **Spike backfill**: Copy wait tool from spike into `src/agent/tools/browser-tools.ts` (setTimeout 1-30s + screenshot return)
-- [ ] T030.6 [P] Unit tests for new browser-tools (find v2, read v2, navigate, wait — mock page.evaluate + page.goto. Test: find visibility filter, find disabled/ariaExpanded return, read structured count+items, navigate screenshot auto-return, wait 1-30s range validation)
+- [x] T030.2 [P] **Spike backfill**: Copy find tool v2 from spike into `src/agent/tools/browser-tools.ts`. Adapt to TabHandle (`tabHandle.page.evaluate()`). v2 spec: 16 interactive selectors (button/a/input/textarea/select + 6 ARIA roles + tabindex + contenteditable), returns tag/text/center coordinates/rect + disabled + ariaExpanded, filters visibility:hidden and display:none. Agent MUST use find before click — never guess coordinates from screenshots.
+- [x] T030.3 [P] **Spike backfill**: Copy read tool v2 from spike into `src/agent/tools/browser-tools.ts`. Adapt to TabHandle. v2 spec: structured return { count, items[] } with tag/text/visible per item. Dual purpose: state verification (element count, visibility check) + content extraction (answer text). Key selector: `.to-user-container .message-content`
+- [x] T030.4 [P] **Spike backfill**: Copy navigate tool from spike into `src/agent/tools/browser-tools.ts`. Adapt to TabHandle (`tabHandle.page.goto()` + waitUntil networkidle2 + screenshot return)
+- [x] T030.5 [P] **Spike backfill**: Copy wait tool from spike into `src/agent/tools/browser-tools.ts` (setTimeout 1-30s + screenshot return)
+- [x] T030.6 [P] Unit tests for new browser-tools (find v2, read v2, navigate, wait — mock page.evaluate + page.goto. Test: find visibility filter, find disabled/ariaExpanded return, read structured count+items, navigate screenshot auto-return, wait 1-30s range validation)
 - [x] T031 [P] Unit tests for state-tools in `tests/unit/agent/tools/state-tools.test.ts` (reportRateLimit, updateCache, writeFile)
 - [x] T032 [P] Implement state-tools in `src/agent/tools/state-tools.ts` (defineTool + Zod for reportRateLimit → NetworkGate, updateCache → cache-manager, writeFile)
 - [x] T032.1 [P] Unit tests for tool-registry in `tests/unit/agent/tools/tool-registry.test.ts` (buildToolsForTab factory, tool combination, tool isolation per tab)
@@ -100,11 +100,11 @@
 
 ### Spike Backfill (Browser Capability Spike 1, 2026-03-13)
 
-- [ ] T030.2~T030.6: Browser tools v2 擴充（見上方 Agent Tools 區）
-- [ ] T028.1: Session-runner model 指定（見上方 Agent Runtime 區）
-- [ ] T037.1 [P] **Spike backfill**: Add `{{NOTEBOOKLM_KNOWLEDGE}}` template variable support to agent-loader. KNOWLEDGE 注入點：**CustomAgent prompt（`agents/*.md`）**，不是 session systemMessage。Main agent 只做 intent → agent routing（輕量 systemMessage），不需要 UI 知識。每個需要操作瀏覽器的 subagent（add-source, query, create-notebook 等）在 prompt 中引用 `{{NOTEBOOKLM_KNOWLEDGE}}`，agent-loader 解析時從 UI map config 載入 locale-specific 內容。KNOWLEDGE 內容：UI element table + known CSS selectors + disambiguation rules (submit button y>400, collapse_content recovery) + **狀態確認原則**（每步操作後 agent 用 find/read/screenshot 自行確認狀態，prompt 只設目標不限手段，不預存 success pattern，agent 自主選擇最有效的觀測方式）。
-- [ ] T037.2 [P] **Spike backfill**: Create UI map config data structure + 3 built-in locale files. `src/config/ui-maps/{zh-TW,en,zh-CN}.json` — contains `elements` (text + match + disambiguate per UI element) and `selectors` (answer, question, suggestions, source_panel). Schema from spike HANDOVER.md. Add `UIMap` / `UIMapElement` interfaces to `src/shared/types.ts`. Unit tests in `tests/unit/shared/ui-map.test.ts`.
-- [ ] T037.3 [P] **Spike backfill**: Implement locale resolver in `src/shared/locale.ts`. `resolveLocale(browserLang: string) → string` (navigator.language → zh-TW|zh-CN|en) + `loadUIMap(locale: string) → UIMap` (read built-in JSON, fallback to en). Unit tests in `tests/unit/shared/locale.test.ts`.
+- [x] T030.2~T030.6: Browser tools v2 擴充（見上方 Agent Tools 區）
+- [x] T028.1: Session-runner model 指定（見上方 Agent Runtime 區）
+- [x] T037.1 [P] **Spike backfill**: Add `{{NOTEBOOKLM_KNOWLEDGE}}` template variable support to agent-loader. KNOWLEDGE 注入點：**CustomAgent prompt（`agents/*.md`）**，不是 session systemMessage。Main agent 只做 intent → agent routing（輕量 systemMessage），不需要 UI 知識。每個需要操作瀏覽器的 subagent（add-source, query, create-notebook 等）在 prompt 中引用 `{{NOTEBOOKLM_KNOWLEDGE}}`，agent-loader 解析時從 UI map config 載入 locale-specific 內容。KNOWLEDGE 內容：UI element table + known CSS selectors + disambiguation rules (submit button y>400, collapse_content recovery) + **狀態確認原則**（每步操作後 agent 用 find/read/screenshot 自行確認狀態，prompt 只設目標不限手段，不預存 success pattern，agent 自主選擇最有效的觀測方式）。
+- [x] T037.2 [P] **Spike backfill**: Create UI map config data structure + 3 built-in locale files. `src/config/ui-maps/{zh-TW,en,zh-CN}.json` — contains `elements` (text + match + disambiguate per UI element) and `selectors` (answer, question, suggestions, source_panel). Schema from spike HANDOVER.md. Add `UIMap` / `UIMapElement` interfaces to `src/shared/types.ts`. Unit tests in `tests/unit/shared/ui-map.test.ts`.
+- [x] T037.3 [P] **Spike backfill**: Implement locale resolver in `src/shared/locale.ts`. `resolveLocale(browserLang: string) → string` (navigator.language → zh-TW|zh-CN|en) + `loadUIMap(locale: string) → UIMap` (read built-in JSON, fallback to en). Unit tests in `tests/unit/shared/locale.test.ts`.
 
 **Deleted**: ~~T030.1~~ (BrowserContext refactor — TabHandle 已有 cdpSession + page，不需要改介面), ~~T033.1a~~ (buildToolsForTab rename — 同上), ~~T037~~ (spike import 整合 — 改為直接複製 spike code 進 src/，後續 repair 機制再處理 single source of truth)
 

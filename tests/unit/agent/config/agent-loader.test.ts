@@ -273,6 +273,24 @@ Hello {{unknownParam}}, welcome.
     expect(config).not.toBeNull();
     expect(config!.prompt).toBe("Hello {{unknownParam}}, welcome.");
   });
+
+  it("should inject NOTEBOOKLM_KNOWLEDGE when locale is provided and placeholder is present", async () => {
+    const content = `---
+name: knowledge-agent
+description: Agent with knowledge injection
+---
+
+{{NOTEBOOKLM_KNOWLEDGE}}
+
+Now operate the notebook.
+`;
+    const filePath = await writeFixture("knowledge-agent.md", content);
+    const config = await loadAgentConfig(filePath, {}, "zh-TW");
+
+    expect(config).not.toBeNull();
+    expect(config!.prompt).toContain("NotebookLM UI Knowledge");
+    expect(config!.prompt).toContain("新建");
+  });
 });
 
 describe("loadAllAgentConfigs", () => {

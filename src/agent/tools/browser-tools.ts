@@ -53,6 +53,7 @@ function textResult(text: string): ToolResultObject {
  */
 export function createBrowserTools(tabHandle: TabHandle): Tool[] {
   const cdp = tabHandle.cdpSession;
+  const page = tabHandle.page;
 
   const screenshotTool = defineTool("screenshot", {
     description:
@@ -95,6 +96,7 @@ export function createBrowserTools(tabHandle: TabHandle): Tool[] {
       await dispatchClick(cdp, args.x, args.y, {
         button: args.button,
       });
+      await new Promise((r) => setTimeout(r, 500));
       const base64 = await captureScreenshot(cdp);
       return screenshotResult(
         base64,
@@ -133,6 +135,7 @@ export function createBrowserTools(tabHandle: TabHandle): Tool[] {
     handler: async (args) => {
       const deltaX = args.deltaX ?? 0;
       await dispatchScroll(cdp, args.x, args.y, deltaX, args.deltaY);
+      await new Promise((r) => setTimeout(r, 300));
       const base64 = await captureScreenshot(cdp);
       return screenshotResult(
         base64,
@@ -156,6 +159,215 @@ export function createBrowserTools(tabHandle: TabHandle): Tool[] {
     },
   });
 
+  const findTool = defineTool("find", {
+    description:
+      "Find interactive elements on the page by text content, placeholder, aria-label, or CSS selector. " +
+      "Returns tag, text, center coordinates, rect, disabled, and ariaExpanded for each match. " +
+      "Searches buttons, links, inputs, textareas, selects, and elements with ARIA roles or tabindex. " +
+      "Filters out visibility:hidden and display:none elements. " +
+      "Falls back to CSS selector query if no text match is found.",
+    parameters: z.object({
+      query: z
+        .string()
+        .describe(
+          "Text to search for in element content/aria-label/placeholder, OR a CSS selector",
+        ),
+    }),
+    handler: async (args) => {
+      const results = await page.evaluate((q: string) => {
+        const matches: Array<{
+          tag: string;
+          text: string;
+          ariaLabel: string | null;
+          disabled: boolean;
+          ariaExpanded: string | null;
+          center: { x: number; y: number };
+          rect: { x: number; y: number; w: number; h: number };
+        }> = [];
+
+        const INTERACTIVE = [
+          "button", "a", "input", "textarea", "select",
+          "[role=button]", "[role=link]", "[role=tab]", "[role=menuitem]",
+          "[role=option]", "[role=checkbox]", "[role=radio]", "[role=switch]",
+          "[role=combobox]", "[tabindex]:not([tabindex='-1'])", "[contenteditable]",
+        ].join(", ");
+        const all = document.querySelectorAll(INTERACTIVE);
+        for (const el of all) {
+          const text = el.textContent?.trim() ?? "";
+          const ariaLabel = el.getAttribute("aria-label") ?? "";
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          const style = getComputedStyle(el);
+          if (style.visibility === "hidden" || style.display === "none") continue;
+          if (
+            text.includes(q) ||
+            ariaLabel.includes(q) ||
+            el.getAttribute("placeholder")?.includes(q)
+          ) {
+            matches.push({
+              tag: el.tagName,
+              text: text.slice(0, 80),
+              ariaLabel: el.getAttribute("aria-label"),
+              disabled:
+                el.hasAttribute("disabled") ||
+                el.getAttribute("aria-disabled") === "true",
+              ariaExpanded: el.getAttribute("aria-expanded"),
+              center: {
+                x: Math.round(r.x + r.width / 2),
+                y: Math.round(r.y + r.height / 2),
+              },
+              rect: {
+                x: Math.round(r.x),
+                y: Math.round(r.y),
+                w: Math.round(r.width),
+                h: Math.round(r.height),
+              },
+            });
+          }
+        }
+
+        // Fallback: try as CSS selector
+        if (matches.length === 0) {
+          try {
+            const els = document.querySelectorAll(q);
+            for (const el of els) {
+              const r = el.getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) continue;
+              const style = getComputedStyle(el);
+              if (style.visibility === "hidden" || style.display === "none") continue;
+              matches.push({
+                tag: el.tagName,
+                text: (el.textContent?.trim() ?? "").slice(0, 80),
+                ariaLabel: el.getAttribute("aria-label"),
+                disabled:
+                  el.hasAttribute("disabled") ||
+                  el.getAttribute("aria-disabled") === "true",
+                ariaExpanded: el.getAttribute("aria-expanded"),
+                center: {
+                  x: Math.round(r.x + r.width / 2),
+                  y: Math.round(r.y + r.height / 2),
+                },
+                rect: {
+                  x: Math.round(r.x),
+                  y: Math.round(r.y),
+                  w: Math.round(r.width),
+                  h: Math.round(r.height),
+                },
+              });
+            }
+          } catch {
+            // Not a valid selector
+          }
+        }
+
+        return matches;
+      }, args.query);
+
+      if (results.length === 0) {
+        return textResult(
+          `No elements found for: "${args.query}". Try a different search term or CSS selector.`,
+        );
+      }
+
+      const lines = results.map((r) => {
+        const attrs = [
+          r.ariaLabel ? `aria="${r.ariaLabel}"` : "",
+          r.disabled ? "DISABLED" : "",
+          r.ariaExpanded !== null ? `expanded=${r.ariaExpanded}` : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        return (
+          `[${r.tag}] "${r.text}" → center(${r.center.x}, ${r.center.y})  ` +
+          `rect(${r.rect.x},${r.rect.y} ${r.rect.w}x${r.rect.h})` +
+          (attrs ? `  ${attrs}` : "")
+        );
+      });
+      return textResult(lines.join("\n"));
+    },
+  });
+
+  const readTool = defineTool("read", {
+    description:
+      "Read page state using a CSS selector. Returns structured { count, items[] } with tag, text, and visible per item. " +
+      "Key selector for NotebookLM answers: `.to-user-container .message-content`.",
+    parameters: z.object({
+      selector: z.string().describe("CSS selector to query"),
+    }),
+    handler: async (args) => {
+      const result = await page.evaluate((sel: string) => {
+        const els = document.querySelectorAll(sel);
+        if (els.length === 0)
+          return {
+            count: 0,
+            items: [] as Array<{ tag: string; text: string; visible: boolean }>,
+          };
+        const items = Array.from(els).map((el) => {
+          const style = getComputedStyle(el);
+          return {
+            tag: el.tagName,
+            text: (el.textContent?.trim() ?? "").slice(0, 500),
+            visible:
+              style.visibility !== "hidden" && style.display !== "none",
+          };
+        });
+        return { count: items.length, items };
+      }, args.selector);
+
+      if (result.count === 0) {
+        return textResult(`No elements matched "${args.selector}"`);
+      }
+      const lines = [
+        `Found ${result.count} element(s) matching "${args.selector}":`,
+      ];
+      for (let i = 0; i < result.items.length; i++) {
+        const item = result.items[i];
+        const vis = item.visible ? "" : " (HIDDEN)";
+        const preview =
+          item.text.length > 200
+            ? item.text.slice(0, 200) + "..."
+            : item.text;
+        lines.push(`[${i + 1}] ${item.tag}${vis}: ${preview}`);
+      }
+      return textResult(lines.join("\n"));
+    },
+  });
+
+  const navigateTool = defineTool("navigate", {
+    description:
+      "Navigate to a URL, wait for networkidle2, then return a screenshot of the loaded page.",
+    parameters: z.object({
+      url: z.string().describe("URL to navigate to"),
+    }),
+    handler: async (args) => {
+      await page.goto(args.url, { waitUntil: "networkidle2", timeout: 30_000 });
+      await new Promise((r) => setTimeout(r, 1000));
+      const base64 = await captureScreenshot(cdp);
+      return screenshotResult(base64, "png", `Navigated to: ${args.url}`);
+    },
+  });
+
+  const waitTool = defineTool("wait", {
+    description:
+      "Wait 1-30 seconds, then return a screenshot of the current page state.",
+    parameters: z.object({
+      seconds: z
+        .number()
+        .min(1)
+        .max(30)
+        .describe("Number of seconds to wait (1-30)"),
+    }),
+    handler: async (args) => {
+      await new Promise((r) => setTimeout(r, args.seconds * 1000));
+      const base64 = await captureScreenshot(cdp);
+      return screenshotResult(
+        base64,
+        "png",
+        `Waited ${args.seconds} seconds. Screenshot shows current state.`,
+      );
+    },
+  });
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return [screenshotTool, clickTool, typeTool, scrollTool, pasteTool] as any as Tool<unknown>[];
+  return [screenshotTool, clickTool, typeTool, scrollTool, pasteTool, findTool, readTool, navigateTool, waitTool] as any as Tool<unknown>[];
 }

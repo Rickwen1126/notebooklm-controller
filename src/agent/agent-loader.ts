@@ -13,7 +13,8 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join, extname } from "node:path";
 import { logger } from "../shared/logger.js";
-import type { AgentConfig, AgentParameter } from "../shared/types.js";
+import { loadUIMap } from "../shared/locale.js";
+import type { AgentConfig, AgentParameter, UIMap } from "../shared/types.js";
 
 // ---------------------------------------------------------------------------
 // Internal: YAML frontmatter parser (no external dependency)
@@ -209,6 +210,56 @@ function parseScalar(value: string): string | number | boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Internal: NOTEBOOKLM_KNOWLEDGE generation
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate the NOTEBOOKLM_KNOWLEDGE string from a UIMap.
+ *
+ * This is injected into CustomAgent prompts that reference {{NOTEBOOKLM_KNOWLEDGE}}.
+ * Content: UI element table + known CSS selectors + disambiguation rules +
+ * state verification principles.
+ */
+function generateKnowledge(ui: UIMap): string {
+  const e = ui.elements;
+  const s = ui.selectors;
+  return `## NotebookLM UI Knowledge (locale: ${ui.locale})
+
+### Core Rules
+
+1. **Never guess coordinates** — always use find() to get precise coordinates before click().
+2. **Use paste() not type()** — paste() for all text input; type() only for special keys (Enter, Tab, Escape).
+3. **Two submit buttons** — page has search bar and chat bar submit buttons; always pick the one with y > 400.
+4. **Answers need wait** — after submitting a question, wait(15) then read(). If "Refining...", wait(10) more.
+5. **Source panel blocks buttons** — if find("${e.add_source?.text ?? "Add source"}") fails, first find("${e.collapse_source?.text ?? "collapse_content"}") and click to collapse.
+
+### State Verification
+
+After every operation, confirm page state before proceeding.
+- find() → element existence, coordinates, disabled/expanded state
+- read() → element count, text content, visibility
+- screenshot() → full visual state (use when uncertain)
+DOM queries are faster and cheaper than screenshots; prefer them when sufficient.
+
+### UI Elements
+
+| Action | Steps |
+|--------|-------|
+| Create notebook | find("${e.create_notebook?.text ?? "Create new"}") → click |
+| Add source (text) | find("${e.paste_source_type?.text ?? "Copied text"}") → click → find("${e.paste_textarea?.text ?? "Paste text here"}") → click → paste(content) → find("${e.insert_button?.text ?? "Insert"}") → click |
+| Ask question | find("${e.chat_input?.text ?? "Start typing"}") → click → paste(question) → find("${e.submit_button?.text ?? "Submit"}") → click (y>400) |
+| Read answer | wait(15) → read("${s.answer ?? ".to-user-container .message-content"}") |
+| Collapse sources | find("${e.collapse_source?.text ?? "collapse_content"}") → click |
+
+### CSS Selectors
+
+- Answer text: \`${s.answer ?? ".to-user-container .message-content"}\`
+- Question text: \`${s.question ?? ".from-user-container"}\`
+- Suggestions: \`${s.suggestions ?? ".suggestions-container"}\`
+- Source panel: \`${s.source_panel ?? ".source-panel"}\``;
+}
+
+// ---------------------------------------------------------------------------
 // Internal: template rendering
 // ---------------------------------------------------------------------------
 
@@ -246,6 +297,7 @@ function renderTemplate(
 export async function loadAgentConfig(
   filePath: string,
   paramOverrides?: Record<string, string | number | boolean>,
+  locale?: string,
 ): Promise<AgentConfig | null> {
   let raw: string;
   try {
@@ -320,9 +372,17 @@ export async function loadAgentConfig(
     }
   }
 
+  // Resolve {{NOTEBOOKLM_KNOWLEDGE}} if present in the body.
+  let body = parts.body;
+  if (body.includes("{{NOTEBOOKLM_KNOWLEDGE}}") && locale) {
+    const uiMap = loadUIMap(locale);
+    const knowledge = generateKnowledge(uiMap);
+    body = body.replace(/\{\{NOTEBOOKLM_KNOWLEDGE\}\}/g, knowledge);
+  }
+
   // Render the prompt template.
   const prompt = renderTemplate(
-    parts.body,
+    body,
     parameters,
     paramOverrides ?? {},
   );
@@ -345,6 +405,7 @@ export async function loadAgentConfig(
  */
 export async function loadAllAgentConfigs(
   dirPath: string,
+  locale?: string,
 ): Promise<AgentConfig[]> {
   let entries: string[];
   try {
@@ -363,7 +424,7 @@ export async function loadAllAgentConfigs(
 
   const configs: AgentConfig[] = [];
   for (const file of mdFiles) {
-    const config = await loadAgentConfig(join(dirPath, file));
+    const config = await loadAgentConfig(join(dirPath, file), undefined, locale);
     if (config) {
       configs.push(config);
     }

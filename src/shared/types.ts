@@ -213,3 +213,18 @@ export interface DaemonStatusResult {
   pendingTasks: number;
   runningTasks: number;
 }
+
+/** A single UI element entry in the locale-specific UI map. */
+export interface UIMapElement {
+  text: string;
+  match?: "text" | "placeholder" | "aria-label";
+  disambiguate?: string;
+}
+
+/** Locale-specific UI element map for NotebookLM, loaded from src/config/ui-maps/. */
+export interface UIMap {
+  locale: string;
+  verified: boolean;
+  elements: Record<string, UIMapElement>;
+  selectors: Record<string, string>;
+}

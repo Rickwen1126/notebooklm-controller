@@ -41,8 +41,19 @@ function createMockCDPSession() {
   };
 }
 
+function createMockPage() {
+  return {
+    evaluate: vi.fn(async (_fn: (...a: unknown[]) => unknown, ..._args: unknown[]) => {
+      // Default: return empty results for find/read
+      return { count: 0, items: [] };
+    }),
+    goto: vi.fn(async () => {}),
+  };
+}
+
 function createMockTabHandle(
   cdp: ReturnType<typeof createMockCDPSession>,
+  page?: ReturnType<typeof createMockPage>,
 ): TabHandle {
   return {
     tabId: "tab-1",
@@ -51,7 +62,7 @@ function createMockTabHandle(
     acquiredAt: new Date().toISOString(),
     timeoutAt: new Date(Date.now() + 300_000).toISOString(),
     cdpSession: cdp as never,
-    page: {} as never,
+    page: (page ?? createMockPage()) as never,
   };
 }
 
@@ -86,17 +97,22 @@ async function invoke(
 
 describe("browser-tools", () => {
   let cdp: ReturnType<typeof createMockCDPSession>;
+  let mockPage: ReturnType<typeof createMockPage>;
   let tools: ReturnType<typeof createBrowserTools>;
 
   beforeEach(() => {
     cdp = createMockCDPSession();
-    const tabHandle = createMockTabHandle(cdp);
+    mockPage = createMockPage();
+    const tabHandle = createMockTabHandle(cdp, mockPage);
     tools = createBrowserTools(tabHandle);
   });
 
-  it("creates all five tools", () => {
+  it("creates all nine tools", () => {
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual(["click", "paste", "screenshot", "scroll", "type"]);
+    expect(names).toEqual([
+      "click", "find", "navigate", "paste", "read",
+      "screenshot", "scroll", "type", "wait",
+    ]);
   });
 
   it("each tool has a description", () => {
@@ -328,6 +344,144 @@ describe("browser-tools", () => {
 
       expect(result.binaryResultsForLlm).toBeUndefined();
       expect(result.textResultForLlm).toContain("3");
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // find (T030.2)
+  // -----------------------------------------------------------------------
+
+  describe("find", () => {
+    it("calls page.evaluate with the query and returns results", async () => {
+      mockPage.evaluate.mockResolvedValueOnce([
+        {
+          tag: "BUTTON",
+          text: "Submit",
+          ariaLabel: null,
+          disabled: false,
+          ariaExpanded: null,
+          center: { x: 100, y: 500 },
+          rect: { x: 50, y: 480, w: 100, h: 40 },
+        },
+      ]);
+
+      const tool = findTool(tools, "find");
+      const result = await invoke(tool, { query: "Submit" });
+
+      expect(mockPage.evaluate).toHaveBeenCalled();
+      expect(result.resultType).toBe("success");
+      expect(result.textResultForLlm).toContain("BUTTON");
+      expect(result.textResultForLlm).toContain("Submit");
+      expect(result.textResultForLlm).toContain("center(100, 500)");
+    });
+
+    it("returns no-match message when nothing found", async () => {
+      mockPage.evaluate.mockResolvedValueOnce([]);
+
+      const tool = findTool(tools, "find");
+      const result = await invoke(tool, { query: "nonexistent" });
+
+      expect(result.textResultForLlm).toContain("No elements found");
+      expect(result.textResultForLlm).toContain("nonexistent");
+    });
+
+    it("includes disabled and ariaExpanded in output", async () => {
+      mockPage.evaluate.mockResolvedValueOnce([
+        {
+          tag: "BUTTON",
+          text: "Expand",
+          ariaLabel: "Toggle panel",
+          disabled: true,
+          ariaExpanded: "false",
+          center: { x: 200, y: 300 },
+          rect: { x: 150, y: 280, w: 100, h: 40 },
+        },
+      ]);
+
+      const tool = findTool(tools, "find");
+      const result = await invoke(tool, { query: "Expand" });
+
+      expect(result.textResultForLlm).toContain("DISABLED");
+      expect(result.textResultForLlm).toContain("expanded=false");
+      expect(result.textResultForLlm).toContain('aria="Toggle panel"');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // read (T030.3)
+  // -----------------------------------------------------------------------
+
+  describe("read", () => {
+    it("returns structured count and items", async () => {
+      mockPage.evaluate.mockResolvedValueOnce({
+        count: 2,
+        items: [
+          { tag: "DIV", text: "First answer", visible: true },
+          { tag: "DIV", text: "Second answer", visible: true },
+        ],
+      });
+
+      const tool = findTool(tools, "read");
+      const result = await invoke(tool, { selector: ".message-content" });
+
+      expect(mockPage.evaluate).toHaveBeenCalled();
+      expect(result.resultType).toBe("success");
+      expect(result.textResultForLlm).toContain("Found 2 element(s)");
+      expect(result.textResultForLlm).toContain("First answer");
+      expect(result.textResultForLlm).toContain("Second answer");
+    });
+
+    it("returns no-match message when count is 0", async () => {
+      mockPage.evaluate.mockResolvedValueOnce({ count: 0, items: [] });
+
+      const tool = findTool(tools, "read");
+      const result = await invoke(tool, { selector: ".nonexistent" });
+
+      expect(result.textResultForLlm).toContain("No elements matched");
+    });
+
+    it("marks hidden elements", async () => {
+      mockPage.evaluate.mockResolvedValueOnce({
+        count: 1,
+        items: [{ tag: "SPAN", text: "Hidden text", visible: false }],
+      });
+
+      const tool = findTool(tools, "read");
+      const result = await invoke(tool, { selector: ".hidden" });
+
+      expect(result.textResultForLlm).toContain("(HIDDEN)");
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // navigate (T030.4)
+  // -----------------------------------------------------------------------
+
+  describe("navigate", () => {
+    it("calls page.goto and returns screenshot", async () => {
+      const tool = findTool(tools, "navigate");
+      const result = await invoke(tool, { url: "https://notebooklm.google.com" });
+
+      expect(mockPage.goto).toHaveBeenCalledWith(
+        "https://notebooklm.google.com",
+        { waitUntil: "networkidle2", timeout: 30_000 },
+      );
+      expect(result.binaryResultsForLlm).toHaveLength(1);
+      expect(result.textResultForLlm).toContain("Navigated to");
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // wait (T030.5)
+  // -----------------------------------------------------------------------
+
+  describe("wait", () => {
+    it("returns screenshot after waiting", async () => {
+      const tool = findTool(tools, "wait");
+      const result = await invoke(tool, { seconds: 1 });
+
+      expect(result.binaryResultsForLlm).toHaveLength(1);
+      expect(result.textResultForLlm).toContain("Waited 1 seconds");
     });
   });
 });
