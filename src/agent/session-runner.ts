@@ -1,12 +1,15 @@
 /**
- * Session runner — executes a single agent task within a Copilot SDK session.
+ * Session runner — executes agent tasks within Copilot SDK sessions.
  *
- * Responsibilities:
- *   - Create a session via CopilotClient.createSession()
- *   - Send a prompt via session.sendAndWait()
- *   - Enforce configurable timeout (FR-031, defaults to DEFAULT_SESSION_TIMEOUT_MS)
- *   - Always disconnect the session in a finally block
- *   - Return a structured SessionResult with success/error and duration
+ * Two-level API:
+ *   - `runSession()` — low-level primitive: single session lifecycle
+ *   - `runDualSession()` — high-level: Planner+Executor orchestration
+ *
+ * The dual-session architecture (Phase 5.5) replaces the original CustomAgent
+ * sub-agent approach because sub-agents cannot access defineTool() custom tools
+ * (Finding #39). Instead:
+ *   - Planner session: NL intent → structured ExecutionPlan (via submitPlan tool)
+ *   - Executor session(s): per-step browser automation with filtered tools
  */
 
 import type { CopilotSession } from "@github/copilot-sdk";
@@ -15,9 +18,13 @@ import type {
   Tool,
   PermissionHandler,
 } from "@github/copilot-sdk";
+import { defineTool } from "@github/copilot-sdk";
+import { z } from "zod";
 import type { CopilotClientSingleton } from "./client.js";
+import { buildPlannerCatalog } from "./agent-loader.js";
 import { DEFAULT_SESSION_TIMEOUT_MS, DEFAULT_AGENT_MODEL } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
+import type { AgentConfig, ExecutionPlan, ExecutionStep } from "../shared/types.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -161,5 +168,296 @@ export async function runSession(
         log.warn("Failed to disconnect session", { error: msg });
       }
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Dual Session: Types
+// ---------------------------------------------------------------------------
+
+export interface DualSessionOptions {
+  client: CopilotClientSingleton;
+  /** All available browser + state tools (will be filtered per step). */
+  tools: Tool[];
+  /** Loaded agent configs (Planner reads catalog, Executor reads prompt). */
+  agentConfigs: AgentConfig[];
+  /** Hooks forwarded to Executor sessions. */
+  hooks: Record<string, unknown>;
+  /** Resolved locale string (e.g. "zh-TW"). */
+  locale: string;
+  /** Model for Planner session. Defaults to DEFAULT_AGENT_MODEL. */
+  plannerModel?: string;
+  /** Model for Executor sessions. Defaults to DEFAULT_AGENT_MODEL. */
+  executorModel?: string;
+  /** Timeout for Planner. Defaults to 60s. */
+  plannerTimeoutMs?: number;
+  /** Timeout per Executor step. Defaults to DEFAULT_SESSION_TIMEOUT_MS. */
+  executorTimeoutMs?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Dual Session: Planner
+// ---------------------------------------------------------------------------
+
+const PLANNER_TIMEOUT_MS = 60_000;
+
+/**
+ * Run the Planner session: parse NL intent → select agent → output ExecutionPlan.
+ *
+ * The Planner has a single tool (`submitPlan`) that captures the structured plan
+ * via a closure. No browser tools are provided.
+ */
+export async function runPlannerSession(
+  options: DualSessionOptions,
+  prompt: string,
+): Promise<ExecutionPlan> {
+  const {
+    client,
+    agentConfigs,
+    locale,
+    plannerModel = DEFAULT_AGENT_MODEL,
+    plannerTimeoutMs = PLANNER_TIMEOUT_MS,
+  } = options;
+
+  const log = logger.child({ module: "session-runner:planner" });
+
+  // Build agent catalog for the Planner's system message.
+  const agentCatalog = buildPlannerCatalog(agentConfigs);
+
+  const plannerSystemMessage = `你是 NotebookLM 控制器的 Planner。你的任務是分析使用者的自然語言指令，選擇正確的 agent config，組裝結構化 prompt 給 Executor 執行。
+
+## 可用的 Agent Configs
+
+${agentCatalog}
+
+## 你的輸出
+
+呼叫 submitPlan tool，提交執行計畫。每個 step 包含：
+- agentName: 選擇的 agent config 名稱
+- executorPrompt: 給 Executor 的明確操作指令（中文，包含具體參數值）
+- tools: 該操作需要的 tool 名稱列表（從 agent config 的 tools 欄位取）
+
+## 規則
+
+1. 單一操作 → 1 個 step
+2. 複合操作（如「加來源然後問問題」）→ 多個 steps，按順序排列
+3. executorPrompt 必須明確，不能含糊。例如不是「問一個問題」而是「向 NotebookLM 提問：TypeScript 的優勢是什麼？」
+4. 不要自己執行操作，只做規劃
+5. 如果使用者的請求與 NotebookLM 操作無關，回覆說明你只能處理 NotebookLM 相關操作，不要呼叫 submitPlan
+6. 當前 locale: ${locale}`;
+
+  // Capture plan via closure.
+  let capturedPlan: ExecutionPlan | null = null;
+
+  const submitPlanTool = defineTool("submitPlan", {
+    description: "Submit the execution plan for the Executor to carry out.",
+    parameters: z.object({
+      reasoning: z.string().describe("Brief explanation of why these steps were chosen"),
+      steps: z.array(z.object({
+        agentName: z.string().describe("Name of the agent config to use"),
+        executorPrompt: z.string().describe("Clear instruction for the Executor"),
+        tools: z.array(z.string()).describe("Tool names needed for this step"),
+      })),
+    }),
+    handler: async (args: { reasoning: string; steps: ExecutionStep[] }) => {
+      capturedPlan = { steps: args.steps, reasoning: args.reasoning };
+      return {
+        textResultForLlm: `Plan accepted: ${args.steps.length} step(s).`,
+        resultType: "success" as const,
+      };
+    },
+  });
+
+  log.info("Starting Planner session", {
+    promptLength: prompt.length,
+    agentCount: agentConfigs.length,
+    locale,
+  });
+
+  // Run Planner as a single session with only submitPlan tool.
+  await runSession(
+    {
+      client,
+      tools: [submitPlanTool] as Tool[],
+      customAgents: [],
+      hooks: {},
+      model: plannerModel,
+      timeoutMs: plannerTimeoutMs,
+    },
+    prompt,
+  );
+
+  if (!capturedPlan) {
+    throw new Error("Planner did not submit a plan — request may be outside NotebookLM scope");
+  }
+
+  log.info("Planner completed", {
+    reasoning: capturedPlan.reasoning,
+    stepCount: capturedPlan.steps.length,
+    steps: capturedPlan.steps.map((s) => s.agentName),
+  });
+
+  return capturedPlan;
+}
+
+// ---------------------------------------------------------------------------
+// Dual Session: Executor
+// ---------------------------------------------------------------------------
+
+/** Tool constraint preamble prepended to Executor systemMessage. */
+const TOOL_CONSTRAINT_PREAMBLE = `## 重要：工具限制
+
+你只能使用以下 browser tools 完成任務：{TOOL_LIST}
+**禁止使用** bash, view, edit, grep 等任何其他內建工具。所有操作必須透過上述 browser tools 完成。
+如果你覺得需要讀取檔案或執行 shell 命令，那是錯誤的方向 — 你操作的是瀏覽器，不是檔案系統。
+
+`;
+
+/**
+ * Run a single Executor session for one step of the plan.
+ *
+ * Looks up the agent config by name, filters tools to what the step needs,
+ * and prepends the tool constraint preamble to the agent's prompt.
+ */
+export async function runExecutorSession(
+  options: DualSessionOptions,
+  step: ExecutionStep,
+): Promise<SessionResult> {
+  const {
+    client,
+    tools: allTools,
+    agentConfigs,
+    hooks,
+    executorModel = DEFAULT_AGENT_MODEL,
+    executorTimeoutMs = DEFAULT_SESSION_TIMEOUT_MS,
+  } = options;
+
+  const log = logger.child({ module: "session-runner:executor", agent: step.agentName });
+
+  // 1. Look up the agent config.
+  const agentConfig = agentConfigs.find((c) => c.name === step.agentName);
+  if (!agentConfig) {
+    return {
+      success: false,
+      error: `Unknown agent: ${step.agentName}`,
+      durationMs: 0,
+    };
+  }
+
+  // 2. Filter tools to only what this step needs.
+  const toolNameSet = new Set(step.tools);
+  const filteredTools = allTools.filter(
+    (t) => toolNameSet.has((t as { name?: string }).name ?? ""),
+  );
+  // Always include screenshot for observability.
+  if (!toolNameSet.has("screenshot")) {
+    const screenshotTool = allTools.find(
+      (t) => (t as { name?: string }).name === "screenshot",
+    );
+    if (screenshotTool) filteredTools.push(screenshotTool);
+  }
+
+  // 3. Build Executor systemMessage: tool constraint + agent prompt.
+  const toolList = [...step.tools, "screenshot"].join(", ");
+  const constraint = TOOL_CONSTRAINT_PREAMBLE.replace("{TOOL_LIST}", toolList);
+  const systemMessage = constraint + agentConfig.prompt;
+
+  log.info("Starting Executor session", {
+    agentName: step.agentName,
+    toolCount: filteredTools.length,
+    promptLength: step.executorPrompt.length,
+  });
+
+  // 4. Run via the low-level runSession primitive.
+  //    The systemMessage is sent as the prompt prefix — the Copilot SDK
+  //    appends it to the session context.
+  const fullPrompt = systemMessage + "\n\n---\n\n" + step.executorPrompt;
+
+  return runSession(
+    {
+      client,
+      tools: filteredTools,
+      customAgents: [],
+      hooks,
+      model: executorModel,
+      timeoutMs: executorTimeoutMs,
+    },
+    fullPrompt,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Dual Session: Orchestrator
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the full dual-session flow: Planner → Executor(s) → aggregate result.
+ *
+ * This is the main entry point called by the Scheduler's `runTask`.
+ */
+export async function runDualSession(
+  options: DualSessionOptions,
+  prompt: string,
+): Promise<SessionResult> {
+  const log = logger.child({ module: "session-runner:dual" });
+  const startTime = Date.now();
+
+  try {
+    // 1. Planner: parse intent → ExecutionPlan.
+    const plan = await runPlannerSession(options, prompt);
+
+    // 2. Executor: run each step sequentially.
+    const stepResults: SessionResult[] = [];
+    for (const [i, step] of plan.steps.entries()) {
+      log.info("Executing step", {
+        stepIndex: i + 1,
+        totalSteps: plan.steps.length,
+        agentName: step.agentName,
+      });
+
+      const stepResult = await runExecutorSession(options, step);
+      stepResults.push(stepResult);
+
+      // If a step fails, stop and propagate the error.
+      if (!stepResult.success) {
+        const durationMs = Date.now() - startTime;
+        log.error("Executor step failed", {
+          stepIndex: i + 1,
+          agentName: step.agentName,
+          error: stepResult.error,
+        });
+        return {
+          success: false,
+          error: `Step ${i + 1}/${plan.steps.length} [${step.agentName}] failed: ${stepResult.error}`,
+          durationMs,
+        };
+      }
+    }
+
+    // 3. Aggregate results.
+    const durationMs = Date.now() - startTime;
+    const lastResult = stepResults[stepResults.length - 1];
+
+    log.info("Dual session completed", {
+      stepCount: plan.steps.length,
+      durationMs,
+    });
+
+    return {
+      success: true,
+      result: lastResult?.result,
+      durationMs,
+    };
+  } catch (err: unknown) {
+    const durationMs = Date.now() - startTime;
+    const errorMessage = err instanceof Error ? err.message : String(err);
+
+    log.error("Dual session failed", { error: errorMessage, durationMs });
+
+    return {
+      success: false,
+      error: errorMessage,
+      durationMs,
+    };
   }
 }

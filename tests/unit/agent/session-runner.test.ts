@@ -14,12 +14,26 @@ const fakeSdkClient = {
 
 vi.mock("@github/copilot-sdk", () => ({
   CopilotClient: class {},
+  // defineTool: pass-through that returns a tool-like object the mock can handle
+  defineTool: (name: string, opts: { handler: (...args: unknown[]) => unknown }) => ({
+    name,
+    handler: opts.handler,
+  }),
 }));
 
 // Import module under test after mocks are established.
-import { runSession } from "../../../src/agent/session-runner.js";
-import type { SessionRunnerOptions } from "../../../src/agent/session-runner.js";
+import {
+  runSession,
+  runPlannerSession,
+  runExecutorSession,
+  runDualSession,
+} from "../../../src/agent/session-runner.js";
+import type {
+  SessionRunnerOptions,
+  DualSessionOptions,
+} from "../../../src/agent/session-runner.js";
 import type { CopilotClientSingleton } from "../../../src/agent/client.js";
+import type { AgentConfig, ExecutionStep } from "../../../src/shared/types.js";
 import {
   DEFAULT_SESSION_TIMEOUT_MS,
   DEFAULT_AGENT_MODEL,
@@ -314,4 +328,336 @@ describe("runSession", () => {
     // The 5s disconnect timeout should fire; total time should be well under 10s.
     expect(elapsed).toBeLessThan(10_000);
   }, 15_000);
+});
+
+// ===========================================================================
+// Phase 5.5: Dual Session Tests (T068D-F)
+// ===========================================================================
+
+/** Build a minimal AgentConfig for testing. */
+function makeAgentConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
+  return {
+    name: "test-agent",
+    displayName: "Test Agent",
+    description: "A test agent",
+    tools: ["find", "click", "screenshot"],
+    prompt: "You are a test agent. Do the task.",
+    infer: true,
+    parameters: {},
+    ...overrides,
+  };
+}
+
+/** Build DualSessionOptions with sensible defaults. */
+function makeDualOptions(
+  overrides?: Partial<DualSessionOptions>,
+): DualSessionOptions {
+  return {
+    client: {
+      getClient: () => fakeSdkClient,
+    } as unknown as CopilotClientSingleton,
+    tools: [
+      { name: "find", handler: vi.fn() },
+      { name: "click", handler: vi.fn() },
+      { name: "screenshot", handler: vi.fn() },
+      { name: "paste", handler: vi.fn() },
+    ] as unknown as import("@github/copilot-sdk").Tool[],
+    agentConfigs: [
+      makeAgentConfig({ name: "list-sources", description: "List sources", tools: ["find", "read", "screenshot"] }),
+      makeAgentConfig({ name: "query", description: "Query notebook", tools: ["find", "click", "paste", "screenshot"] }),
+    ],
+    hooks: {},
+    locale: "zh-TW",
+    ...overrides,
+  };
+}
+
+/**
+ * Simulate the Planner calling submitPlan by intercepting createSession
+ * and invoking the submitPlan tool handler directly.
+ */
+function mockPlannerResponse(plan: {
+  reasoning: string;
+  steps: Array<{ agentName: string; executorPrompt: string; tools: string[] }>;
+}) {
+  // When createSession is called, find the submitPlan tool and invoke its handler.
+  mockCreateSession.mockImplementation(async (opts: { tools?: Array<{ name: string; handler: (args: unknown) => Promise<unknown> }> }) => {
+    const submitPlan = opts.tools?.find((t) => t.name === "submitPlan");
+    if (submitPlan) {
+      // Simulate the agent calling submitPlan
+      await submitPlan.handler(plan);
+    }
+    return {
+      sessionId: "planner-session",
+      sendAndWait: mockSendAndWait,
+      disconnect: mockDisconnect,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// T068D: runPlannerSession
+// ---------------------------------------------------------------------------
+
+describe("runPlannerSession", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSendAndWait.mockResolvedValue(
+      fakeAssistantMessage("Plan submitted."),
+    );
+    mockDisconnect.mockResolvedValue(undefined);
+  });
+
+  it("captures plan via submitPlan tool and returns ExecutionPlan", async () => {
+    const expectedPlan = {
+      reasoning: "User wants to list sources",
+      steps: [
+        { agentName: "list-sources", executorPrompt: "列出來源", tools: ["find", "read", "screenshot"] },
+      ],
+    };
+    mockPlannerResponse(expectedPlan);
+
+    const plan = await runPlannerSession(makeDualOptions(), "列出來源");
+
+    expect(plan.reasoning).toBe("User wants to list sources");
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.steps[0].agentName).toBe("list-sources");
+  });
+
+  it("throws when Planner does not call submitPlan", async () => {
+    // Default mock: createSession returns session without calling submitPlan.
+    mockCreateSession.mockResolvedValue({
+      sessionId: "planner-session",
+      sendAndWait: mockSendAndWait,
+      disconnect: mockDisconnect,
+    });
+
+    await expect(
+      runPlannerSession(makeDualOptions(), "列出來源"),
+    ).rejects.toThrow("Planner did not submit a plan");
+  });
+
+  it("passes agent catalog in system message to the session", async () => {
+    const expectedPlan = {
+      reasoning: "test",
+      steps: [{ agentName: "query", executorPrompt: "問問題", tools: ["find"] }],
+    };
+    mockPlannerResponse(expectedPlan);
+
+    await runPlannerSession(makeDualOptions(), "問一個問題");
+
+    // Verify createSession was called.
+    expect(mockCreateSession).toHaveBeenCalled();
+  });
+
+  it("supports multi-step plans", async () => {
+    const multiStepPlan = {
+      reasoning: "Compound operation",
+      steps: [
+        { agentName: "list-sources", executorPrompt: "先列出來源", tools: ["find", "read"] },
+        { agentName: "query", executorPrompt: "然後問問題", tools: ["find", "click", "paste"] },
+      ],
+    };
+    mockPlannerResponse(multiStepPlan);
+
+    const plan = await runPlannerSession(makeDualOptions(), "列出來源然後問問題");
+
+    expect(plan.steps).toHaveLength(2);
+    expect(plan.steps[0].agentName).toBe("list-sources");
+    expect(plan.steps[1].agentName).toBe("query");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T068E: runExecutorSession
+// ---------------------------------------------------------------------------
+
+describe("runExecutorSession", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCreateSession.mockResolvedValue({
+      sessionId: "executor-session",
+      sendAndWait: mockSendAndWait,
+      disconnect: mockDisconnect,
+    });
+    mockSendAndWait.mockResolvedValue(
+      fakeAssistantMessage("Source list: 3 sources found."),
+    );
+    mockDisconnect.mockResolvedValue(undefined);
+  });
+
+  it("looks up agent config and runs session with filtered tools", async () => {
+    const step: ExecutionStep = {
+      agentName: "list-sources",
+      executorPrompt: "列出所有來源",
+      tools: ["find", "screenshot"],
+    };
+
+    const result = await runExecutorSession(makeDualOptions(), step);
+
+    expect(result.success).toBe(true);
+    expect(result.result).toBe("Source list: 3 sources found.");
+    // Verify createSession was called with filtered tools.
+    expect(mockCreateSession).toHaveBeenCalledOnce();
+    const createArg = mockCreateSession.mock.calls[0][0];
+    // Should have find + screenshot (from step.tools, screenshot auto-included).
+    expect(createArg.tools.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("returns error for unknown agent name", async () => {
+    const step: ExecutionStep = {
+      agentName: "nonexistent-agent",
+      executorPrompt: "do something",
+      tools: ["find"],
+    };
+
+    const result = await runExecutorSession(makeDualOptions(), step);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Unknown agent: nonexistent-agent");
+    // Should not call createSession at all.
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  it("injects tool constraint preamble in the prompt", async () => {
+    const step: ExecutionStep = {
+      agentName: "query",
+      executorPrompt: "向 NotebookLM 提問",
+      tools: ["find", "click", "paste"],
+    };
+
+    await runExecutorSession(makeDualOptions(), step);
+
+    // The prompt sent should contain the tool constraint.
+    expect(mockSendAndWait).toHaveBeenCalledOnce();
+    const sentPrompt = mockSendAndWait.mock.calls[0][0].prompt;
+    expect(sentPrompt).toContain("禁止使用");
+    expect(sentPrompt).toContain("向 NotebookLM 提問");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T068F: runDualSession
+// ---------------------------------------------------------------------------
+
+describe("runDualSession", () => {
+  let callCount: number;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    callCount = 0;
+    mockDisconnect.mockResolvedValue(undefined);
+  });
+
+  it("orchestrates planner → executor → returns aggregated result", async () => {
+    const plan = {
+      reasoning: "User wants to list sources",
+      steps: [{ agentName: "list-sources", executorPrompt: "列出來源", tools: ["find", "screenshot"] }],
+    };
+
+    // First call: Planner session (calls submitPlan).
+    // Second call: Executor session.
+    mockCreateSession.mockImplementation(async (opts: { tools?: Array<{ name: string; handler: (args: unknown) => Promise<unknown> }> }) => {
+      callCount++;
+      if (callCount === 1) {
+        // Planner: call submitPlan.
+        const submitPlan = opts.tools?.find((t) => t.name === "submitPlan");
+        if (submitPlan) await submitPlan.handler(plan);
+      }
+      return {
+        sessionId: `session-${callCount}`,
+        sendAndWait: mockSendAndWait.mockResolvedValue(
+          fakeAssistantMessage(callCount === 1 ? "Plan done." : "Found 3 sources."),
+        ),
+        disconnect: mockDisconnect,
+      };
+    });
+
+    const result = await runDualSession(makeDualOptions(), "列出來源");
+
+    expect(result.success).toBe(true);
+    expect(result.result).toBe("Found 3 sources.");
+    expect(result.durationMs).toBeGreaterThanOrEqual(0);
+    // Two sessions: planner + executor.
+    expect(mockCreateSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("handles multi-step plan and returns last step result", async () => {
+    const plan = {
+      reasoning: "Compound",
+      steps: [
+        { agentName: "list-sources", executorPrompt: "列出來源", tools: ["find"] },
+        { agentName: "query", executorPrompt: "問問題", tools: ["find", "click"] },
+      ],
+    };
+
+    mockCreateSession.mockImplementation(async (opts: { tools?: Array<{ name: string; handler: (args: unknown) => Promise<unknown> }> }) => {
+      callCount++;
+      if (callCount === 1) {
+        const submitPlan = opts.tools?.find((t) => t.name === "submitPlan");
+        if (submitPlan) await submitPlan.handler(plan);
+      }
+      const messages = ["Plan done.", "Sources listed.", "Answer: TypeScript is great."];
+      return {
+        sessionId: `session-${callCount}`,
+        sendAndWait: vi.fn().mockResolvedValue(fakeAssistantMessage(messages[callCount - 1] ?? "")),
+        disconnect: mockDisconnect,
+      };
+    });
+
+    const result = await runDualSession(makeDualOptions(), "列出來源然後問問題");
+
+    expect(result.success).toBe(true);
+    expect(result.result).toBe("Answer: TypeScript is great.");
+    // Three sessions: planner + 2 executors.
+    expect(mockCreateSession).toHaveBeenCalledTimes(3);
+  });
+
+  it("propagates executor failure and stops", async () => {
+    const plan = {
+      reasoning: "Two steps",
+      steps: [
+        { agentName: "list-sources", executorPrompt: "列出來源", tools: ["find"] },
+        { agentName: "query", executorPrompt: "問問題", tools: ["find"] },
+      ],
+    };
+
+    mockCreateSession.mockImplementation(async (opts: { tools?: Array<{ name: string; handler: (args: unknown) => Promise<unknown> }> }) => {
+      callCount++;
+      if (callCount === 1) {
+        const submitPlan = opts.tools?.find((t) => t.name === "submitPlan");
+        if (submitPlan) await submitPlan.handler(plan);
+      }
+      return {
+        sessionId: `session-${callCount}`,
+        sendAndWait: callCount === 2
+          ? vi.fn().mockRejectedValue(new Error("Chrome crashed"))
+          : vi.fn().mockResolvedValue(fakeAssistantMessage("ok")),
+        disconnect: mockDisconnect,
+      };
+    });
+
+    const result = await runDualSession(makeDualOptions(), "do stuff");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Step 1/2");
+    expect(result.error).toContain("list-sources");
+    expect(result.error).toContain("Chrome crashed");
+    // Only 2 sessions: planner + first executor (fails, skips second).
+    expect(mockCreateSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns error when planner fails", async () => {
+    // Planner doesn't call submitPlan.
+    mockCreateSession.mockResolvedValue({
+      sessionId: "planner-session",
+      sendAndWait: mockSendAndWait.mockResolvedValue(fakeAssistantMessage("I can't help with that.")),
+      disconnect: mockDisconnect,
+    });
+
+    const result = await runDualSession(makeDualOptions(), "天氣如何？");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Planner did not submit a plan");
+  });
 });
