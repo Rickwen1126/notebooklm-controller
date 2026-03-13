@@ -171,9 +171,81 @@ When asking cross-source questions, NotebookLM initially shows intermediate stat
 | 5 | Cross-source question | ✅ | 5 (same as #3) |
 | 6 | Multi-turn conversation | ✅ | same as #3 per turn |
 
-## Unresolved (for Phase B)
+## Phase B — Copilot SDK Runtime (2026-03-13, session 2)
+
+### 14. Copilot SDK runtime integration — PASS
+
+Wrapped 9 tools (7 browser + navigate + wait) in `defineTool()` format, ran through `CopilotClient → createSession → sendAndWait`.
+
+Script: `spike/browser-capability/phase-b.ts` (self-contained, no imports from `src/`)
+
+**Run 2 (full flow, enhanced prompt)**:
+- 20 tool calls, 86s total
+- Agent followed all 4 steps: create notebook → add source → ask question → read answer
+- Correct tool sequencing: find → click → paste → wait → read
+
+**Run 3 (with timing)**:
+- 20 tool calls, 136s total (slower due to LLM reasoning on screenshot analysis)
+- Same correct flow, reproducible
+
+### 15. Setup timing breakdown
+
+| Phase | Duration |
+|-------|----------|
+| Chrome connect + CDP session | 28ms |
+| Create 9 tools | 2ms |
+| `client.start()` (Copilot CLI process) | 644ms |
+| `createSession()` (tool schema + session init) | 5,658ms |
+| **Total setup** | **6,332ms** |
+
+**Bottleneck**: `createSession()` at 5.6s — SDK serializes tool schemas, sends to CLI, CLI handshakes with GitHub API.
+In production: CopilotClient is singleton (always running), so only `createSession()` cost per task.
+
+### 16. Event observability — session.on() works
+
+SDK's `session.on(handler)` receives all events in real-time:
+- `assistant.turn_start/end` — agent reasoning cycles
+- `assistant.reasoning` — agent's internal thought process (visible!)
+- `assistant.message` — agent's text output
+- `tool.execution_start/complete` — tool invocations with args and results
+- `session.error` — error reporting
+
+Agent reasoning is fully observable — e.g., "The user wants me to operate NotebookLM... Let me start by taking a screenshot."
+
+### 17. Prompt engineering is critical for agent accuracy
+
+**Run 1 (minimal prompt)**: Agent saw existing results on page, took shortcut (4 tool calls, didn't create new notebook)
+**Run 2+ (enhanced prompt with NOTEBOOKLM_KNOWLEDGE)**: Agent correctly followed all steps
+
+Key additions that made it work:
+- Explicit UI element table (operation → find text → expected element)
+- Known CSS selectors
+- Disambiguation rules (submit button y>400, collapse_content recovery)
+- Step-by-step task breakdown with expected UI states
+
+### 18. SDK internal tools
+
+The SDK injects its own tools alongside ours:
+- `report_intent` — agent declares its intent before acting
+- `view` — agent requests to view binary data (screenshots)
+
+These are managed by the SDK runtime, not by us.
+
+## Verified Flows Summary
+
+| # | Flow | Status | Tool calls |
+|---|------|--------|------------|
+| 1 | Create notebook | ✅ | 3 (shot → click → wait) |
+| 2 | Add first source (copied text) | ✅ | 5 (find → click → find → paste → click) |
+| 3 | Ask question + read answer | ✅ | 5 (find → click → paste → find submit → read) |
+| 4 | Add second source to existing notebook | ✅ | 6 (collapse → find → click → find → paste → click) |
+| 5 | Cross-source question | ✅ | 5 (same as #3) |
+| 6 | Multi-turn conversation | ✅ | same as #3 per turn |
+| 7 | **Full flow via Copilot SDK agent** | ✅ | **20 (autonomous, 86-136s)** |
+
+## Remaining
 
 - `dispatchType` not tested for special keys (Enter, Tab, Escape)
-- Copilot SDK runtime integration
 - Multi-tab scenarios
 - Error recovery (element not found, page not loaded)
+- Model selection (SDK currently uses default model, not configurable in spike)

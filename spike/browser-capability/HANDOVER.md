@@ -16,7 +16,7 @@
 | Haiku 模型驗證 | ✅ PASS — 13 calls, 完整 flow |
 | 多來源 + 跨來源提問 | ✅ PASS — 2 來源, 跨來源引用正確 |
 | UI 狀態陷阱發現 + 恢復 | ✅ 來源展開遮蔽 → collapse_content 恢復 |
-| Phase B（Copilot SDK runtime） | ❌ 尚未開始 |
+| Phase B（Copilot SDK runtime） | ✅ PASS — 20 tool calls, 86-136s, 完整 flow |
 | Chrome | 仍在跑 port 9222，spike profile |
 
 ## 檔案結構
@@ -168,12 +168,29 @@ find "新增來源"          → 按鈕重新出現
 頁面上有兩個「提交」按鈕（搜尋欄 + Chat 輸入欄）。
 **規則**：選 `y > 400` 的那個（Chat 區域）。
 
-## Phase B 待做事項
+## Phase B 結果
 
-1. 把 7 個 tool 用 `defineTool(name, { description, parameters: z.object(...), handler })` 包裝
-2. 用 `createSession` + `sendAndWait` 跑 prompt
-3. 驗證 Copilot SDK vision pipeline（screenshot → tool call → loop）
-4. 確認 SDK 沒有引入新問題（session lifecycle、tool schema serialization）
+**全部通過。** `spike/browser-capability/phase-b.ts` 是自包的實驗腳本（不 import src/）。
+
+```bash
+# 跑法
+npx --yes tsx spike/browser-capability/experiment.ts launch   # 先啟動 Chrome
+npx --yes tsx spike/browser-capability/experiment.ts navigate https://notebooklm.google.com  # 到首頁
+npx --yes tsx spike/browser-capability/phase-b.ts --preset create-and-query  # 跑 agent
+```
+
+### Setup timing
+- Chrome connect: 28ms
+- client.start(): 644ms
+- createSession(): **5.6s**（瓶頸，tool schema 序列化 + GitHub API 握手）
+- 生產環境 CopilotClient singleton 常駐，每任務只付 createSession() 成本
+
+### Agent 行為觀察
+- 9 tools（7 browser + navigate + wait）
+- 20 tool calls 完成完整 flow（建立筆記本 → 加來源 → 提問 → 讀回答）
+- `session.on()` 可觀測所有事件：reasoning、tool start/complete、message
+- SDK 注入自己的工具：`report_intent`（宣告意圖）、`view`（查看截圖）
+- Prompt 品質決定 agent 準確度 — 需要包含 UI 知識 + 操作規則 + 步驟分解
 
 ## 回灌主專案
 
