@@ -89,6 +89,7 @@ export function registerNotebookTools(
   deps: NotebookToolDeps,
 ): void {
   registerAddNotebook(server, deps);
+  registerAddAllNotebooks(server);
   registerListNotebooks(server, deps);
   registerOpenNotebook(server, deps);
   registerCloseNotebook(server, deps);
@@ -184,6 +185,31 @@ function registerAddNotebook(
         const message = err instanceof Error ? err.message : String(err);
         return errorResult(message);
       }
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// T056: add_all_notebooks (stub — interaction model TBD, post-MVP)
+// ---------------------------------------------------------------------------
+
+function registerAddAllNotebooks(
+  server: NbctlMcpServer,
+): void {
+  server.registerTool(
+    "add_all_notebooks",
+    {
+      description:
+        "Batch-register all notebooks in the NotebookLM account. " +
+        "Navigates to the homepage, extracts the notebook list, and adds each one. " +
+        "Note: This tool requires agent integration (post-MVP). " +
+        "Interaction model (preview+confirm) is pending design.",
+    },
+    async () => {
+      return jsonResult({
+        success: false,
+        error: "add_all_notebooks is not yet implemented. Use add_notebook to register notebooks individually.",
+      });
     },
   );
 }

@@ -69,6 +69,13 @@ wait(10)
 read(".source-panel")  → 驗證新來源出現
 ```
 
+## 完成後：更新 notebook 描述
+
+來源新增成功後，呼叫 `updateCache` 更新 notebook 的描述：
+- 產生 1-2 句摘要，概述 notebook 目前包含的所有來源
+- 包含來源列表摘要（例如「3 份來源：React 文件、API 設計筆記、效能報告」）
+- 包含首次建立時間戳
+
 ## 注意事項
 
 - 如果 `find("{{add_source}}")` 找不到，來源詳情可能展開中 → `find("collapse_content")` → click → 重試

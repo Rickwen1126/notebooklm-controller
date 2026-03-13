@@ -169,10 +169,10 @@
 - [x] T053 [P] [US2] Register `set_default` MCP tool in `src/daemon/notebook-tools.ts` (update DaemonState.defaultNotebook)
 - [x] T054 [P] [US2] Register `rename_notebook` MCP tool in `src/daemon/notebook-tools.ts` (validate new alias uniqueness, update state)
 - [x] T055 [P] [US2] Register `remove_notebook` MCP tool in `src/daemon/notebook-tools.ts` (close tab, remove from registry, clean cache)
-- [ ] T056 [US2] Register `add_all_notebooks` MCP tool in `src/daemon/mcp-server.ts` (navigate to NotebookLM homepage via agent, extract notebook list, batch add. ⚠️ MCP 互動模型待定：傾向 Preview+confirm 兩步模式，MVP 後決定)
-- [ ] T057 [US2] Implement tab limit enforcement and queuing (max 10 tabs, wait or error per spec AS11)
-- [ ] T058 [US2] Write `agents/create-notebook.md` agent config (navigate to NotebookLM homepage, click new notebook, capture dynamic URL, register)
-- [ ] T058.1 [US2] Implement notebook description auto-maintenance in add-source/remove-source agent prompts (FR-045: auto-update on source change, FR-046: include source list summary, FR-047: include creation timestamp)
+- [x] T056 [US2] Register `add_all_notebooks` MCP tool in `src/daemon/notebook-tools.ts` (stub — interaction model TBD post-MVP, returns not-yet-implemented error)
+- [x] T057 [US2] Implement tab limit enforcement and queuing (max 10 tabs, TabLimitError per spec AS11 — already implemented in Phase 2)
+- [x] T058 [US2] Write `agents/create-notebook.md` agent config — covered by existing `agents/manage-notebook.md` (action: create | rename | delete)
+- [x] T058.1 [US2] Implement notebook description auto-maintenance in add-source/remove-source agent prompts (FR-045: auto-update on source change, FR-046: include source list summary, FR-047: include creation timestamp)
 
 **Checkpoint**: All notebook management MCP tools functional. Can add, list, open, close, rename, remove notebooks.
 

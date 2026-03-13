@@ -111,15 +111,16 @@ describe("registerNotebookTools", () => {
     registerNotebookTools(server as never, deps);
   });
 
-  it("registers all 7 notebook management tools", () => {
+  it("registers all 8 notebook management tools", () => {
     expect(server.tools.has("add_notebook")).toBe(true);
+    expect(server.tools.has("add_all_notebooks")).toBe(true);
     expect(server.tools.has("list_notebooks")).toBe(true);
     expect(server.tools.has("open_notebook")).toBe(true);
     expect(server.tools.has("close_notebook")).toBe(true);
     expect(server.tools.has("set_default")).toBe(true);
     expect(server.tools.has("rename_notebook")).toBe(true);
     expect(server.tools.has("remove_notebook")).toBe(true);
-    expect(server.registerTool).toHaveBeenCalledTimes(7);
+    expect(server.registerTool).toHaveBeenCalledTimes(8);
   });
 
   // -----------------------------------------------------------------------
