@@ -399,6 +399,40 @@ export async function loadAgentConfig(
 }
 
 /**
+ * Build a Planner catalog string from loaded agent configs.
+ *
+ * The catalog is injected into the Planner session's systemMessage so it can
+ * select the appropriate agent config for each step of the execution plan.
+ * Each entry shows the agent's name, description, available tools, and parameters.
+ */
+export function buildPlannerCatalog(configs: AgentConfig[]): string {
+  if (configs.length === 0) {
+    return "(no agents available)";
+  }
+
+  return configs
+    .map((config) => {
+      const lines = [
+        `  - name: ${config.name}`,
+        `    description: ${config.description}`,
+        `    tools: [${config.tools.join(", ")}]`,
+      ];
+
+      const paramEntries = Object.entries(config.parameters);
+      if (paramEntries.length > 0) {
+        const paramObj: Record<string, { type: string; description: string }> = {};
+        for (const [key, param] of paramEntries) {
+          paramObj[key] = { type: param.type, description: param.description };
+        }
+        lines.push(`    parameters: ${JSON.stringify(paramObj)}`);
+      }
+
+      return lines.join("\n");
+    })
+    .join("\n");
+}
+
+/**
  * Load all `.md` agent config files from a directory.
  *
  * Invalid files are silently skipped (a warning is logged).

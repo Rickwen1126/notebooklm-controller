@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import {
   loadAgentConfig,
   loadAllAgentConfigs,
+  buildPlannerCatalog,
 } from "../../../../src/agent/agent-loader.js";
+import type { AgentConfig } from "../../../../src/shared/types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -341,5 +343,97 @@ describe("loadAllAgentConfigs", () => {
 
     const configs = await loadAllAgentConfigs(emptyDir);
     expect(configs).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T068C: buildPlannerCatalog
+// ---------------------------------------------------------------------------
+
+describe("buildPlannerCatalog", () => {
+  function makeConfig(overrides: Partial<AgentConfig>): AgentConfig {
+    return {
+      name: "test-agent",
+      displayName: "Test Agent",
+      description: "A test agent",
+      tools: [],
+      prompt: "do stuff",
+      infer: true,
+      parameters: {},
+      ...overrides,
+    };
+  }
+
+  it("returns '(no agents available)' for empty configs array", () => {
+    expect(buildPlannerCatalog([])).toBe("(no agents available)");
+  });
+
+  it("includes name, description, and tools for each agent", () => {
+    const configs = [
+      makeConfig({
+        name: "add-source",
+        description: "Add a source to NotebookLM",
+        tools: ["find", "click", "paste"],
+      }),
+    ];
+
+    const catalog = buildPlannerCatalog(configs);
+
+    expect(catalog).toContain("name: add-source");
+    expect(catalog).toContain("description: Add a source to NotebookLM");
+    expect(catalog).toContain("tools: [find, click, paste]");
+  });
+
+  it("includes parameters when present", () => {
+    const configs = [
+      makeConfig({
+        name: "query",
+        description: "Query notebook",
+        tools: ["find", "click"],
+        parameters: {
+          question: {
+            type: "string",
+            description: "The question to ask",
+            default: "",
+          },
+        },
+      }),
+    ];
+
+    const catalog = buildPlannerCatalog(configs);
+
+    expect(catalog).toContain("parameters:");
+    expect(catalog).toContain('"question"');
+    expect(catalog).toContain('"type":"string"');
+    expect(catalog).toContain('"description":"The question to ask"');
+  });
+
+  it("omits parameters line when agent has no parameters", () => {
+    const configs = [
+      makeConfig({
+        name: "list-sources",
+        description: "List all sources",
+        tools: ["read"],
+        parameters: {},
+      }),
+    ];
+
+    const catalog = buildPlannerCatalog(configs);
+
+    expect(catalog).not.toContain("parameters:");
+  });
+
+  it("handles multiple agents", () => {
+    const configs = [
+      makeConfig({ name: "agent-a", description: "First agent", tools: ["find"] }),
+      makeConfig({ name: "agent-b", description: "Second agent", tools: ["click", "paste"] }),
+    ];
+
+    const catalog = buildPlannerCatalog(configs);
+
+    expect(catalog).toContain("name: agent-a");
+    expect(catalog).toContain("name: agent-b");
+    expect(catalog).toContain("tools: [find]");
+    expect(catalog).toContain("tools: [click, paste]");
   });
 });

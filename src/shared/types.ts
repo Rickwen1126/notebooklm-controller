@@ -214,6 +214,23 @@ export interface DaemonStatusResult {
   runningTasks: number;
 }
 
+// ---------------------------------------------------------------------------
+// Two-Session Planner+Executor (Phase 5.5)
+// ---------------------------------------------------------------------------
+
+/** A single step in an execution plan produced by the Planner session. */
+export interface ExecutionStep {
+  agentName: string;
+  executorPrompt: string;
+  tools: string[];
+}
+
+/** Structured execution plan captured from the Planner session via submitPlan tool. */
+export interface ExecutionPlan {
+  steps: ExecutionStep[];
+  reasoning: string;
+}
+
 /** A single UI element entry in the locale-specific UI map. */
 export interface UIMapElement {
   text: string;
