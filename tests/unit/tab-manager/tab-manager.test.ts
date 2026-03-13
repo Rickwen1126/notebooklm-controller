@@ -13,8 +13,9 @@ function createMockPage() {
 }
 
 function createMockBrowser() {
+  type EventHandler = (...args: unknown[]) => void;
   const pages: ReturnType<typeof createMockPage>[] = [];
-  const listeners: Record<string, Function[]> = {};
+  const listeners: Record<string, EventHandler[]> = {};
   return {
     newPage: vi.fn(async () => {
       const page = createMockPage();
@@ -22,7 +23,7 @@ function createMockBrowser() {
       return page;
     }),
     close: vi.fn(async () => {}),
-    on: vi.fn((event: string, handler: Function) => {
+    on: vi.fn((event: string, handler: EventHandler) => {
       listeners[event] = listeners[event] || [];
       listeners[event].push(handler);
     }),
@@ -103,6 +104,38 @@ describe("TabManager", () => {
     it("throws ChromeError if browser is already launched", async () => {
       await tm.launch();
       await expect(tm.launch()).rejects.toThrow(ChromeError);
+    });
+
+    it("throws ChromeError with permission message for EACCES", async () => {
+      (puppeteer.launch as Mock).mockRejectedValueOnce(
+        new Error("EACCES: permission denied, mkdir '/bad/path'"),
+      );
+
+      await expect(tm.launch()).rejects.toThrow(ChromeError);
+      // Verify the error message mentions permission denied.
+      (puppeteer.launch as Mock).mockRejectedValueOnce(
+        new Error("EACCES: permission denied, mkdir '/bad/path'"),
+      );
+      const freshTm = new TabManager();
+      await expect(freshTm.launch()).rejects.toThrow(/permission denied/);
+    });
+
+    it("throws ChromeError with ENOENT message when chrome path missing", async () => {
+      (puppeteer.launch as Mock).mockRejectedValueOnce(
+        new Error(
+          "ENOENT: no such file or directory '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'",
+        ),
+      );
+
+      await expect(tm.launch()).rejects.toThrow(/Chrome executable not found/);
+    });
+
+    it("throws ChromeError with generic message for unknown errors", async () => {
+      (puppeteer.launch as Mock).mockRejectedValueOnce(
+        new Error("something unexpected"),
+      );
+
+      await expect(tm.launch()).rejects.toThrow(/Failed to launch Chrome/);
     });
   });
 
@@ -244,6 +277,20 @@ describe("TabManager", () => {
 
       expect(tm.isConnected()).toBe(false);
       expect(tm.listTabs()).toHaveLength(0);
+    });
+
+    it("emits chrome-error event with ChromeError on disconnect", async () => {
+      await tm.launch();
+
+      const errorPromise = new Promise<Error>((resolve) => {
+        tm.on("chrome-error", resolve);
+      });
+
+      mockBrowser._emit("disconnected");
+
+      const err = await errorPromise;
+      expect(err).toBeInstanceOf(ChromeError);
+      expect(err.message).toContain("unexpectedly");
     });
   });
 

@@ -65,9 +65,10 @@ export class TabManager extends EventEmitter {
 
       this.browser.on("disconnected", () => {
         log.error("Chrome disconnected unexpectedly");
-        this.emit("disconnected");
         this.browser = null;
         this.tabs.clear();
+        this.emit("chrome-error", new ChromeError("Chrome process exited unexpectedly"));
+        this.emit("disconnected");
       });
 
       log.info("Chrome launched", {
@@ -76,8 +77,19 @@ export class TabManager extends EventEmitter {
         executablePath,
       });
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("EACCES") || msg.includes("permission denied")) {
+        throw new ChromeError(
+          `Chrome userDataDir permission denied: ${userDataDir}. Check directory permissions.`,
+        );
+      }
+      if (msg.includes("ENOENT") && msg.includes(executablePath)) {
+        throw new ChromeError(
+          `Chrome executable not found at ${executablePath}. Install Chrome or provide correct path.`,
+        );
+      }
       throw new ChromeError(
-        `Failed to launch Chrome: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to launch Chrome: ${msg}`,
       );
     }
   }

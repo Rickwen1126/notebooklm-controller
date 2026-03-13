@@ -6,6 +6,13 @@
  *
  * Individual tools (get_status, exec, etc.) are registered externally
  * via `registerTool()` during daemon setup.
+ *
+ * T041.3: Multi-session support.
+ * The SDK's `Protocol.connect()` throws if a transport is already connected.
+ * To support concurrent MCP sessions, we create a fresh McpServer instance
+ * per session and replay the stored tool registrations onto it.  Tool
+ * registrations are accumulated via `registerTool()` before `start()` and
+ * replayed for each new session that connects.
  */
 
 import { randomUUID } from "node:crypto";
@@ -39,6 +46,13 @@ export interface RegisterToolOptions {
   };
 }
 
+/** Stored tool registration entry, replayed onto per-session McpServer instances. */
+interface ToolRegistration {
+  name: string;
+  options: RegisterToolOptions;
+  handler: ToolCallback<ZodRawShapeCompat>;
+}
+
 // ---------------------------------------------------------------------------
 // Logger
 // ---------------------------------------------------------------------------
@@ -50,7 +64,14 @@ const log = logger.child({ module: "mcp-server" });
 // ---------------------------------------------------------------------------
 
 export class NbctlMcpServer {
-  private readonly mcpServer: McpServer;
+  /**
+   * Stored tool registrations — replayed onto each per-session McpServer.
+   * @see createSessionServer
+   */
+  private readonly toolRegistrations: ToolRegistration[] = [];
+
+  /** Per-session McpServer instances keyed by MCP session ID. */
+  private readonly sessionServers = new Map<string, McpServer>();
 
   /** Active transports keyed by MCP session ID. */
   private readonly transports = new Map<string, StreamableHTTPServerTransport>();
@@ -59,19 +80,7 @@ export class NbctlMcpServer {
   private httpServer: HttpServer | null = null;
 
   constructor() {
-    this.mcpServer = new McpServer(
-      {
-        name: "notebooklm-controller",
-        version: "0.1.0",
-      },
-      {
-        capabilities: {
-          logging: {},
-        },
-      },
-    );
-
-    log.info("McpServer instance created");
+    log.info("NbctlMcpServer instance created");
   }
 
   // -----------------------------------------------------------------------
@@ -82,8 +91,8 @@ export class NbctlMcpServer {
    * Register an MCP tool.
    *
    * Call this during daemon setup — before `start()` — to wire each tool
-   * into the MCP server.  Tools registered after `start()` will still be
-   * picked up by the SDK (it sends `tools/list_changed` automatically).
+   * into the MCP server.  Registrations are stored and replayed onto each
+   * per-session McpServer instance created during `handlePost()`.
    *
    * @param name    Unique tool name (e.g. "get_status", "exec").
    * @param options Tool metadata: description, optional Zod input schema, optional annotations.
@@ -94,23 +103,11 @@ export class NbctlMcpServer {
     options: RegisterToolOptions,
     handler: ToolCallback<Args>,
   ): void {
-    const config: {
-      description: string;
-      inputSchema?: Args;
-      annotations?: RegisterToolOptions["annotations"];
-    } = {
-      description: options.description,
-    };
-
-    if (options.inputSchema) {
-      config.inputSchema = options.inputSchema as Args;
-    }
-
-    if (options.annotations) {
-      config.annotations = options.annotations;
-    }
-
-    this.mcpServer.registerTool(name, config, handler);
+    this.toolRegistrations.push({
+      name,
+      options,
+      handler: handler as ToolCallback<ZodRawShapeCompat>,
+    });
 
     log.info("tool registered", { tool: name });
   }
@@ -184,18 +181,52 @@ export class NbctlMcpServer {
       this.httpServer = null;
     }
 
-    await this.mcpServer.close();
+    // Close all per-session McpServer instances.
+    const serverCloseOps: Promise<void>[] = [];
+    for (const [sessionId, mcpServer] of this.sessionServers.entries()) {
+      serverCloseOps.push(
+        mcpServer.close().catch((err: unknown) => {
+          log.error("error closing session server", {
+            sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }),
+      );
+    }
+    await Promise.all(serverCloseOps);
+    this.sessionServers.clear();
 
     log.info("MCP server stopped");
   }
 
   // -----------------------------------------------------------------------
-  // getServer
+  // getServer / getSessionServers
   // -----------------------------------------------------------------------
 
-  /** Expose the underlying McpServer for advanced use (notifications, etc.). */
+  /**
+   * Get an iterable of all currently-active per-session McpServer instances.
+   *
+   * Useful for broadcasting notifications to all connected clients.
+   */
+  getSessionServers(): IterableIterator<McpServer> {
+    return this.sessionServers.values();
+  }
+
+  /**
+   * Expose the first active session server, or create a detached one.
+   *
+   * Used by Notifier to obtain the underlying `server` property.
+   * When no sessions are active, returns a detached McpServer instance
+   * whose notifications will silently fail (no transport).
+   */
   getServer(): McpServer {
-    return this.mcpServer;
+    const first = this.sessionServers.values().next();
+    if (!first.done) {
+      return first.value;
+    }
+    // No active sessions — return a detached instance so callers
+    // that need a McpServer reference don't crash.
+    return this.createSessionServer();
   }
 
   // -----------------------------------------------------------------------
@@ -288,11 +319,14 @@ export class NbctlMcpServer {
     }
 
     if (!sessionId && isInitializeRequest(parsed)) {
-      // New session — create a transport and connect it.
+      // New session — create a per-session McpServer and transport (T041.3).
+      const sessionServer = this.createSessionServer();
+
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (sid: string) => {
           this.transports.set(sid, transport);
+          this.sessionServers.set(sid, sessionServer);
           log.info("session initialized", { sessionId: sid });
         },
       });
@@ -301,12 +335,13 @@ export class NbctlMcpServer {
         const sid = transport.sessionId;
         if (sid) {
           this.transports.delete(sid);
+          this.sessionServers.delete(sid);
           log.info("session closed", { sessionId: sid });
         }
       };
 
-      // Connect to a fresh McpServer instance's transport layer.
-      await this.mcpServer.connect(transport);
+      // Connect the per-session McpServer to the new transport.
+      await sessionServer.connect(transport);
       await transport.handleRequest(req, res, parsed);
       return;
     }
@@ -363,6 +398,53 @@ export class NbctlMcpServer {
 
     const transport = this.transports.get(sessionId)!;
     await transport.handleRequest(req, res);
+  }
+
+  // -----------------------------------------------------------------------
+  // Private: create a per-session McpServer with all registered tools
+  // -----------------------------------------------------------------------
+
+  /**
+   * Create a fresh McpServer and replay all stored tool registrations onto it.
+   *
+   * Each MCP session gets its own McpServer instance because the SDK's
+   * Protocol.connect() only supports one transport at a time (T041.3).
+   */
+  private createSessionServer(): McpServer {
+    const sessionServer = new McpServer(
+      {
+        name: "notebooklm-controller",
+        version: "0.1.0",
+      },
+      {
+        capabilities: {
+          logging: {},
+        },
+      },
+    );
+
+    // Replay all tool registrations.
+    for (const reg of this.toolRegistrations) {
+      const config: {
+        description: string;
+        inputSchema?: ZodRawShapeCompat;
+        annotations?: RegisterToolOptions["annotations"];
+      } = {
+        description: reg.options.description,
+      };
+
+      if (reg.options.inputSchema) {
+        config.inputSchema = reg.options.inputSchema;
+      }
+
+      if (reg.options.annotations) {
+        config.annotations = reg.options.annotations;
+      }
+
+      sessionServer.registerTool(reg.name, config, reg.handler);
+    }
+
+    return sessionServer;
   }
 
   // -----------------------------------------------------------------------
