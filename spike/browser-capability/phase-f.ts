@@ -765,7 +765,7 @@ const BATCH_TESTS: Array<{ id: string; prompt: string; agents: string[] }> = [
 
 async function main() {
   const args = process.argv.slice(2);
-  let model: string | undefined;
+  let model: string | undefined = "gpt-4.1";
   let batchMode = false;
   let batchFrom = 0;
 

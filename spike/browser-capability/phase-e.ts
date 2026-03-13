@@ -447,7 +447,7 @@ function createBrowserTools(cdp: CDPSession, page: Page): Tool[] {
 async function main() {
   const args = process.argv.slice(2);
   let prompt: string | undefined;
-  let model: string | undefined;
+  let model: string | undefined = "gpt-4.1";
 
   for (let i = 0; i < args.length; ) {
     if (args[i] === "--model" && args[i + 1]) {

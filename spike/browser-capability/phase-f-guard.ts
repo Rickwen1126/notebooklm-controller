@@ -320,7 +320,7 @@ const TEST_CASES: TestCase[] = [
 async function main() {
   const args = process.argv.slice(2);
   const testMode = args.includes("--test");
-  let model: string | undefined;
+  let model: string | undefined = "gpt-4.1";
 
   for (let i = 0; i < args.length; ) {
     if (args[i] === "--model" && args[i + 1]) {

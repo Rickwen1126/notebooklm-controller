@@ -552,7 +552,7 @@ async function main() {
 
   // Parse args
   let prompt: string | undefined;
-  let model: string | undefined;
+  let model: string | undefined = "gpt-4.1";
   let localeOverride: string | undefined;
   let presetName: string | undefined;
 
