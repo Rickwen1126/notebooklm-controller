@@ -275,6 +275,9 @@ ${agentCatalog}
   });
 
   // Run Planner as a single session with only submitPlan tool.
+  // Planner system message + user prompt are concatenated as the full prompt.
+  const fullPlannerPrompt = plannerSystemMessage + "\n\n---\n\n" + prompt;
+
   await runSession(
     {
       client,
@@ -284,7 +287,7 @@ ${agentCatalog}
       model: plannerModel,
       timeoutMs: plannerTimeoutMs,
     },
-    prompt,
+    fullPlannerPrompt,
   );
 
   if (!capturedPlan) {

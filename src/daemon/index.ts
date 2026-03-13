@@ -9,6 +9,7 @@ import { TabManager } from "../tab-manager/tab-manager.js";
 import { CopilotClientSingleton } from "../agent/client.js";
 import { NbctlMcpServer } from "./mcp-server.js";
 import { Scheduler } from "./scheduler.js";
+import type { SessionResult as SchedulerSessionResult } from "./scheduler.js";
 import { registerDaemonTools } from "./mcp-tools.js";
 import { registerNotebookTools } from "./notebook-tools.js";
 import { registerExecTools } from "./exec-tools.js";
@@ -18,9 +19,14 @@ import { CacheManager } from "../state/cache-manager.js";
 import { Notifier } from "../notification/notifier.js";
 import { NetworkGate } from "../network-gate/network-gate.js";
 import { resolveLocale, loadUIMap } from "../shared/locale.js";
-import { MCP_PORT } from "../shared/config.js";
+import { loadAllAgentConfigs } from "../agent/agent-loader.js";
+import { runDualSession } from "../agent/session-runner.js";
+import { buildToolsForTab } from "../agent/tools/index.js";
+import { createSessionHooks } from "../agent/hooks.js";
+import { MCP_PORT, AGENTS_DIR_USER, AGENTS_DIR_BUNDLED } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
-import type { UIMap } from "../shared/types.js";
+import { existsSync } from "node:fs";
+import type { UIMap, AgentConfig, AsyncTask } from "../shared/types.js";
 
 // ---------------------------------------------------------------------------
 // DaemonRuntime
@@ -36,8 +42,80 @@ export interface DaemonRuntime {
   cacheManager: CacheManager;
   notifier: Notifier;
   networkGate: NetworkGate;
+  agentConfigs: AgentConfig[];
   locale: string;
   uiMap: UIMap;
+}
+
+// ---------------------------------------------------------------------------
+// T068J: runTask factory — wires dual session to scheduler
+// ---------------------------------------------------------------------------
+
+interface RunTaskDeps {
+  copilotClient: CopilotClientSingleton;
+  tabManager: TabManager;
+  networkGate: NetworkGate;
+  cacheManager: CacheManager;
+  agentConfigs: AgentConfig[];
+  locale: string;
+}
+
+function createRunTask(
+  deps: RunTaskDeps,
+): (task: AsyncTask) => Promise<SchedulerSessionResult> {
+  const log = logger.child({ module: "daemon:runTask" });
+
+  return async (task: AsyncTask): Promise<SchedulerSessionResult> => {
+    const { copilotClient, tabManager, networkGate, cacheManager, agentConfigs, locale } = deps;
+
+    // 1. Resolve or open the notebook tab.
+    const state = await tabManager.listTabs();
+    let tabHandle = state.find((t) => t.notebookAlias === task.notebookAlias);
+
+    if (!tabHandle) {
+      // Tab not open — we need the notebook URL from state.
+      // For now, this is a placeholder; the scheduler ensures notebook exists.
+      log.warn("Tab not open for notebook, cannot run task", {
+        notebookAlias: task.notebookAlias,
+        taskId: task.taskId,
+      });
+      return {
+        success: false,
+        error: `No open tab for notebook: ${task.notebookAlias}. Call open_notebook first.`,
+      };
+    }
+
+    // 2. Build tools for this tab.
+    const tools = buildToolsForTab(tabHandle, task.notebookAlias, {
+      networkGate,
+      cacheManager,
+    });
+
+    // 3. Create session hooks.
+    const hooks = createSessionHooks({
+      networkGate,
+      taskId: task.taskId,
+      notebookAlias: task.notebookAlias,
+    });
+
+    // 4. Run dual session.
+    const result = await runDualSession(
+      {
+        client: copilotClient,
+        tools,
+        agentConfigs,
+        hooks,
+        locale,
+      },
+      task.command,
+    );
+
+    return {
+      success: result.success,
+      result: result.result as object | undefined,
+      error: result.error,
+    };
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -89,25 +167,36 @@ export async function startDaemon(options?: {
   log.info("Starting Copilot CLI client...");
   await copilotClient.start();
 
-  // 5. Create MCP Server
+  // 5. Load agent configs
+  const agentsDir = existsSync(AGENTS_DIR_USER)
+    ? AGENTS_DIR_USER
+    : AGENTS_DIR_BUNDLED;
+  const agentConfigs = await loadAllAgentConfigs(agentsDir, locale);
+  log.info("Agent configs loaded", {
+    dir: agentsDir,
+    count: agentConfigs.length,
+    agents: agentConfigs.map((c) => c.name),
+  });
+
+  // 6. Create MCP Server
   const mcpServer = new NbctlMcpServer();
 
-  // 6. Create Scheduler (runTask will be wired after MCP tools are registered)
+  // 7. Create Scheduler with dual-session runTask wiring
   const scheduler = new Scheduler({
     taskStore,
-    runTask: async (_task) => {
-      // Placeholder — will be wired to session-runner during tool registration
-      throw new Error("runTask not yet wired");
-    },
+    runTask: createRunTask({
+      copilotClient, tabManager, networkGate, cacheManager,
+      agentConfigs, locale,
+    }),
     onTaskComplete: (task) => notifier.notify(task),
   });
 
-  // 7. Register MCP tools
+  // 8. Register MCP tools
   const shutdownFn = async () => {
     await stopDaemon({
       tabManager, copilotClient, mcpServer, scheduler,
       stateManager, taskStore, cacheManager, notifier, networkGate,
-      locale, uiMap,
+      agentConfigs, locale, uiMap,
     });
   };
   registerDaemonTools(mcpServer, {
@@ -121,11 +210,11 @@ export async function startDaemon(options?: {
     scheduler, stateManager, taskStore,
   });
 
-  // 8. Start MCP Server
+  // 9. Start MCP Server
   await mcpServer.start();
   notifier.setServer(mcpServer.getServer().server);
 
-  // 9. Update daemon state
+  // 10. Update daemon state
   await stateManager.updateDaemon({
     pid: process.pid,
     startedAt: new Date().toISOString(),
@@ -148,6 +237,7 @@ export async function startDaemon(options?: {
     cacheManager,
     notifier,
     networkGate,
+    agentConfigs,
     locale,
     uiMap,
   };

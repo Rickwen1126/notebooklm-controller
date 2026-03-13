@@ -213,22 +213,22 @@
 
 ### Types & Agent Loader
 
-- [ ] T068A [P] Add `ExecutionStep` and `ExecutionPlan` interfaces to `src/shared/types.ts` (agentName, executorPrompt, tools[], reasoning)
-- [ ] T068B [P] Implement `buildPlannerCatalog(configs: AgentConfig[]) → string` in `src/agent/agent-loader.ts` (generates agent summary for Planner systemMessage: name, description, tools, parameters per agent)
-- [ ] T068C [P] Unit tests for `buildPlannerCatalog` in `tests/unit/agent/config/agent-loader.test.ts` (verify catalog format, empty configs, tool lists)
+- [x] T068A [P] Add `ExecutionStep` and `ExecutionPlan` interfaces to `src/shared/types.ts` (agentName, executorPrompt, tools[], reasoning)
+- [x] T068B [P] Implement `buildPlannerCatalog(configs: AgentConfig[]) → string` in `src/agent/agent-loader.ts` (generates agent summary for Planner systemMessage: name, description, tools, parameters per agent)
+- [x] T068C [P] Unit tests for `buildPlannerCatalog` in `tests/unit/agent/config/agent-loader.test.ts` (verify catalog format, empty configs, tool lists)
 
 ### Session Runner Dual Session
 
-- [ ] T068D Unit tests for `runPlannerSession` in `tests/unit/agent/session-runner.test.ts` (submitPlan tool capture, plan validation, no-plan error, non-NotebookLM request rejection)
-- [ ] T068E Unit tests for `runExecutorSession` in `tests/unit/agent/session-runner.test.ts` (tool filtering by step.tools, tool constraint preamble injection, agent config lookup, unknown agent error)
-- [ ] T068F Unit tests for `runDualSession` in `tests/unit/agent/session-runner.test.ts` (end-to-end: planner → executor → aggregate results, multi-step plan, executor failure propagation)
-- [ ] T068G Implement `runPlannerSession` in `src/agent/session-runner.ts` (create submitPlan tool with closure capture, build Planner systemMessage from catalog + routing rules + locale, call existing `runSession()`, extract captured ExecutionPlan)
-- [ ] T068H Implement `runExecutorSession` in `src/agent/session-runner.ts` (lookup agent config by name, filter tools by step.tools, prepend tool constraint preamble to agent prompt, call existing `runSession()`)
-- [ ] T068I Implement `runDualSession` in `src/agent/session-runner.ts` (orchestrate: runPlannerSession → for each step runExecutorSession → aggregate SessionResult)
+- [x] T068D Unit tests for `runPlannerSession` in `tests/unit/agent/session-runner.test.ts` (submitPlan tool capture, plan validation, no-plan error, non-NotebookLM request rejection)
+- [x] T068E Unit tests for `runExecutorSession` in `tests/unit/agent/session-runner.test.ts` (tool filtering by step.tools, tool constraint preamble injection, agent config lookup, unknown agent error)
+- [x] T068F Unit tests for `runDualSession` in `tests/unit/agent/session-runner.test.ts` (end-to-end: planner → executor → aggregate results, multi-step plan, executor failure propagation)
+- [x] T068G Implement `runPlannerSession` in `src/agent/session-runner.ts` (create submitPlan tool with closure capture, build Planner systemMessage from catalog + routing rules + locale, call existing `runSession()`, extract captured ExecutionPlan)
+- [x] T068H Implement `runExecutorSession` in `src/agent/session-runner.ts` (lookup agent config by name, filter tools by step.tools, prepend tool constraint preamble to agent prompt, call existing `runSession()`)
+- [x] T068I Implement `runDualSession` in `src/agent/session-runner.ts` (orchestrate: runPlannerSession → for each step runExecutorSession → aggregate SessionResult)
 
 ### Daemon Wiring
 
-- [ ] T068J Wire `runTask` in `src/daemon/index.ts` — replace placeholder with actual dual-session execution (resolve tabHandle for notebook, build tools via `buildToolsForTab`, load agent configs with locale, call `runDualSession`)
+- [x] T068J Wire `runTask` in `src/daemon/index.ts` — replace placeholder with actual dual-session execution (resolve tabHandle for notebook, build tools via `buildToolsForTab`, load agent configs with locale, call `runDualSession`)
 - [ ] T068K [P] Integration test for exec end-to-end in `tests/integration/daemon/exec-e2e.test.ts` (exec MCP tool → scheduler → dual session → mock agent result → task complete notification)
 
 **Checkpoint**: exec tool fully wired end-to-end. Planner+Executor architecture operational. Ready for Phase 6 agent configs.

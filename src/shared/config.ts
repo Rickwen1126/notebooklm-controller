@@ -13,6 +13,11 @@ export const CACHE_DIR = join(NBCTL_HOME, "cache");
 export const PROFILES_DIR = join(NBCTL_HOME, "profiles");
 export const LOGS_DIR = join(NBCTL_HOME, "logs");
 
+// Agent configs directories (checked in order, first existing one wins).
+// User-local override > project bundled.
+export const AGENTS_DIR_USER = join(NBCTL_HOME, "agents");
+export const AGENTS_DIR_BUNDLED = join(process.cwd(), "agents");
+
 // ---------------------------------------------------------------------------
 // Per-notebook cache paths (factory functions)
 // ---------------------------------------------------------------------------

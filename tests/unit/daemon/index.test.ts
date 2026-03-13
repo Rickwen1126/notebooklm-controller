@@ -234,7 +234,49 @@ vi.mock("../../../src/shared/config.js", () => ({
   BACKOFF_INITIAL_MS: 5000,
   BACKOFF_MAX_MS: 300000,
   MAX_TABS: 10,
+  AGENTS_DIR_USER: "/tmp/test-agents-user",
+  AGENTS_DIR_BUNDLED: "/tmp/test-agents-bundled",
   findChromePath: vi.fn().mockReturnValue("/usr/bin/google-chrome"),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock: node:fs (existsSync for agent dir check)
+// ---------------------------------------------------------------------------
+
+vi.mock("node:fs", () => ({
+  existsSync: vi.fn().mockReturnValue(false),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock: agent-loader (loadAllAgentConfigs)
+// ---------------------------------------------------------------------------
+
+vi.mock("../../../src/agent/agent-loader.js", () => ({
+  loadAllAgentConfigs: vi.fn().mockResolvedValue([]),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock: session-runner (runDualSession)
+// ---------------------------------------------------------------------------
+
+vi.mock("../../../src/agent/session-runner.js", () => ({
+  runDualSession: vi.fn().mockResolvedValue({ success: true, durationMs: 100 }),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock: agent/tools/index (buildToolsForTab)
+// ---------------------------------------------------------------------------
+
+vi.mock("../../../src/agent/tools/index.js", () => ({
+  buildToolsForTab: vi.fn().mockReturnValue([]),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock: agent/hooks (createSessionHooks)
+// ---------------------------------------------------------------------------
+
+vi.mock("../../../src/agent/hooks.js", () => ({
+  createSessionHooks: vi.fn().mockReturnValue({}),
 }));
 
 // ---------------------------------------------------------------------------
@@ -289,6 +331,7 @@ describe("Daemon entry point", () => {
       expect(runtime).toHaveProperty("cacheManager");
       expect(runtime).toHaveProperty("notifier");
       expect(runtime).toHaveProperty("networkGate");
+      expect(runtime).toHaveProperty("agentConfigs");
       expect(runtime).toHaveProperty("locale");
       expect(runtime).toHaveProperty("uiMap");
 
