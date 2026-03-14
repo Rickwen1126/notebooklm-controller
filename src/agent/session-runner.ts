@@ -185,6 +185,10 @@ export interface DualSessionOptions {
   hooks: Record<string, unknown>;
   /** Resolved locale string (e.g. "zh-TW"). */
   locale: string;
+  /** Target notebook alias — injected as canonical context into Executor prompt. */
+  notebookAlias: string;
+  /** Current tab URL — used for pre-navigate anchor check. */
+  tabUrl?: string;
   /** Model for Planner session. Defaults to DEFAULT_AGENT_MODEL. */
   plannerModel?: string;
   /** Model for Executor sessions. Defaults to DEFAULT_AGENT_MODEL. */
@@ -360,10 +364,29 @@ export async function runExecutorSession(
     if (screenshotTool) filteredTools.push(screenshotTool);
   }
 
-  // 3. Build Executor systemMessage: tool constraint + agent prompt.
+  // 3. Build Executor systemMessage: tool constraint + canonical context + agent prompt.
   const toolList = [...step.tools, "screenshot"].join(", ");
   const constraint = TOOL_CONSTRAINT_PREAMBLE.replace("{TOOL_LIST}", toolList);
-  const systemMessage = constraint + agentConfig.prompt;
+
+  // Canonical notebook context (explicitly injected so agent knows target)
+  const notebookContext = `## 系統背景\n\n目標 Notebook: ${options.notebookAlias}\n\n`;
+
+  // FR-179: Pre-navigate hint (O(1) URL exact match, hint not assertion)
+  let navigateHint = "";
+  if (options.tabUrl && agentConfig.startPage) {
+    const HOMEPAGE_URL = "https://notebooklm.google.com";
+    const expectHomepage = agentConfig.startPage === "homepage";
+    const isOnHomepage = options.tabUrl === HOMEPAGE_URL || options.tabUrl === HOMEPAGE_URL + "/";
+    const isOnNotebook = options.tabUrl.startsWith(HOMEPAGE_URL + "/notebook/");
+
+    if (expectHomepage && !isOnHomepage) {
+      navigateHint = `[系統提示: 此 agent 預期在 homepage 操作，但目前頁面為 ${options.tabUrl}。建議先 navigate 至 ${HOMEPAGE_URL}]\n\n`;
+    } else if (!expectHomepage && !isOnNotebook) {
+      navigateHint = `[系統提示: 此 agent 預期在 notebook 頁面操作，但目前頁面為 ${options.tabUrl}]\n\n`;
+    }
+  }
+
+  const systemMessage = constraint + notebookContext + navigateHint + agentConfig.prompt;
 
   log.info("Starting Executor session", {
     agentName: step.agentName,

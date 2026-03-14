@@ -2,8 +2,7 @@
  * T048: Notebook CRUD integration test
  *
  * Verifies the full notebook management flow through MCP tool handlers:
- * add_notebook -> list_notebooks -> open_notebook -> close_notebook ->
- * set_default -> rename_notebook -> remove_notebook.
+ * add_notebook -> list_notebooks -> set_default -> rename_notebook -> remove_notebook.
  *
  * Uses a mock server pattern (same as lifecycle.test.ts / reauth.test.ts)
  * with in-memory state for realistic state transition testing.
@@ -161,13 +160,11 @@ describe("T048: Notebook CRUD integration", () => {
   // 1. All 7 notebook management tools are registered
   // -----------------------------------------------------------------------
 
-  it("registers all 8 notebook management tools", () => {
+  it("registers all 6 notebook management tools", () => {
     const expectedTools = [
       "add_notebook",
       "add_all_notebooks",
       "list_notebooks",
-      "open_notebook",
-      "close_notebook",
       "set_default",
       "rename_notebook",
       "remove_notebook",
@@ -177,14 +174,16 @@ describe("T048: Notebook CRUD integration", () => {
       expect(server.tools.has(name), `Tool "${name}" should be registered`).toBe(true);
     }
 
-    expect(server.registerTool).toHaveBeenCalledTimes(8);
+    expect(server.tools.has("open_notebook")).toBe(false);
+    expect(server.tools.has("close_notebook")).toBe(false);
+    expect(server.registerTool).toHaveBeenCalledTimes(6);
   });
 
   // -----------------------------------------------------------------------
   // 2. Full CRUD flow
   // -----------------------------------------------------------------------
 
-  describe("add -> list -> open -> close -> rename -> remove flow", () => {
+  describe("add -> list -> set_default -> rename -> remove flow", () => {
     // -------------------------------------------------------------------
     // add_notebook
     // -------------------------------------------------------------------
@@ -340,84 +339,6 @@ describe("T048: Notebook CRUD integration", () => {
     });
 
     // -------------------------------------------------------------------
-    // open_notebook
-    // -------------------------------------------------------------------
-
-    it("open_notebook marks notebook as active", async () => {
-      const addHandler = server.getHandler("add_notebook");
-      const openHandler = server.getHandler("open_notebook");
-
-      await addHandler({
-        url: "https://notebooklm.google.com/notebook/abc123",
-        alias: "research",
-      });
-
-      const result = parseResult(
-        await openHandler({ alias: "research" }),
-      );
-
-      expect(result.success).toBe(true);
-      expect(result.alias).toBe("research");
-
-      // State was updated to active
-      expect(deps.stateManager.updateNotebook).toHaveBeenCalledWith(
-        "research",
-        expect.objectContaining({ active: true }),
-      );
-      expect(deps._state.notebooks["research"].active).toBe(true);
-    });
-
-    it("open_notebook returns error for non-existent notebook", async () => {
-      const handler = server.getHandler("open_notebook");
-      const result = parseResult(
-        await handler({ alias: "nonexistent" }),
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("nonexistent");
-    });
-
-    // -------------------------------------------------------------------
-    // close_notebook
-    // -------------------------------------------------------------------
-
-    it("close_notebook marks notebook as closed and closes tab", async () => {
-      const addHandler = server.getHandler("add_notebook");
-      const openHandler = server.getHandler("open_notebook");
-      const closeHandler = server.getHandler("close_notebook");
-
-      await addHandler({
-        url: "https://notebooklm.google.com/notebook/abc123",
-        alias: "research",
-      });
-      await openHandler({ alias: "research" });
-
-      // Simulate an open tab for this notebook
-      (deps.tabManager.listTabs as ReturnType<typeof vi.fn>).mockReturnValue([
-        {
-          tabId: "tab-1",
-          notebookAlias: "research",
-          url: "https://notebooklm.google.com/notebook/abc123",
-        },
-      ]);
-
-      const result = parseResult(
-        await closeHandler({ alias: "research" }),
-      );
-
-      expect(result.success).toBe(true);
-
-      // Tab should have been closed
-      expect(deps.tabManager.closeTab).toHaveBeenCalledWith("tab-1");
-
-      // State should be updated to inactive/closed
-      expect(deps.stateManager.updateNotebook).toHaveBeenCalledWith(
-        "research",
-        expect.objectContaining({ active: false }),
-      );
-    });
-
-    // -------------------------------------------------------------------
     // set_default
     // -------------------------------------------------------------------
 
@@ -525,14 +446,12 @@ describe("T048: Notebook CRUD integration", () => {
 
     it("remove_notebook closes tab if open", async () => {
       const addHandler = server.getHandler("add_notebook");
-      const openHandler = server.getHandler("open_notebook");
       const removeHandler = server.getHandler("remove_notebook");
 
       await addHandler({
         url: "https://notebooklm.google.com/notebook/abc123",
         alias: "research",
       });
-      await openHandler({ alias: "research" });
 
       // Simulate an open tab
       (deps.tabManager.listTabs as ReturnType<typeof vi.fn>).mockReturnValue([

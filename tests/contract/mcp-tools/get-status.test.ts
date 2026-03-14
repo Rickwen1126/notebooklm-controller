@@ -31,9 +31,10 @@ const NetworkHealthSchema = z.object({
 
 const DaemonStatusResultSchema = z.object({
   running: z.boolean(),
-  tabManager: z.object({
-    activeTabs: z.number(),
-    maxTabs: z.number(),
+  tabPool: z.object({
+    usedSlots: z.number(),
+    maxSlots: z.number(),
+    idleSlots: z.number(),
   }),
   network: NetworkHealthSchema,
   activeNotebooks: z.array(z.string()),
@@ -177,7 +178,7 @@ describe("get_status contract", () => {
   describe("output — DaemonStatusResult shape", () => {
     const sampleDaemonStatus: DaemonStatusResult = {
       running: true,
-      tabManager: { activeTabs: 3, maxTabs: 10 },
+      tabPool: { usedSlots: 3, maxSlots: 10, idleSlots: 2 },
       network: {
         status: "healthy",
         backoffUntil: null,

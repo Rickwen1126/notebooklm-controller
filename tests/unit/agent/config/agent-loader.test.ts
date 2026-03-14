@@ -359,6 +359,7 @@ describe("buildPlannerCatalog", () => {
       tools: [],
       prompt: "do stuff",
       infer: true,
+      startPage: "notebook",
       parameters: {},
       ...overrides,
     };

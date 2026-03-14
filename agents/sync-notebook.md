@@ -8,6 +8,7 @@ tools:
   - navigate
   - screenshot
 infer: true
+startPage: homepage
 parameters: {}
 ---
 

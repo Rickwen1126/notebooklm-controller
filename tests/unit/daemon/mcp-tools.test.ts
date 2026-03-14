@@ -43,6 +43,8 @@ function createMockDeps(overrides?: Partial<ToolRegistrationDeps>): ToolRegistra
   return {
     tabManager: {
       listTabs: vi.fn().mockReturnValue([]),
+      listIdleTabs: vi.fn().mockReturnValue([]),
+      listActiveTabs: vi.fn().mockReturnValue([]),
       switchMode: vi.fn().mockResolvedValue(undefined),
     } as unknown as ToolRegistrationDeps["tabManager"],
     scheduler: {
@@ -56,8 +58,8 @@ function createMockDeps(overrides?: Partial<ToolRegistrationDeps>): ToolRegistra
         port: 19224,
         startedAt: "2026-01-01T00:00:00Z",
         notebooks: {
-          research: { alias: "research", active: true },
-          archive: { alias: "archive", active: false },
+          research: { alias: "research" },
+          archive: { alias: "archive" },
         },
       }),
     } as unknown as ToolRegistrationDeps["stateManager"],
@@ -110,9 +112,9 @@ describe("registerDaemonTools", () => {
 
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.running).toBe(true);
-      expect(parsed.tabManager).toEqual({ activeTabs: 0, maxTabs: 10 });
+      expect(parsed.tabPool).toEqual({ usedSlots: 0, maxSlots: 10, idleSlots: 0 });
       expect(parsed.network.status).toBe("healthy");
-      expect(parsed.activeNotebooks).toEqual(["research"]);
+      expect(parsed.activeNotebooks).toEqual(["research", "archive"]);
       expect(parsed.defaultNotebook).toBe("research");
       expect(parsed.pendingTasks).toBe(0);
     });

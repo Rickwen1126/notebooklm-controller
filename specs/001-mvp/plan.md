@@ -77,7 +77,8 @@ src/
 ├── tab-manager/         # Single Chrome multi-tab management
 │   ├── tab-manager.ts   # Chrome instance + tab pool lifecycle（acquireTab/releaseTab/health）
 │   ├── tab-handle.ts    # TabHandle type + CDP session wrapper
-│   └── cdp-helpers.ts   # CDP 底層 API helpers（click, type, screenshot, scroll, paste）
+│   ├── cdp-helpers.ts   # CDP 底層 API helpers（click, type, screenshot, scroll, paste, selectAll via JS）
+│   └── download.ts     # CDP Browser.setDownloadBehavior setup（音訊下載基礎設施）
 ├── network-gate/        # 集中式流量閘門
 │   └── network-gate.ts  # acquirePermit / reportAnomaly / getHealth / backoff
 ├── agent/               # Copilot SDK agent adapter + config loader
@@ -149,7 +150,7 @@ tests/
 
 **⚠️ 架構更新（Phase F Spike 驗證後）**：CustomAgent sub-agent 無法存取 `defineTool()` custom tools（Finding #39）。
 改用 **Two-Session Planner+Executor 架構**（Finding #41, Phase F spike 驗證通過）：
-- **Session 1 (Planner)**：無 browser tools，只有 `submitPlan` tool。解析 NL 意圖 → 選 agent config → 組裝結構化 ExecutionPlan。也作為安全邊界（過濾非 NotebookLM 請求）。
+- **Session 1 (Planner)**：無 browser tools，提供雙 tool——`submitPlan`（通過）和 `rejectInput`（拒絕）。解析 NL 意圖 → 選 agent config → 組裝結構化 ExecutionPlan。也作為安全邊界（Input Gate，FR-185~188）：非 NotebookLM 請求透過 `rejectInput` tool 拒絕，附帶 category（6 種：off_topic/harmful/ambiguous/unsupported/missing_context/system）和 reason。被拒絕的請求不進入 Executor 階段。
 - **Session 2 (Executor, per step)**：帶 browser tools via `defineTool()`。接收 agent prompt + tool constraint preamble。
 - MCP 介面只暴露 `exec(NL prompt)`，browser tools 完全封裝在 session-runner 內部。
 
@@ -181,11 +182,11 @@ Scheduler.dispatch(task)
   → resolve canonical notebook (alias → NotebookEntry)
   → TabPool.acquireTab(notebook.url)  ← auto-acquire from pool
   → SessionRunner.runDualSession(task, tabHandle, agentConfigs, notebookContext)
-    ┌─ Planner Session (no browser tools)
-    │   tools: [submitPlan]
+    ┌─ Planner Session (no browser tools, Input Gate)
+    │   tools: [submitPlan, rejectInput]
     │   systemMessage: agent catalog + routing rules + 「target notebook: {alias}」
     │   → session.sendAndWait({ prompt: task.command })
-    │   → captured ExecutionPlan { steps[{ agentName, executorPrompt, tools[] }] }
+    │   → captured ExecutionPlan (submitPlan) or rejection (rejectInput)
     │   → session.disconnect()
     │
     └─ Executor Session(s) (per step, has browser tools)
@@ -203,12 +204,16 @@ Scheduler.dispatch(task)
 Tests 按 unit/integration/contract 分層，unit 按模組對應。
 
 **Two-Session Planner+Executor 架構**（Phase F Spike 驗證後確認，取代原 CustomAgent sub-agent 方案）：
-- **Planner Session**（意圖解析層）：session systemMessage 放 agent catalog（每個 agent 的 name/description/tools/parameters summary）+ routing rules。唯一 tool 是 `submitPlan`，透過 tool call handler 捕獲結構化 `ExecutionPlan`。也負責過濾非 NotebookLM 請求（安全邊界）。
+- **Planner Session**（意圖解析層）：session systemMessage 放 agent catalog（每個 agent 的 name/description/tools/parameters summary）+ routing rules。提供雙 tool——`submitPlan`（通過，捕獲結構化 `ExecutionPlan`）和 `rejectInput`（拒絕，附帶 category + reason）。Planner 作為 **Input Gate**（FR-185~188）：非 NotebookLM 請求透過 `rejectInput` 拒絕（6 種 category：off_topic/harmful/ambiguous/unsupported/missing_context/system），被拒絕的請求不進入 Executor 階段，SessionResult 標記 `rejected: true`。
 - **Executor Session**（執行層）：每個 `agents/*.md` 的 prompt 作為 systemMessage，加上 tool constraint preamble（禁止 bash/view/edit 等內建工具）。只帶該 step 需要的 browser tools via `defineTool()`。
+  **Prompt 零留白原則**（Spike Finding #44）：GPT-4.1 是非推理模型，不會自行推論省略的步驟。
+  Agent prompt MUST 寫成 step-by-step recipe——每個 UI 互動步驟（點擊、確認 dialog、等待回應）
+  都必須明確寫出，不可省略「顯而易見」的步驟（如 dialog confirm button 點擊）。
+  違反此原則會導致 agent 跳過關鍵步驟或卡在 dialog 上。
 - **agents/*.md 雙重角色**：Planner 讀 catalog（name/description/tools），Executor 讀完整 prompt（含 `{{NOTEBOOKLM_KNOWLEDGE}}`）。
 - **KNOWLEDGE 注入**：agent-loader 載入 agent config → 偵測 `{{NOTEBOOKLM_KNOWLEDGE}}` → 讀 `src/config/ui-maps/<locale>.json` → 生成 knowledge string → 替換進 prompt。
 - **i18n**：MVP 內建 zh-TW/en/zh-CN 三個 locale。Daemon 啟動時偵測 Chrome locale，載入對應 UI map。Post-MVP 支援 `tools repair` 自動 discover。
-- **Model 分離可能性**：Planner 用推理模型，Executor 用 GPT-4.1（免費、快速）。
+- **Model 選擇**（Spike Finding #50 驗證）：Planner 和 Executor 都使用 GPT-4.1（免費、快速）。非推理模型足夠——Planner 做分類路由，Executor 做機械操作，prompt 品質 > 模型能力。`createSession()` MUST hardcode model 參數。
 
 ## Complexity Tracking
 

@@ -4,7 +4,6 @@ import type { CDPSession, Page } from "puppeteer-core";
 export type NotebookStatus =
   | "ready"
   | "operating"
-  | "closed"
   | "stale"
   | "error";
 
@@ -14,7 +13,6 @@ export interface NotebookEntry {
   url: string;
   title: string;
   description: string;
-  active: boolean;
   status: NotebookStatus;
   /** ISO 8601 */
   registeredAt: string;
@@ -155,10 +153,14 @@ export interface TabHandle {
   tabId: string;
   notebookAlias: string;
   url: string;
+  /** Pool state: "active" = occupied by task, "idle" = available for reuse. */
+  state: "active" | "idle";
   /** ISO 8601 */
   acquiredAt: string;
   /** ISO 8601 */
   timeoutAt: string;
+  /** ISO 8601, set when released back to pool. */
+  releasedAt: string | null;
   cdpSession: CDPSession;
   page: Page;
 }
@@ -189,6 +191,8 @@ export interface AgentConfig {
   tools: string[];
   prompt: string;
   infer: boolean;
+  /** Expected starting page for Executor pre-navigate hint. */
+  startPage: "homepage" | "notebook";
   parameters: Record<string, AgentParameter>;
 }
 
@@ -203,9 +207,10 @@ export interface AsyncSubmitResult {
 /** Response returned by the get_status tool. */
 export interface DaemonStatusResult {
   running: boolean;
-  tabManager: {
-    activeTabs: number;
-    maxTabs: number;
+  tabPool: {
+    usedSlots: number;
+    maxSlots: number;
+    idleSlots: number;
   };
   network: NetworkHealth;
   activeNotebooks: string[];

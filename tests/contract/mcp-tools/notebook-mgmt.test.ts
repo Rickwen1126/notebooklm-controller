@@ -20,7 +20,6 @@ const NotebookUrlSchema = z
 const NotebookStatusSchema = z.enum([
   "ready",
   "operating",
-  "closed",
   "stale",
   "error",
 ]);
@@ -61,38 +60,10 @@ const NotebookEntrySchema = z.object({
   title: z.string(),
   description: z.string(),
   status: NotebookStatusSchema,
-  active: z.boolean(),
   sourceCount: z.number(),
 });
 
 const ListNotebooksOutputSchema = z.array(NotebookEntrySchema);
-
-// ===========================================================================
-// open_notebook
-// ===========================================================================
-
-const OpenNotebookInputSchema = z.object({
-  alias: AliasSchema,
-});
-
-const OpenNotebookSuccessSchema = z.object({
-  success: z.literal(true),
-  alias: z.string(),
-  url: z.string(),
-  status: z.string(),
-});
-
-// ===========================================================================
-// close_notebook
-// ===========================================================================
-
-const CloseNotebookInputSchema = z.object({
-  alias: AliasSchema,
-});
-
-const CloseNotebookSuccessSchema = z.object({
-  success: z.literal(true),
-});
 
 // ===========================================================================
 // set_default
@@ -422,7 +393,6 @@ describe("list_notebooks contract", () => {
         title: "ML Research Notes",
         description: "Notes on transformer architectures",
         status: "ready" as const,
-        active: true,
         sourceCount: 5,
       },
       {
@@ -430,8 +400,7 @@ describe("list_notebooks contract", () => {
         url: "https://notebooklm.google.com/notebook/def456",
         title: "Paper Summaries",
         description: "Collection of paper reviews",
-        status: "closed" as const,
-        active: false,
+        status: "stale" as const,
         sourceCount: 12,
       },
     ];
@@ -450,7 +419,6 @@ describe("list_notebooks contract", () => {
       const statuses = [
         "ready",
         "operating",
-        "closed",
         "stale",
         "error",
       ] as const;
@@ -473,193 +441,10 @@ describe("list_notebooks contract", () => {
       expect(result.success).toBe(false);
     });
 
-    it("rejects missing active field", () => {
-      const { active: _active, ...rest } = sampleList[0];
-      const result = NotebookEntrySchema.safeParse(rest);
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects non-boolean active field", () => {
-      const bad = { ...sampleList[0], active: "yes" };
-      const result = NotebookEntrySchema.safeParse(bad);
-      expect(result.success).toBe(false);
-    });
-
     it("rejects non-number sourceCount", () => {
       const bad = { ...sampleList[0], sourceCount: "five" };
       const result = NotebookEntrySchema.safeParse(bad);
       expect(result.success).toBe(false);
-    });
-  });
-});
-
-// =====================================================================
-
-describe("open_notebook contract", () => {
-  // ---------------------------------------------------------------
-  // Input schema
-  // ---------------------------------------------------------------
-
-  describe("input schema — valid inputs", () => {
-    it("accepts a valid alias", () => {
-      const result = OpenNotebookInputSchema.safeParse({ alias: "research" });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.alias).toBe("research");
-      }
-    });
-
-    it("accepts alias with hyphens and numbers", () => {
-      const result = OpenNotebookInputSchema.safeParse({
-        alias: "ml-papers-2026",
-      });
-      expect(result.success).toBe(true);
-    });
-  });
-
-  describe("input schema — invalid inputs", () => {
-    it("rejects empty alias", () => {
-      const result = OpenNotebookInputSchema.safeParse({ alias: "" });
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects missing alias", () => {
-      const result = OpenNotebookInputSchema.safeParse({});
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects alias with spaces", () => {
-      const result = OpenNotebookInputSchema.safeParse({
-        alias: "my research",
-      });
-      expect(result.success).toBe(false);
-    });
-  });
-
-  // ---------------------------------------------------------------
-  // Output: success response
-  // ---------------------------------------------------------------
-
-  describe("output — success response", () => {
-    it("validates a well-formed success response", () => {
-      const result = OpenNotebookSuccessSchema.safeParse({
-        success: true,
-        alias: "research",
-        url: "https://notebooklm.google.com/notebook/abc123",
-        status: "ready",
-      });
-      expect(result.success).toBe(true);
-    });
-
-    it("rejects missing url", () => {
-      const result = OpenNotebookSuccessSchema.safeParse({
-        success: true,
-        alias: "research",
-        status: "ready",
-      });
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects missing status", () => {
-      const result = OpenNotebookSuccessSchema.safeParse({
-        success: true,
-        alias: "research",
-        url: "https://notebooklm.google.com/notebook/abc123",
-      });
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects success: false", () => {
-      const result = OpenNotebookSuccessSchema.safeParse({
-        success: false,
-        alias: "research",
-        url: "https://notebooklm.google.com/notebook/abc123",
-        status: "ready",
-      });
-      expect(result.success).toBe(false);
-    });
-  });
-
-  // ---------------------------------------------------------------
-  // Output: error response
-  // ---------------------------------------------------------------
-
-  describe("output — error response", () => {
-    it("validates notebook not registered error", () => {
-      const result = ErrorOutputSchema.safeParse({
-        success: false,
-        error: "Notebook 'research' is not registered",
-      });
-      expect(result.success).toBe(true);
-    });
-  });
-});
-
-// =====================================================================
-
-describe("close_notebook contract", () => {
-  // ---------------------------------------------------------------
-  // Input schema
-  // ---------------------------------------------------------------
-
-  describe("input schema — valid inputs", () => {
-    it("accepts a valid alias", () => {
-      const result = CloseNotebookInputSchema.safeParse({ alias: "research" });
-      expect(result.success).toBe(true);
-    });
-  });
-
-  describe("input schema — invalid inputs", () => {
-    it("rejects empty alias", () => {
-      const result = CloseNotebookInputSchema.safeParse({ alias: "" });
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects missing alias", () => {
-      const result = CloseNotebookInputSchema.safeParse({});
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects alias with special characters", () => {
-      const result = CloseNotebookInputSchema.safeParse({
-        alias: "research!",
-      });
-      expect(result.success).toBe(false);
-    });
-  });
-
-  // ---------------------------------------------------------------
-  // Output: success response
-  // ---------------------------------------------------------------
-
-  describe("output — success response", () => {
-    it("validates the expected success response", () => {
-      const result = CloseNotebookSuccessSchema.safeParse({ success: true });
-      expect(result.success).toBe(true);
-    });
-
-    it("rejects success: false", () => {
-      const result = CloseNotebookSuccessSchema.safeParse({ success: false });
-      expect(result.success).toBe(false);
-    });
-
-    it("rejects missing success field", () => {
-      const result = CloseNotebookSuccessSchema.safeParse({});
-      expect(result.success).toBe(false);
-    });
-  });
-
-  // ---------------------------------------------------------------
-  // Output: error response
-  // ---------------------------------------------------------------
-
-  describe("output — error response", () => {
-    it("validates notebook not registered error", () => {
-      const result = ErrorOutputSchema.safeParse({
-        success: false,
-        error: "Notebook 'research' is not registered",
-      });
-      expect(result.success).toBe(true);
     });
   });
 });

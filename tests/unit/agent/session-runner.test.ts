@@ -343,6 +343,7 @@ function makeAgentConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     tools: ["find", "click", "screenshot"],
     prompt: "You are a test agent. Do the task.",
     infer: true,
+    startPage: "notebook",
     parameters: {},
     ...overrides,
   };
@@ -368,6 +369,7 @@ function makeDualOptions(
     ],
     hooks: {},
     locale: "zh-TW",
+    notebookAlias: "test-notebook",
     ...overrides,
   };
 }

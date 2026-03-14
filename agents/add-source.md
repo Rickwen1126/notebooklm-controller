@@ -15,6 +15,7 @@ tools:
   - urlToText
   - pdfToText
 infer: true
+startPage: notebook
 parameters:
   sourceType:
     type: string

@@ -12,6 +12,7 @@ tools:
   - wait
   - screenshot
 infer: true
+startPage: homepage
 parameters:
   action:
     type: string

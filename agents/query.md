@@ -10,6 +10,7 @@ tools:
   - wait
   - screenshot
 infer: true
+startPage: notebook
 parameters:
   question:
     type: string

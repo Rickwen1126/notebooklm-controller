@@ -8,6 +8,7 @@ tools:
   - read
   - screenshot
 infer: true
+startPage: notebook
 parameters: {}
 ---
 

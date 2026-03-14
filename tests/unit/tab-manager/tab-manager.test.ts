@@ -366,4 +366,137 @@ describe("TabManager", () => {
       expect(tm.isConnected()).toBe(true);
     });
   });
+
+  // ── Tab Pool: acquireTab / releaseTab ─────────────────────────────
+
+  describe("acquireTab", () => {
+    it("opens new tab when pool is empty", async () => {
+      await tm.launch();
+      const handle = await tm.acquireTab({
+        notebookAlias: "nb1",
+        url: "https://notebooklm.google.com/notebook/1",
+      });
+
+      expect(handle.notebookAlias).toBe("nb1");
+      expect(handle.state).toBe("active");
+      expect(handle.releasedAt).toBeNull();
+      expect(tm.listTabs()).toHaveLength(1);
+    });
+
+    it("returns idle tab with matching alias (affinity)", async () => {
+      await tm.launch();
+      const original = await tm.openTab("nb1", "https://notebooklm.google.com/notebook/1");
+      await tm.releaseTab(original.tabId);
+      expect(original.state).toBe("idle");
+
+      const reacquired = await tm.acquireTab({
+        notebookAlias: "nb1",
+        url: "https://notebooklm.google.com/notebook/1",
+      });
+
+      expect(reacquired.tabId).toBe(original.tabId);
+      expect(reacquired.state).toBe("active");
+      expect(reacquired.releasedAt).toBeNull();
+      // Should not have opened a new tab
+      expect(tm.listTabs()).toHaveLength(1);
+    });
+
+    it("reuses any idle tab when no affinity match", async () => {
+      await tm.launch();
+      const other = await tm.openTab("other-nb", "https://notebooklm.google.com/notebook/other");
+      await tm.releaseTab(other.tabId);
+
+      const acquired = await tm.acquireTab({
+        notebookAlias: "nb1",
+        url: "https://notebooklm.google.com/notebook/1",
+      });
+
+      expect(acquired.tabId).toBe(other.tabId);
+      expect(acquired.notebookAlias).toBe("nb1");
+      expect(acquired.state).toBe("active");
+      // Page should have been navigated
+      const page = mockBrowser._pages[0];
+      expect(page.goto).toHaveBeenCalledWith("https://notebooklm.google.com/notebook/1");
+    });
+
+    it("throws TabLimitError when pool is full with no idle tabs", async () => {
+      await tm.launch();
+      for (let i = 0; i < MAX_TABS; i++) {
+        await tm.openTab(`nb-${i}`, `https://notebooklm.google.com/notebook/${i}`);
+      }
+
+      await expect(
+        tm.acquireTab({ notebookAlias: "overflow", url: "https://notebooklm.google.com/notebook/overflow" }),
+      ).rejects.toThrow(TabLimitError);
+    });
+
+    it("reuses idle tab even when pool is at capacity", async () => {
+      await tm.launch();
+      const tabs = [];
+      for (let i = 0; i < MAX_TABS; i++) {
+        tabs.push(await tm.openTab(`nb-${i}`, `https://notebooklm.google.com/notebook/${i}`));
+      }
+      // Release one tab
+      await tm.releaseTab(tabs[0].tabId);
+
+      const acquired = await tm.acquireTab({
+        notebookAlias: "new-nb",
+        url: "https://notebooklm.google.com/notebook/new",
+      });
+
+      expect(acquired.tabId).toBe(tabs[0].tabId);
+      expect(acquired.notebookAlias).toBe("new-nb");
+      expect(acquired.state).toBe("active");
+    });
+
+    it("throws ChromeError if browser is not launched", async () => {
+      await expect(
+        tm.acquireTab({ notebookAlias: "nb", url: "https://notebooklm.google.com/notebook/1" }),
+      ).rejects.toThrow(ChromeError);
+    });
+  });
+
+  describe("releaseTab", () => {
+    it("marks tab as idle and sets releasedAt", async () => {
+      await tm.launch();
+      const handle = await tm.openTab("nb", "https://notebooklm.google.com/notebook/1");
+      expect(handle.state).toBe("active");
+
+      await tm.releaseTab(handle.tabId);
+
+      expect(handle.state).toBe("idle");
+      expect(handle.releasedAt).not.toBeNull();
+    });
+
+    it("is a no-op for unknown tabId", async () => {
+      await tm.launch();
+      // Should not throw
+      await tm.releaseTab("nonexistent-id");
+    });
+
+    it("tab remains in pool after release", async () => {
+      await tm.launch();
+      const handle = await tm.openTab("nb", "https://notebooklm.google.com/notebook/1");
+      await tm.releaseTab(handle.tabId);
+
+      expect(tm.listTabs()).toHaveLength(1);
+      expect(tm.listIdleTabs()).toHaveLength(1);
+      expect(tm.listActiveTabs()).toHaveLength(0);
+    });
+  });
+
+  describe("listIdleTabs / listActiveTabs", () => {
+    it("correctly partitions tabs by state", async () => {
+      await tm.launch();
+      const h1 = await tm.openTab("nb1", "https://notebooklm.google.com/notebook/1");
+      const h2 = await tm.openTab("nb2", "https://notebooklm.google.com/notebook/2");
+      await tm.releaseTab(h1.tabId);
+
+      expect(tm.listTabs()).toHaveLength(2);
+      expect(tm.listActiveTabs()).toHaveLength(1);
+      expect(tm.listActiveTabs()[0].tabId).toBe(h2.tabId);
+      expect(tm.listIdleTabs()).toHaveLength(1);
+      expect(tm.listIdleTabs()[0].tabId).toBe(h1.tabId);
+    });
+  });
 });

@@ -13,7 +13,6 @@ function makeNotebookEntry(alias: string): NotebookEntry {
     url: `https://notebooklm.google.com/notebook/${alias}`,
     title: `Test Notebook ${alias}`,
     description: "A test notebook",
-    active: true,
     status: "ready",
     registeredAt: new Date().toISOString(),
     lastAccessedAt: new Date().toISOString(),

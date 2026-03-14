@@ -134,16 +134,19 @@ function registerGetStatus(
       const state = await deps.stateManager.load();
       const networkHealth = deps.networkGate.getHealth();
 
+      const allTabs = deps.tabManager.listTabs();
+      const usedSlots = allTabs.filter((t) => t.state === "active").length;
+      const idleSlots = allTabs.filter((t) => t.state === "idle").length;
+
       const status: DaemonStatusResult = {
         running: true,
-        tabManager: {
-          activeTabs: deps.tabManager.listTabs().length,
-          maxTabs: MAX_TABS,
+        tabPool: {
+          usedSlots,
+          maxSlots: MAX_TABS,
+          idleSlots,
         },
         network: networkHealth,
-        activeNotebooks: Object.keys(state.notebooks).filter(
-          (alias) => state.notebooks[alias].active,
-        ),
+        activeNotebooks: Object.keys(state.notebooks),
         defaultNotebook: state.defaultNotebook,
         pendingTasks: deps.scheduler.getQueueSize(),
         runningTasks: 0, // TODO: expose from scheduler when available

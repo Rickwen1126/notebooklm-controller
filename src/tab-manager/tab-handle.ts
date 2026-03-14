@@ -25,8 +25,10 @@ export function createTabHandle(params: {
     tabId: randomUUID(),
     notebookAlias: params.notebookAlias,
     url: params.url,
+    state: "active",
     acquiredAt: now.toISOString(),
     timeoutAt: timeoutAt.toISOString(),
+    releasedAt: null,
     cdpSession: params.cdpSession,
     page: params.page,
   };

@@ -11,7 +11,7 @@ import { EventEmitter } from "node:events";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { TabHandle } from "../shared/types.js";
-import { MAX_TABS, findChromePath } from "../shared/config.js";
+import { MAX_TABS, DEFAULT_SESSION_TIMEOUT_MS, findChromePath } from "../shared/config.js";
 import { ChromeError, TabLimitError } from "../shared/errors.js";
 import { logger } from "../shared/logger.js";
 import { createTabHandle } from "./tab-handle.js";
@@ -130,6 +130,68 @@ export class TabManager extends EventEmitter {
   }
 
   /**
+   * Acquire a tab from the pool for a task.
+   *
+   * Priority: 1) idle tab with same notebookAlias (weak affinity),
+   * 2) any idle tab, 3) open a new tab if under limit.
+   * Throws TabLimitError if pool is at capacity with no idle tabs.
+   */
+  async acquireTab(params: {
+    notebookAlias: string;
+    url: string;
+  }): Promise<TabHandle> {
+    if (!this.browser) {
+      throw new ChromeError("Browser is not launched");
+    }
+
+    // 1. Prefer idle tab with matching notebook (weak affinity)
+    for (const tab of this.tabs.values()) {
+      if (tab.state === "idle" && tab.notebookAlias === params.notebookAlias) {
+        tab.state = "active";
+        tab.acquiredAt = new Date().toISOString();
+        tab.timeoutAt = new Date(Date.now() + DEFAULT_SESSION_TIMEOUT_MS).toISOString();
+        tab.releasedAt = null;
+        log.info("Tab acquired (affinity)", { tabId: tab.tabId, notebookAlias: params.notebookAlias });
+        return tab;
+      }
+    }
+
+    // 2. Any idle tab
+    for (const tab of this.tabs.values()) {
+      if (tab.state === "idle") {
+        await tab.page.goto(params.url);
+        tab.state = "active";
+        tab.notebookAlias = params.notebookAlias;
+        tab.url = params.url;
+        tab.acquiredAt = new Date().toISOString();
+        tab.timeoutAt = new Date(Date.now() + DEFAULT_SESSION_TIMEOUT_MS).toISOString();
+        tab.releasedAt = null;
+        log.info("Tab acquired (reuse)", { tabId: tab.tabId, notebookAlias: params.notebookAlias });
+        return tab;
+      }
+    }
+
+    // 3. Open new tab if under limit
+    if (this.tabs.size >= MAX_TABS) {
+      throw new TabLimitError(MAX_TABS);
+    }
+
+    return await this.openTab(params.notebookAlias, params.url);
+  }
+
+  /**
+   * Release a tab back to the pool (mark idle, keep open for reuse).
+   */
+  async releaseTab(tabId: string): Promise<void> {
+    const tab = this.tabs.get(tabId);
+    if (!tab) return;
+
+    tab.state = "idle";
+    tab.releasedAt = new Date().toISOString();
+    log.info("Tab released to pool", { tabId, notebookAlias: tab.notebookAlias });
+  }
+
+  /**
    * Close a specific tab by its tabId and remove it from tracking.
    */
   async closeTab(tabId: string): Promise<void> {
@@ -152,10 +214,24 @@ export class TabManager extends EventEmitter {
   }
 
   /**
-   * List all active TabHandles.
+   * List all TabHandles (both active and idle).
    */
   listTabs(): TabHandle[] {
     return Array.from(this.tabs.values());
+  }
+
+  /**
+   * List only idle (available) tabs.
+   */
+  listIdleTabs(): TabHandle[] {
+    return Array.from(this.tabs.values()).filter((t) => t.state === "idle");
+  }
+
+  /**
+   * List only active (in-use) tabs.
+   */
+  listActiveTabs(): TabHandle[] {
+    return Array.from(this.tabs.values()).filter((t) => t.state === "active");
   }
 
   /**

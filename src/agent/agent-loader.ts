@@ -347,6 +347,12 @@ export async function loadAgentConfig(
   const infer =
     typeof parsed["infer"] === "boolean" ? parsed["infer"] : true;
 
+  const rawStartPage = parsed["startPage"];
+  const startPage: "homepage" | "notebook" =
+    rawStartPage === "homepage" || rawStartPage === "notebook"
+      ? rawStartPage
+      : "notebook"; // default: most agents operate on notebook page
+
   // Build parameters map.
   const parameters: Record<string, AgentParameter> = {};
   if (
@@ -394,6 +400,7 @@ export async function loadAgentConfig(
     tools,
     prompt,
     infer,
+    startPage,
     parameters,
   };
 }

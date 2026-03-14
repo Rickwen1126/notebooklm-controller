@@ -54,6 +54,7 @@ export interface DaemonRuntime {
 interface RunTaskDeps {
   copilotClient: CopilotClientSingleton;
   tabManager: TabManager;
+  stateManager: StateManager;
   networkGate: NetworkGate;
   cacheManager: CacheManager;
   agentConfigs: AgentConfig[];
@@ -66,55 +67,67 @@ function createRunTask(
   const log = logger.child({ module: "daemon:runTask" });
 
   return async (task: AsyncTask): Promise<SchedulerSessionResult> => {
-    const { copilotClient, tabManager, networkGate, cacheManager, agentConfigs, locale } = deps;
+    const { copilotClient, tabManager, stateManager, networkGate, cacheManager, agentConfigs, locale } = deps;
 
-    // 1. Resolve or open the notebook tab.
-    const state = await tabManager.listTabs();
-    let tabHandle = state.find((t) => t.notebookAlias === task.notebookAlias);
-
-    if (!tabHandle) {
-      // Tab not open — we need the notebook URL from state.
-      // For now, this is a placeholder; the scheduler ensures notebook exists.
-      log.warn("Tab not open for notebook, cannot run task", {
-        notebookAlias: task.notebookAlias,
-        taskId: task.taskId,
-      });
+    // 1. Resolve notebook URL from state.
+    const notebook = await stateManager.getNotebook(task.notebookAlias);
+    if (!notebook) {
       return {
         success: false,
-        error: `No open tab for notebook: ${task.notebookAlias}. Call open_notebook first.`,
+        error: `Notebook not found: ${task.notebookAlias}`,
       };
     }
 
-    // 2. Build tools for this tab.
-    const tools = buildToolsForTab(tabHandle, task.notebookAlias, {
-      networkGate,
-      cacheManager,
-    });
+    // 2. Acquire tab from pool (affinity → idle reuse → new tab).
+    let tabHandle;
+    try {
+      tabHandle = await tabManager.acquireTab({
+        notebookAlias: task.notebookAlias,
+        url: notebook.url,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn("Tab pool at capacity", { taskId: task.taskId, error: msg });
+      return { success: false, error: `Tab pool at capacity: ${msg}` };
+    }
 
-    // 3. Create session hooks.
-    const hooks = createSessionHooks({
-      networkGate,
-      taskId: task.taskId,
-      notebookAlias: task.notebookAlias,
-    });
+    try {
+      // 3. Build tools for this tab.
+      const tools = buildToolsForTab(tabHandle, task.notebookAlias, {
+        networkGate,
+        cacheManager,
+      });
 
-    // 4. Run dual session.
-    const result = await runDualSession(
-      {
-        client: copilotClient,
-        tools,
-        agentConfigs,
-        hooks,
-        locale,
-      },
-      task.command,
-    );
+      // 4. Create session hooks.
+      const hooks = createSessionHooks({
+        networkGate,
+        taskId: task.taskId,
+        notebookAlias: task.notebookAlias,
+      });
 
-    return {
-      success: result.success,
-      result: result.result as object | undefined,
-      error: result.error,
-    };
+      // 5. Run dual session with canonical notebook context.
+      const result = await runDualSession(
+        {
+          client: copilotClient,
+          tools,
+          agentConfigs,
+          hooks,
+          locale,
+          notebookAlias: task.notebookAlias,
+          tabUrl: tabHandle.url,
+        },
+        task.command,
+      );
+
+      return {
+        success: result.success,
+        result: result.result as object | undefined,
+        error: result.error,
+      };
+    } finally {
+      // 6. Release tab back to pool.
+      await tabManager.releaseTab(tabHandle.tabId);
+    }
   };
 }
 
@@ -185,7 +198,7 @@ export async function startDaemon(options?: {
   const scheduler = new Scheduler({
     taskStore,
     runTask: createRunTask({
-      copilotClient, tabManager, networkGate, cacheManager,
+      copilotClient, tabManager, stateManager, networkGate, cacheManager,
       agentConfigs, locale,
     }),
     onTaskComplete: (task) => notifier.notify(task),

@@ -6,8 +6,6 @@
  *
  * T049: add_notebook      — register a new NotebookLM notebook
  * T050: list_notebooks    — list all registered notebooks
- * T051: open_notebook     — mark a notebook as active
- * T052: close_notebook    — close a notebook's tab and mark it inactive
  * T053: set_default       — set the default notebook alias
  * T054: rename_notebook   — rename a notebook's alias
  * T055: remove_notebook   — remove a notebook from state and close its tab
@@ -91,8 +89,6 @@ export function registerNotebookTools(
   registerAddNotebook(server, deps);
   registerAddAllNotebooks(server);
   registerListNotebooks(server, deps);
-  registerOpenNotebook(server, deps);
-  registerCloseNotebook(server, deps);
   registerSetDefault(server, deps);
   registerRenameNotebook(server, deps);
   registerRemoveNotebook(server, deps);
@@ -164,7 +160,6 @@ function registerAddNotebook(
           url,
           title: "",
           description: "",
-          active: true,
           status: "ready",
           registeredAt: now,
           lastAccessedAt: now,
@@ -240,108 +235,10 @@ function registerListNotebooks(
           title: nb.title,
           description: nb.description,
           status: nb.status,
-          active: nb.active,
           sourceCount: nb.sourceCount,
         }));
 
         return jsonResult(notebooks);
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        return errorResult(message);
-      }
-    },
-  );
-}
-
-// ---------------------------------------------------------------------------
-// T051: open_notebook
-// ---------------------------------------------------------------------------
-
-function registerOpenNotebook(
-  server: NbctlMcpServer,
-  deps: NotebookToolDeps,
-): void {
-  server.registerTool(
-    "open_notebook",
-    {
-      description:
-        "Mark a notebook as active and ready for operations. " +
-        "Does not open a browser tab — that happens on demand during exec.",
-      inputSchema: {
-        alias: z.string().describe("Alias of the notebook to open"),
-      },
-    },
-    async (args: { alias?: string }) => {
-      try {
-        const alias = args.alias ?? "";
-
-        const state = await deps.stateManager.load();
-        const notebook = state.notebooks[alias];
-        if (!notebook) {
-          return errorResult(`Notebook not found: "${alias}"`);
-        }
-
-        const now = new Date().toISOString();
-        await deps.stateManager.updateNotebook(alias, {
-          active: true,
-          status: "ready",
-          lastAccessedAt: now,
-        });
-
-        return jsonResult({
-          success: true,
-          alias,
-          url: notebook.url,
-          status: "ready",
-        });
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        return errorResult(message);
-      }
-    },
-  );
-}
-
-// ---------------------------------------------------------------------------
-// T052: close_notebook
-// ---------------------------------------------------------------------------
-
-function registerCloseNotebook(
-  server: NbctlMcpServer,
-  deps: NotebookToolDeps,
-): void {
-  server.registerTool(
-    "close_notebook",
-    {
-      description:
-        "Close a notebook: close its browser tab (if open) and mark it inactive.",
-      inputSchema: {
-        alias: z.string().describe("Alias of the notebook to close"),
-      },
-    },
-    async (args: { alias?: string }) => {
-      try {
-        const alias = args.alias ?? "";
-
-        const state = await deps.stateManager.load();
-        if (!state.notebooks[alias]) {
-          return errorResult(`Notebook not found: "${alias}"`);
-        }
-
-        // Close any open tab for this alias
-        const tabs = deps.tabManager.listTabs();
-        for (const tab of tabs) {
-          if (tab.notebookAlias === alias) {
-            await deps.tabManager.closeTab(tab.tabId);
-          }
-        }
-
-        await deps.stateManager.updateNotebook(alias, {
-          active: false,
-          status: "closed",
-        });
-
-        return jsonResult({ success: true });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         return errorResult(message);

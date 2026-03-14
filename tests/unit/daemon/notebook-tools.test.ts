@@ -65,7 +65,6 @@ function makeEntry(alias: string, overrides?: Record<string, unknown>) {
     url: `https://notebooklm.google.com/notebook/${alias}-id`,
     title: `${alias} title`,
     description: "",
-    active: true,
     status: "ready",
     registeredAt: "2026-01-01T00:00:00Z",
     lastAccessedAt: "2026-01-01T00:00:00Z",
@@ -111,16 +110,16 @@ describe("registerNotebookTools", () => {
     registerNotebookTools(server as never, deps);
   });
 
-  it("registers all 8 notebook management tools", () => {
+  it("registers all 6 notebook management tools", () => {
     expect(server.tools.has("add_notebook")).toBe(true);
     expect(server.tools.has("add_all_notebooks")).toBe(true);
     expect(server.tools.has("list_notebooks")).toBe(true);
-    expect(server.tools.has("open_notebook")).toBe(true);
-    expect(server.tools.has("close_notebook")).toBe(true);
     expect(server.tools.has("set_default")).toBe(true);
     expect(server.tools.has("rename_notebook")).toBe(true);
     expect(server.tools.has("remove_notebook")).toBe(true);
-    expect(server.registerTool).toHaveBeenCalledTimes(8);
+    expect(server.tools.has("open_notebook")).toBe(false);
+    expect(server.tools.has("close_notebook")).toBe(false);
+    expect(server.registerTool).toHaveBeenCalledTimes(6);
   });
 
   // -----------------------------------------------------------------------
@@ -272,7 +271,7 @@ describe("registerNotebookTools", () => {
       (deps.stateManager.load as ReturnType<typeof vi.fn>).mockResolvedValue(
         makeState({
           research: makeEntry("research"),
-          archive: makeEntry("archive", { active: false, status: "closed" }),
+          archive: makeEntry("archive", { status: "stale" }),
         }),
       );
 
@@ -288,89 +287,6 @@ describe("registerNotebookTools", () => {
       const tool = server.tools.get("list_notebooks")!;
       const options = tool.options as { annotations?: { readOnlyHint?: boolean } };
       expect(options.annotations?.readOnlyHint).toBe(true);
-    });
-  });
-
-  // -----------------------------------------------------------------------
-  // open_notebook
-  // -----------------------------------------------------------------------
-
-  describe("open_notebook", () => {
-    it("marks notebook as active", async () => {
-      (deps.stateManager.load as ReturnType<typeof vi.fn>).mockResolvedValue(
-        makeState({ research: makeEntry("research", { active: false, status: "closed" }) }),
-      );
-
-      const handler = server.getHandler("open_notebook");
-      const result = parseResult(
-        await handler({ alias: "research" }),
-      ) as Record<string, unknown>;
-
-      expect(result.success).toBe(true);
-      expect(result.alias).toBe("research");
-      expect(deps.stateManager.updateNotebook).toHaveBeenCalledWith(
-        "research",
-        expect.objectContaining({ active: true, status: "ready" }),
-      );
-    });
-
-    it("returns error for non-existent notebook", async () => {
-      const handler = server.getHandler("open_notebook");
-      const result = parseResult(
-        await handler({ alias: "nonexistent" }),
-      ) as Record<string, unknown>;
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("nonexistent");
-    });
-  });
-
-  // -----------------------------------------------------------------------
-  // close_notebook
-  // -----------------------------------------------------------------------
-
-  describe("close_notebook", () => {
-    it("marks notebook as closed", async () => {
-      (deps.stateManager.load as ReturnType<typeof vi.fn>).mockResolvedValue(
-        makeState({ research: makeEntry("research") }),
-      );
-
-      const handler = server.getHandler("close_notebook");
-      const result = parseResult(
-        await handler({ alias: "research" }),
-      ) as Record<string, unknown>;
-
-      expect(result.success).toBe(true);
-      expect(deps.stateManager.updateNotebook).toHaveBeenCalledWith(
-        "research",
-        expect.objectContaining({ active: false, status: "closed" }),
-      );
-    });
-
-    it("closes open tab when notebook has active tab", async () => {
-      (deps.stateManager.load as ReturnType<typeof vi.fn>).mockResolvedValue(
-        makeState({ research: makeEntry("research") }),
-      );
-      (deps.tabManager.listTabs as ReturnType<typeof vi.fn>).mockReturnValue([
-        { tabId: "tab-1", notebookAlias: "research" },
-        { tabId: "tab-2", notebookAlias: "other" },
-      ]);
-
-      const handler = server.getHandler("close_notebook");
-      await handler({ alias: "research" });
-
-      expect(deps.tabManager.closeTab).toHaveBeenCalledWith("tab-1");
-      expect(deps.tabManager.closeTab).toHaveBeenCalledTimes(1);
-    });
-
-    it("returns error for non-existent notebook", async () => {
-      const handler = server.getHandler("close_notebook");
-      const result = parseResult(
-        await handler({ alias: "nonexistent" }),
-      ) as Record<string, unknown>;
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("nonexistent");
     });
   });
 

@@ -7,6 +7,7 @@ tools:
   - find
   - screenshot
 infer: true
+startPage: notebook
 parameters: {}
 ---
 

@@ -10,6 +10,7 @@ tools:
   - read
   - screenshot
 infer: true
+startPage: notebook
 parameters:
   sourceName:
     type: string

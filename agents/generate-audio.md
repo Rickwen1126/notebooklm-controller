@@ -9,6 +9,7 @@ tools:
   - wait
   - screenshot
 infer: true
+startPage: notebook
 parameters: {}
 ---
 
