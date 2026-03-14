@@ -771,6 +771,47 @@ Planner session 加入 `rejectInput` tool，同時負責意圖解析和輸入過
 - GPT-4.1 分類準確率 100%，每個判斷 ~10s
 - 正常輸入不受影響，仍走 `submitPlan` 路徑
 
+### Finding #48 — Executor Pre-Navigate：系統層錨點判斷
+
+Agent 不自己判斷「我在哪個頁面」，由 Executor 層在啟動 session 前用 `tab.url` exact match 判斷：
+
+```
+tab.url === state.notebooks[name].url → 在對的筆記本 → 直接執行
+tab.url === homepage                  → 在首頁 → 直接執行（manage-notebook 類）
+otherwise                             → navigate 一次到正確頁面
+```
+
+**設計原則**：
+- 二元判斷，0 screenshot、0 LLM call，純字串比對 O(n)
+- Agent 永遠從 recipe 步驟 1 開始，不嘗試中間接續（頁面狀態不可靠，GPT-4.1 判斷不了中間狀態）
+- 每個 agentConfig 加 `startPage: "homepage" | "notebook"` 欄位
+- Executor 注入 prompt context：「你已在 [首頁/筆記本 xxx]，開始執行。」
+
+### Finding #49 — Tab Pool Weak Affinity（弱綁定）
+
+Tab 不硬綁 notebook，用 `affinityMap[notebookId] = tabId` 做 soft hint：
+
+```
+pool.acquire(notebookId):
+  1. affinityMap[notebookId] 有值且該 tab 閒置 → 直接給（affinity hit）
+  2. 否則 → 拿任意閒置 tab（affinity miss）
+  3. 操作完 → 更新 affinityMap[notebookId] = tabId
+```
+
+| 情境 | Affinity | Pre-Navigate | 結果 |
+|------|----------|-------------|------|
+| 連續操作同 notebook | hit | URL match → 跳過 | **0 navigate，最快** |
+| 切換 notebook | miss | URL mismatch → navigate 一次 | 1 次 navigate |
+| Tab 被回收 | miss | 新 tab → navigate | navigate to target |
+
+**重點**：不鎖定、不保證，affinity 只是 hint。Pool 分配永遠以「有閒置 tab」為優先，不造成 tab 飢餓。用戶通常連續操作同一本，所以 hit rate 預期很高。
+
+### Finding #50 — Default Model 必須 Hardcode
+
+Spike 腳本 `--model` flag 為可選，未帶時跑 Copilot SDK 預設模型（非 GPT-4.1），導致 50% premium 被意外消耗。
+
+**修正**：所有 spike 腳本 default model 改為 `"gpt-4.1"`。Production code 也必須 hardcode model，不依賴 SDK default。
+
 ### 總結
 
 **Spike 完成。** 所有核心驗證通過：
@@ -787,5 +828,7 @@ Planner session 加入 `rejectInput` tool，同時負責意圖解析和輸入過
 - Planner session（意圖解析 + 輸入過濾）+ Executor session（browser 操作）
 - `agents/*.md` = prompt template library（step-by-step recipe，零留白）
 - `_knowledge.md` + UI maps = 共享知識 + i18n
-- 模型：GPT-4.1 雙層都夠用，prompt 品質 > 模型能力
+- 模型：GPT-4.1 雙層都夠用，prompt 品質 > 模型能力，hardcode 不依賴 SDK default
 - Planner 雙職責：submitPlan（路由）+ rejectInput（防護）
+- Executor pre-navigate：系統層錨點判斷，agent 不自己判斷頁面狀態
+- Tab pool weak affinity：連續操作同 notebook 免 navigate
