@@ -71,3 +71,23 @@ export async function launch(options?: {
   runtime = await startDaemon(options);
   log.info("Daemon launched and ready");
 }
+
+// ---------------------------------------------------------------------------
+// CLI entry point — only runs when executed directly, not when imported.
+// ---------------------------------------------------------------------------
+
+const isDirectExecution =
+  process.argv[1]?.endsWith("launcher.js") ||
+  process.argv[1]?.endsWith("launcher.ts");
+
+if (isDirectExecution) {
+  const args = process.argv.slice(2);
+  const headless = !args.includes("--no-headless");
+
+  launch({ headless }).catch((err) => {
+    log.error("Failed to launch daemon", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    process.exit(1);
+  });
+}

@@ -36,12 +36,22 @@ parameters:
 
 ## 建立新筆記本
 
+### 步驟 1：建立
 ```
+navigate("https://notebooklm.google.com")
+wait(3)
 find("{{create_notebook}}")  → click
-  → 進入新筆記本頁面
+  → 進入新筆記本頁面（標題為 "Untitled notebook"）
 ```
 
-建立後如需改標題，回 homepage 用「重新命名」流程。
+### 步驟 2：回首頁改標題（如有指定標題）
+```
+navigate("https://notebooklm.google.com")
+wait(3)
+```
+找到剛建立的 "Untitled notebook"（最新的那個），用「重新命名」流程改標題。
+
+**重要**：建立 + 改標題是兩個步驟，不能跳過。筆記本頁面內的 H1 標題**不可編輯**。
 
 ## 重新命名筆記本標題
 
@@ -59,7 +69,7 @@ find("more_vert")  → 選同一 row 的（x > 1200, y 最接近）→ click
 find("{{edit_title}}")  → click
   → dialog 出現，輸入框有舊標題
 find("input")  → 找到 dialog 內的 input 欄位 → click（確保 focus）
-type("Ctrl+A")
+type("SelectAll")
 paste("{{newTitle}}")
 find("{{save_button}}")  → click
 wait(2)

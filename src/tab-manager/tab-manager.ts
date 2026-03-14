@@ -56,10 +56,16 @@ export class TabManager extends EventEmitter {
         executablePath,
         headless,
         userDataDir,
+        // null = use Chrome's own viewport, not Puppeteer's 800x600 default.
+        defaultViewport: null,
+        // Remove --enable-automation so Google doesn't block login.
+        ignoreDefaultArgs: ["--enable-automation"],
         args: [
           "--no-first-run",
           "--no-default-browser-check",
           "--disable-extensions",
+          "--disable-blink-features=AutomationControlled",
+          "--window-size=1440,900",
         ],
       });
 

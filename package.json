@@ -10,9 +10,9 @@
     "nbctl": "./dist/daemon/launcher.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp -r src/config dist/config 2>/dev/null || true",
     "dev": "tsc --watch",
-    "start": "node dist/daemon/launcher.js",
+    "start": "npx tsx dist/daemon/launcher.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run --project unit",

@@ -6,6 +6,7 @@
  * and CacheManager).
  */
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 import type { Tool } from "@github/copilot-sdk";
 import type { TabHandle } from "../../shared/types.js";
 import type { NetworkGate } from "../../network-gate/network-gate.js";
@@ -31,7 +32,7 @@ export function buildToolsForTab(
   tabHandle: TabHandle,
   notebookAlias: string,
   deps: ToolRegistryDeps,
-): Tool[] {
+): Tool<any>[] {
   const browserTools = createBrowserTools(tabHandle);
   const stateTools = createStateTools({
     networkGate: deps.networkGate,

@@ -10,7 +10,7 @@
 | `find(text)` | 按文字定位互動元素 → 座標 | `[TAG] "text" → click(x, y) rect(...) aria="..." [DISABLED] [expanded=...]` |
 | `click(x, y)` | 點擊座標 | 確認 |
 | `paste(text)` | 貼上文字到 focus 的輸入框 | 確認 |
-| `type(text)` | 鍵盤輸入（Escape, Enter, Tab, Ctrl+A） | 確認 |
+| `type(text)` | 鍵盤輸入或快捷鍵（SelectAll, Enter, Backspace, Ctrl+A） | 確認 |
 | `read(selector)` | CSS selector 讀取 DOM | `Found N element(s): [1] TAG: text...` |
 | `scroll(x, y, dx, dy)` | 滾動頁面 | 確認 |
 | `navigate(url)` | 跳轉 URL | 確認 |

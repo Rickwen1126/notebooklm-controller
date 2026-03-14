@@ -111,9 +111,13 @@ export function createBrowserTools(tabHandle: TabHandle): Tool[] {
 
   const typeTool = defineTool("type", {
     description:
-      "Type text character-by-character into the currently focused element.",
+      "Type text or keyboard shortcut. " +
+      "Actions: type('SelectAll'), type('Copy'), type('Cut'), type('Undo'). " +
+      "Keys: type('Enter'), type('Backspace'), type('Tab'), type('Escape'). " +
+      "Combos: type('Ctrl+A'), type('Shift+Enter'). " +
+      "Plain text is typed character-by-character.",
     parameters: z.object({
-      text: z.string().describe("Text to type"),
+      text: z.string().describe("Text to type, or a shortcut like 'SelectAll', 'Enter', 'Ctrl+A'"),
     }),
     handler: async (args) => {
       await dispatchType(cdp, args.text);

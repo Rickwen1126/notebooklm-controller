@@ -82,7 +82,7 @@ describe("content-tools", () => {
       const tool = buildRepoToTextTool();
       const result = await callToolHandler(tool, { path: "/bad/path" }) as { textResultForLlm: string; resultType: string };
 
-      expect(result.resultType).toBe("error");
+      expect(result.resultType).toBe("failure");
       expect(result.textResultForLlm).toContain("not a git repo");
     });
   });
@@ -116,7 +116,7 @@ describe("content-tools", () => {
       const tool = buildUrlToTextTool();
       const result = await callToolHandler(tool, { url: "https://down.example.com" }) as { textResultForLlm: string; resultType: string };
 
-      expect(result.resultType).toBe("error");
+      expect(result.resultType).toBe("failure");
       expect(result.textResultForLlm).toContain("Failed to convert web page");
       expect(result.textResultForLlm).toContain("ECONNREFUSED");
     });
@@ -153,7 +153,7 @@ describe("content-tools", () => {
       const tool = buildPdfToTextTool();
       const result = await callToolHandler(tool, { path: "/missing.pdf" }) as { textResultForLlm: string; resultType: string };
 
-      expect(result.resultType).toBe("error");
+      expect(result.resultType).toBe("failure");
       expect(result.textResultForLlm).toContain("Failed to convert PDF");
       expect(result.textResultForLlm).toContain("PDF file not found");
     });

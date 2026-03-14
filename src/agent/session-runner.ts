@@ -17,6 +17,7 @@ import type {
   CustomAgentConfig,
   Tool,
   PermissionHandler,
+  SessionConfig,
 } from "@github/copilot-sdk";
 import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
@@ -32,9 +33,9 @@ import type { AgentConfig, ExecutionPlan, ExecutionStep } from "../shared/types.
 
 export interface SessionRunnerOptions {
   client: CopilotClientSingleton;
-  tools: Tool[];
+  tools: Tool<any>[];
   customAgents: CustomAgentConfig[];
-  hooks: Record<string, unknown>;
+  hooks?: SessionConfig['hooks'];
   /** Permission handler forwarded to createSession. Defaults to auto-approve. */
   onPermissionRequest?: PermissionHandler;
   /** Model to use for the session. Defaults to DEFAULT_AGENT_MODEL. */
@@ -115,7 +116,7 @@ export async function runSession(
       customAgents,
       hooks,
       onPermissionRequest,
-      ...(systemMessage ? { systemMessage } : {}),
+      ...(systemMessage ? { systemMessage: { mode: "replace" as const, content: systemMessage } } : {}),
     });
 
     log.info("Session created, sending prompt", {
@@ -191,11 +192,11 @@ export async function runSession(
 export interface DualSessionOptions {
   client: CopilotClientSingleton;
   /** All available browser + state tools (will be filtered per step). */
-  tools: Tool[];
+  tools: Tool<any>[];
   /** Loaded agent configs (Planner reads catalog, Executor reads prompt). */
   agentConfigs: AgentConfig[];
   /** Hooks forwarded to Executor sessions. */
-  hooks: Record<string, unknown>;
+  hooks?: SessionConfig['hooks'];
   /** Resolved locale string (e.g. "zh-TW"). */
   locale: string;
   /** Target notebook alias — injected as canonical context into Executor prompt. */
@@ -295,8 +296,9 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
 7. Current locale: ${locale}`;
 
   // Capture plan or rejection via closure.
-  let capturedPlan: ExecutionPlan | null = null;
-  let capturedRejection: { category: RejectionCategory; reason: string } | null = null;
+  // Use `as` to preserve full union type — TS control flow can't track closure assignments.
+  let capturedPlan = null as ExecutionPlan | null;
+  let capturedRejection = null as { category: RejectionCategory; reason: string } | null;
 
   const submitPlanTool = defineTool("submitPlan", {
     description: "Submit the execution plan for the Executor to carry out.",
@@ -344,7 +346,7 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
   await runSession(
     {
       client,
-      tools: [submitPlanTool, rejectInputTool] as Tool[],
+      tools: [submitPlanTool, rejectInputTool] as Tool<any>[],
       customAgents: [],
       hooks: {},
       model: plannerModel,

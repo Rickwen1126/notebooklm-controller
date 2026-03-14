@@ -104,11 +104,12 @@ function registerAddNotebook(
   deps: NotebookToolDeps,
 ): void {
   server.registerTool(
-    "add_notebook",
+    "register_notebook",
     {
       description:
-        "Register a new NotebookLM notebook. " +
-        "Provide the notebook URL and a short alias for future reference.",
+        "Register an existing NotebookLM notebook by URL. " +
+        "Provide the notebook URL and a short alias for future reference. " +
+        "To create a new notebook, use exec(prompt='建立新筆記本') instead.",
       inputSchema: {
         url: z
           .string()
@@ -193,7 +194,7 @@ function registerAddAllNotebooks(
   server: NbctlMcpServer,
 ): void {
   server.registerTool(
-    "add_all_notebooks",
+    "register_all_notebooks",
     {
       description:
         "Batch-register all notebooks in the NotebookLM account. " +
@@ -204,7 +205,7 @@ function registerAddAllNotebooks(
     async () => {
       return jsonResult({
         success: false,
-        error: "add_all_notebooks is not yet implemented. Use add_notebook to register notebooks individually.",
+        error: "register_all_notebooks is not yet implemented. Use register_notebook to register notebooks individually.",
       });
     },
   );

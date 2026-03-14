@@ -363,8 +363,8 @@ describe("T068K: exec end-to-end integration", () => {
   // 5. Missing notebook returns error
   // -----------------------------------------------------------------------
 
-  it("exec returns error when no notebook specified and no default", async () => {
-    // Override stateManager to have no default
+  it("exec falls back to __homepage__ when no notebooks registered and no default", async () => {
+    // Override stateManager to have no default and no notebooks
     stateManager.load.mockResolvedValue({
       version: 1,
       defaultNotebook: null,
@@ -376,7 +376,7 @@ describe("T068K: exec end-to-end integration", () => {
 
     const runTask = vi.fn(async () => ({
       success: true,
-      result: {},
+      result: { created: true },
     }));
 
     const scheduler = new Scheduler({
@@ -392,12 +392,14 @@ describe("T068K: exec end-to-end integration", () => {
 
     const execHandler = mockServer.getHandler("exec");
     const result = parseResult(
-      await execHandler({ prompt: "Some question" }),
+      await execHandler({ prompt: "建立新筆記本" }),
     );
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain("No target notebook");
-    expect(runTask).not.toHaveBeenCalled();
+    // Should succeed — routed to __homepage__ for homepage operations
+    expect(result.success).toBe(true);
+    expect(runTask).toHaveBeenCalledOnce();
+    const submittedTask = runTask.mock.calls[0][0];
+    expect(submittedTask.notebookAlias).toBe("__homepage__");
   });
 
   // -----------------------------------------------------------------------

@@ -112,8 +112,8 @@ describe("registerNotebookTools", () => {
   });
 
   it("registers all 6 notebook management tools", () => {
-    expect(server.tools.has("add_notebook")).toBe(true);
-    expect(server.tools.has("add_all_notebooks")).toBe(true);
+    expect(server.tools.has("register_notebook")).toBe(true);
+    expect(server.tools.has("register_all_notebooks")).toBe(true);
     expect(server.tools.has("list_notebooks")).toBe(true);
     expect(server.tools.has("set_default")).toBe(true);
     expect(server.tools.has("rename_notebook")).toBe(true);
@@ -124,12 +124,12 @@ describe("registerNotebookTools", () => {
   });
 
   // -----------------------------------------------------------------------
-  // add_notebook
+  // register_notebook
   // -----------------------------------------------------------------------
 
-  describe("add_notebook", () => {
+  describe("register_notebook", () => {
     it("creates a new notebook entry", async () => {
-      const handler = server.getHandler("add_notebook");
+      const handler = server.getHandler("register_notebook");
       const result = parseResult(
         await handler({
           url: "https://notebooklm.google.com/notebook/abc123",
@@ -144,7 +144,7 @@ describe("registerNotebookTools", () => {
     });
 
     it("rejects invalid URL", async () => {
-      const handler = server.getHandler("add_notebook");
+      const handler = server.getHandler("register_notebook");
       const result = parseResult(
         await handler({ url: "https://example.com", alias: "bad" }),
       ) as Record<string, unknown>;
@@ -154,7 +154,7 @@ describe("registerNotebookTools", () => {
     });
 
     it("rejects invalid alias format", async () => {
-      const handler = server.getHandler("add_notebook");
+      const handler = server.getHandler("register_notebook");
       const result = parseResult(
         await handler({
           url: "https://notebooklm.google.com/notebook/abc123",
@@ -167,7 +167,7 @@ describe("registerNotebookTools", () => {
     });
 
     it("rejects alias with leading hyphen", async () => {
-      const handler = server.getHandler("add_notebook");
+      const handler = server.getHandler("register_notebook");
       const result = parseResult(
         await handler({
           url: "https://notebooklm.google.com/notebook/abc123",
@@ -180,7 +180,7 @@ describe("registerNotebookTools", () => {
     });
 
     it("rejects empty alias", async () => {
-      const handler = server.getHandler("add_notebook");
+      const handler = server.getHandler("register_notebook");
       const result = parseResult(
         await handler({
           url: "https://notebooklm.google.com/notebook/abc123",
@@ -193,7 +193,7 @@ describe("registerNotebookTools", () => {
     });
 
     it("rejects alias longer than 50 chars", async () => {
-      const handler = server.getHandler("add_notebook");
+      const handler = server.getHandler("register_notebook");
       const result = parseResult(
         await handler({
           url: "https://notebooklm.google.com/notebook/abc123",
@@ -210,7 +210,7 @@ describe("registerNotebookTools", () => {
         makeState({ research: makeEntry("research") }),
       );
 
-      const handler = server.getHandler("add_notebook");
+      const handler = server.getHandler("register_notebook");
       const result = parseResult(
         await handler({
           url: "https://notebooklm.google.com/notebook/new-id",
@@ -231,7 +231,7 @@ describe("registerNotebookTools", () => {
         }),
       );
 
-      const handler = server.getHandler("add_notebook");
+      const handler = server.getHandler("register_notebook");
       const result = parseResult(
         await handler({
           url: "https://notebooklm.google.com/notebook/abc123",
@@ -244,7 +244,7 @@ describe("registerNotebookTools", () => {
     });
 
     it("accepts single character alias", async () => {
-      const handler = server.getHandler("add_notebook");
+      const handler = server.getHandler("register_notebook");
       const result = parseResult(
         await handler({
           url: "https://notebooklm.google.com/notebook/abc123",

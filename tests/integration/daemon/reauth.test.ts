@@ -29,6 +29,7 @@ vi.mock("../../../src/shared/logger.js", () => {
 
 vi.mock("../../../src/shared/config.js", () => ({
   MAX_TABS: 10,
+  NOTEBOOKLM_HOMEPAGE: "https://notebooklm.google.com",
 }));
 
 // ---------------------------------------------------------------------------
@@ -75,6 +76,11 @@ function createMockDeps(
     tabManager: {
       listTabs: vi.fn().mockReturnValue([]),
       switchMode: vi.fn().mockResolvedValue(undefined),
+      openTab: vi.fn().mockResolvedValue({
+        tabId: "mock-tab",
+        page: { url: () => "https://notebooklm.google.com/" },
+      }),
+      closeTab: vi.fn().mockResolvedValue(undefined),
     } as unknown as ToolRegistrationDeps["tabManager"],
     scheduler: {
       getQueueSize: vi.fn().mockReturnValue(0),
@@ -130,12 +136,12 @@ describe("T038: Reauth flow integration", () => {
     // switchMode called with false (headed)
     expect(deps.tabManager.switchMode).toHaveBeenCalledWith(false);
 
-    // Response indicates headed mode
+    // Response indicates headed mode with login status
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.success).toBe(true);
     expect(parsed.mode).toBe("headed");
-    expect(parsed.message).toContain("headed mode");
-    expect(parsed.message).toContain("Log in");
+    expect(parsed.loggedIn).toBe(true);
+    expect(parsed.message).toContain("reauth");
   });
 
   // -----------------------------------------------------------------------

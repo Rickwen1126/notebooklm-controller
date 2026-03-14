@@ -111,39 +111,42 @@ function registerExec(
         }
 
         if (!notebookAlias) {
-          // T101: Smart notebook selection hint — load all notebooks and
-          // include their descriptions so the caller can pick the right one.
           const allState = await deps.stateManager.load();
           const notebooks = Object.values(allState.notebooks);
+
           if (notebooks.length === 0) {
+            // No notebooks at all — allow homepage operations (e.g. create notebook).
+            // Use special alias "__homepage__" so runTask navigates to homepage.
+            notebookAlias = "__homepage__";
+          } else {
+            // T101: Smart notebook selection hint — load all notebooks and
+            // include their descriptions so the caller can pick the right one.
+            const notebookHints = notebooks.map((nb) => {
+              const desc = nb.description
+                ? ` — ${nb.description}`
+                : nb.title
+                  ? ` — ${nb.title}`
+                  : "";
+              return `  - ${nb.alias}${desc} (${nb.sourceCount} sources)`;
+            });
+
             return errorResult(
-              "No target notebook. No notebooks registered. Use add_notebook tool first.",
+              "No target notebook specified and no default set. " +
+              "Available notebooks:\n" +
+              notebookHints.join("\n") +
+              "\n\nSpecify 'notebook' parameter or call set_default tool.",
             );
           }
-
-          const notebookHints = notebooks.map((nb) => {
-            const desc = nb.description
-              ? ` — ${nb.description}`
-              : nb.title
-                ? ` — ${nb.title}`
-                : "";
-            return `  - ${nb.alias}${desc} (${nb.sourceCount} sources)`;
-          });
-
-          return errorResult(
-            "No target notebook specified and no default set. " +
-            "Available notebooks:\n" +
-            notebookHints.join("\n") +
-            "\n\nSpecify 'notebook' parameter or call set_default tool.",
-          );
         }
 
         // -----------------------------------------------------------------
-        // Verify notebook exists
+        // Verify notebook exists (skip for homepage operations)
         // -----------------------------------------------------------------
-        const state = await deps.stateManager.load();
-        if (!state.notebooks[notebookAlias]) {
-          return errorResult(`Notebook not found: ${notebookAlias}`);
+        if (notebookAlias !== "__homepage__") {
+          const state = await deps.stateManager.load();
+          if (!state.notebooks[notebookAlias]) {
+            return errorResult(`Notebook not found: ${notebookAlias}`);
+          }
         }
 
         // -----------------------------------------------------------------
@@ -178,11 +181,19 @@ function registerExec(
         }
 
         if (completed.status === "completed") {
+          // Wrap string results — spreading a string produces {0:"a", 1:"b",...}
+          const resultData =
+            typeof completed.result === "string"
+              ? { message: completed.result }
+              : typeof completed.result === "object" && completed.result !== null
+                ? completed.result
+                : { message: String(completed.result ?? "completed") };
+
           return jsonResult({
             success: true,
             taskId: completed.taskId,
             notebook: notebookAlias,
-            ...completed.result,
+            ...resultData,
           });
         }
 

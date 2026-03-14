@@ -23,7 +23,7 @@ import { loadAllAgentConfigs } from "../agent/agent-loader.js";
 import { runDualSession } from "../agent/session-runner.js";
 import { buildToolsForTab } from "../agent/tools/index.js";
 import { createSessionHooks } from "../agent/hooks.js";
-import { MCP_PORT, AGENTS_DIR_USER, AGENTS_DIR_BUNDLED } from "../shared/config.js";
+import { MCP_PORT, AGENTS_DIR_USER, AGENTS_DIR_BUNDLED, NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
 import { enforcePermissions } from "../shared/permissions.js";
 import { randomUUID } from "node:crypto";
@@ -48,6 +48,8 @@ export interface DaemonRuntime {
   agentConfigs: AgentConfig[];
   locale: string;
   uiMap: UIMap;
+  /** Mutable Google session state — updated by startup check and reauth. */
+  googleSession: { valid: boolean };
 }
 
 // ---------------------------------------------------------------------------
@@ -106,9 +108,13 @@ function createRunTask(
     const { copilotClient, tabManager, stateManager, networkGate, cacheManager, agentConfigs, locale } = deps;
     const startTime = Date.now();
 
-    // 1. Resolve notebook URL from state.
-    const notebook = await stateManager.getNotebook(task.notebookAlias);
-    if (!notebook) {
+    // 1. Resolve notebook URL from state (or homepage for __homepage__).
+    const isHomepage = task.notebookAlias === "__homepage__";
+    const targetUrl = isHomepage
+      ? NOTEBOOKLM_HOMEPAGE
+      : (await stateManager.getNotebook(task.notebookAlias))?.url;
+
+    if (!targetUrl) {
       return {
         success: false,
         error: `Notebook not found: ${task.notebookAlias}`,
@@ -120,7 +126,7 @@ function createRunTask(
     try {
       tabHandle = await tabManager.acquireTab({
         notebookAlias: task.notebookAlias,
-        url: notebook.url,
+        url: targetUrl,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -263,6 +269,38 @@ export async function startDaemon(options?: {
   }
   uiMap = loadUIMap(locale);
 
+  // 3.5. Verify Google session — navigate to NotebookLM and check login state.
+  //      If not logged in, keep the tab open so the user can log in visually.
+  const googleSession = { valid: false };
+  try {
+    const checkTab = await tabManager.openTab("__session-check__", NOTEBOOKLM_HOMEPAGE);
+    // Wait for redirects to settle (Google login redirect takes a moment).
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    const finalUrl = checkTab.page.url();
+
+    googleSession.valid =
+      finalUrl.startsWith(NOTEBOOKLM_HOMEPAGE) &&
+      !finalUrl.includes("accounts.google.com");
+
+    if (googleSession.valid) {
+      // Logged in — close the check tab, no longer needed.
+      await tabManager.closeTab(checkTab.tabId);
+      log.info("Google session valid", { url: finalUrl });
+    } else {
+      // NOT logged in — keep the tab open so the user can see and complete login.
+      // The tab stays in the pool; it will be cleaned up on next reauth or shutdown.
+      log.warn(
+        "Google session NOT valid — please log in to Google in the Chrome window. " +
+          "After logging in, call the reauth tool (headless=true) to resume.",
+        { redirectedTo: finalUrl },
+      );
+    }
+  } catch (err) {
+    log.warn("Failed to verify Google session", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   // 4. Start Copilot CLI client
   log.info("Starting Copilot CLI client...");
   await copilotClient.start();
@@ -296,12 +334,12 @@ export async function startDaemon(options?: {
     await stopDaemon({
       tabManager, copilotClient, mcpServer, scheduler,
       stateManager, taskStore, cacheManager, notifier, networkGate,
-      agentConfigs, locale, uiMap,
+      agentConfigs, locale, uiMap, googleSession,
     });
   };
   registerDaemonTools(mcpServer, {
     tabManager, scheduler, stateManager, networkGate, taskStore,
-    shutdownFn, agentConfigs,
+    shutdownFn, agentConfigs, googleSession,
   });
   registerNotebookTools(mcpServer, {
     stateManager, tabManager, cacheManager,
@@ -340,6 +378,7 @@ export async function startDaemon(options?: {
     agentConfigs,
     locale,
     uiMap,
+    googleSession,
   };
 }
 

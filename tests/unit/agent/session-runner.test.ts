@@ -694,11 +694,15 @@ describe("runExecutorSession", () => {
 
     await runExecutorSession(makeDualOptions(), step);
 
-    // systemMessage (tool constraint + context + agent prompt) goes to createSession.
+    // systemMessage (tool constraint + context + agent prompt) goes to createSession
+    // wrapped in SystemMessageConfig { mode: "replace", content: "..." }.
     expect(mockCreateSession).toHaveBeenCalledOnce();
     const createArg = mockCreateSession.mock.calls[0][0];
-    expect(createArg.systemMessage).toContain("禁止使用");
-    expect(createArg.systemMessage).toContain("目標 Notebook:");
+    expect(createArg.systemMessage).toEqual(
+      expect.objectContaining({ mode: "replace" }),
+    );
+    expect(createArg.systemMessage.content).toContain("禁止使用");
+    expect(createArg.systemMessage.content).toContain("目標 Notebook:");
 
     // Only the step-level instruction goes to sendAndWait.
     expect(mockSendAndWait).toHaveBeenCalledOnce();

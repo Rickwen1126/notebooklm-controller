@@ -153,23 +153,23 @@
 
 **Goal**: 透過 MCP tools 管理 notebook（納管、列表、設定預設、重命名、移除）
 
-**Independent Test**: add_notebook 納管 notebook → list_notebooks 列出 → set_default 設定預設 → rename_notebook 重命名 → remove_notebook 移除
+**Independent Test**: register_notebook 納管 notebook → list_notebooks 列出 → set_default 設定預設 → rename_notebook 重命名 → remove_notebook 移除
 
 ### Tests for US2
 
-- [x] T047 [P] [US2] Contract tests for notebook management tools in `tests/contract/mcp-tools/notebook-mgmt.test.ts` (add_notebook, list_notebooks, set_default, rename_notebook, remove_notebook — input/output schema validation. ~~open_notebook, close_notebook~~ 已移除 Review 1.5)
+- [x] T047 [P] [US2] Contract tests for notebook management tools in `tests/contract/mcp-tools/notebook-mgmt.test.ts` (register_notebook, list_notebooks, set_default, rename_notebook, remove_notebook — input/output schema validation. ~~open_notebook, close_notebook~~ 已移除 Review 1.5)
 - [x] T048 [P] [US2] Integration test for notebook CRUD in `tests/integration/daemon/notebook-crud.test.ts` (add → list → open → close → rename → remove full flow)
 
 ### Implementation for US2
 
-- [x] T049 [US2] Register `add_notebook` MCP tool in `src/daemon/notebook-tools.ts` (validate URL format, check duplicate URL/alias, create NotebookEntry, sync to state)
+- [x] T049 [US2] Register `register_notebook` MCP tool in `src/daemon/notebook-tools.ts` (validate URL format, check duplicate URL/alias, create NotebookEntry, sync to state)
 - [x] T050 [US2] Register `list_notebooks` MCP tool in `src/daemon/notebook-tools.ts` (return all registered notebooks with description, status, active flag, sourceCount)
 - [x] ~~T051~~ [P] [US2] ~~Register `open_notebook` MCP tool~~ — 已移除（Review 1.5: YAGNI，tab 由系統自動管理）
 - [x] ~~T052~~ [P] [US2] ~~Register `close_notebook` MCP tool~~ — 已移除（Review 1.5: YAGNI，tab 由系統自動管理）
 - [x] T053 [P] [US2] Register `set_default` MCP tool in `src/daemon/notebook-tools.ts` (update DaemonState.defaultNotebook)
 - [x] T054 [P] [US2] Register `rename_notebook` MCP tool in `src/daemon/notebook-tools.ts` (validate new alias uniqueness, update state)
 - [x] T055 [P] [US2] Register `remove_notebook` MCP tool in `src/daemon/notebook-tools.ts` (close tab, remove from registry, clean cache)
-- [x] T056 [US2] Register `add_all_notebooks` MCP tool in `src/daemon/notebook-tools.ts` (stub — interaction model TBD post-MVP, returns not-yet-implemented error)
+- [x] T056 [US2] Register `register_all_notebooks` MCP tool in `src/daemon/notebook-tools.ts` (stub — interaction model TBD post-MVP, returns not-yet-implemented error)
 - [x] T057 [US2] Implement tab limit enforcement and queuing (max 10 tabs, TabLimitError per spec AS11 — already implemented in Phase 2)
 - [x] T058 [US2] Write `agents/create-notebook.md` agent config — covered by existing `agents/manage-notebook.md` (action: create | rename | delete)
 - [x] T058.1 [US2] Implement notebook description auto-maintenance in add-source/remove-source agent prompts (FR-045: auto-update on source change, FR-046: include source list summary, FR-047: include creation timestamp)

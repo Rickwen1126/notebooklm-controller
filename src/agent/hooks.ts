@@ -6,24 +6,10 @@
  * error classification for retry/skip/abort decisions.
  */
 
-import type { ToolResultObject } from "@github/copilot-sdk";
+import type { SessionConfig } from "@github/copilot-sdk";
 
-// SDK hook types — defined locally because they're not re-exported from
-// the main entry point of @github/copilot-sdk.
-interface PreToolUseHookInput { toolName: string; [key: string]: unknown }
-type PreToolUseHookOutput = void | undefined;
-interface PostToolUseHookInput { toolName: string; toolResult: ToolResultObject; [key: string]: unknown }
-type PostToolUseHookOutput = void | undefined;
-interface ErrorOccurredHookInput { error: string; errorContext?: string; recoverable?: boolean; [key: string]: unknown }
-interface ErrorOccurredHookOutput { errorHandling: string; retryCount?: number; userNotification?: string }
-interface SessionEndHookInput { reason: string; finalMessage?: string; error?: string; [key: string]: unknown }
-interface SessionEndHookOutput { sessionSummary?: string }
-interface SessionHooks {
-  onPreToolUse?: (input: PreToolUseHookInput, invocation: { sessionId: string }) => Promise<PreToolUseHookOutput | void> | PreToolUseHookOutput | void;
-  onPostToolUse?: (input: PostToolUseHookInput, invocation: { sessionId: string }) => Promise<PostToolUseHookOutput | void> | PostToolUseHookOutput | void;
-  onErrorOccurred?: (input: ErrorOccurredHookInput, invocation: { sessionId: string }) => Promise<ErrorOccurredHookOutput | void> | ErrorOccurredHookOutput | void;
-  onSessionEnd?: (input: SessionEndHookInput, invocation: { sessionId: string }) => Promise<SessionEndHookOutput | void> | SessionEndHookOutput | void;
-}
+/** SDK SessionHooks type derived from SessionConfig (not directly exported). */
+type SessionHooks = NonNullable<SessionConfig['hooks']>;
 
 import type { NetworkGate } from "../network-gate/network-gate.js";
 import { logger } from "../shared/logger.js";
@@ -116,10 +102,7 @@ export function createSessionHooks(context: HooksContext): SessionHooks {
   // onPreToolUse
   // -------------------------------------------------------------------------
 
-  const onPreToolUse = async (
-    input: PreToolUseHookInput,
-    invocation: { sessionId: string },
-  ): Promise<PreToolUseHookOutput | void> => {
+  const onPreToolUse: SessionHooks['onPreToolUse'] = async (input, invocation) => {
     const { toolName } = input;
     toolCallCount++;
     lastToolStartTime = Date.now();
@@ -151,10 +134,7 @@ export function createSessionHooks(context: HooksContext): SessionHooks {
   // onPostToolUse
   // -------------------------------------------------------------------------
 
-  const onPostToolUse = async (
-    input: PostToolUseHookInput,
-    _invocation: { sessionId: string },
-  ): Promise<PostToolUseHookOutput | void> => {
+  const onPostToolUse: SessionHooks['onPostToolUse'] = async (input) => {
     const toolDurationMs = lastToolStartTime > 0 ? Date.now() - lastToolStartTime : undefined;
 
     log.info("Tool invocation completed", {
@@ -171,10 +151,7 @@ export function createSessionHooks(context: HooksContext): SessionHooks {
   // onErrorOccurred
   // -------------------------------------------------------------------------
 
-  const onErrorOccurred = async (
-    input: ErrorOccurredHookInput,
-    _invocation: { sessionId: string },
-  ): Promise<ErrorOccurredHookOutput | void> => {
+  const onErrorOccurred: SessionHooks['onErrorOccurred'] = async (input) => {
     const { error, errorContext, recoverable } = input;
     const handling = classifyError(error);
     errorCount++;
@@ -201,10 +178,7 @@ export function createSessionHooks(context: HooksContext): SessionHooks {
   // onSessionEnd
   // -------------------------------------------------------------------------
 
-  const onSessionEnd = async (
-    input: SessionEndHookInput,
-    _invocation: { sessionId: string },
-  ): Promise<SessionEndHookOutput | void> => {
+  const onSessionEnd: SessionHooks['onSessionEnd'] = async (input) => {
     const durationMs = Date.now() - sessionStartTime;
 
     log.info("Session ended", {

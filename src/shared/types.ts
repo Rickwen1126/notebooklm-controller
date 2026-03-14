@@ -222,6 +222,8 @@ export interface DaemonStatusResult {
     consecutiveTimeouts: number;
     degraded: boolean;
   };
+  /** Whether Google session was valid at daemon startup. */
+  googleSessionValid: boolean;
 }
 
 // ---------------------------------------------------------------------------

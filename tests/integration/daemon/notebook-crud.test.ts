@@ -2,7 +2,7 @@
  * T048: Notebook CRUD integration test
  *
  * Verifies the full notebook management flow through MCP tool handlers:
- * add_notebook -> list_notebooks -> set_default -> rename_notebook -> remove_notebook.
+ * register_notebook -> list_notebooks -> set_default -> rename_notebook -> remove_notebook.
  *
  * Uses a mock server pattern (same as lifecycle.test.ts / reauth.test.ts)
  * with in-memory state for realistic state transition testing.
@@ -163,8 +163,8 @@ describe("T048: Notebook CRUD integration", () => {
 
   it("registers all 6 notebook management tools", () => {
     const expectedTools = [
-      "add_notebook",
-      "add_all_notebooks",
+      "register_notebook",
+      "register_all_notebooks",
       "list_notebooks",
       "set_default",
       "rename_notebook",
@@ -186,11 +186,11 @@ describe("T048: Notebook CRUD integration", () => {
 
   describe("add -> list -> set_default -> rename -> remove flow", () => {
     // -------------------------------------------------------------------
-    // add_notebook
+    // register_notebook
     // -------------------------------------------------------------------
 
-    it("add_notebook creates a new notebook entry", async () => {
-      const handler = server.getHandler("add_notebook");
+    it("register_notebook creates a new notebook entry", async () => {
+      const handler = server.getHandler("register_notebook");
       const result = parseResult(
         await handler({
           url: "https://notebooklm.google.com/notebook/abc123",
@@ -213,8 +213,8 @@ describe("T048: Notebook CRUD integration", () => {
       );
     });
 
-    it("add_notebook rejects duplicate alias", async () => {
-      const handler = server.getHandler("add_notebook");
+    it("register_notebook rejects duplicate alias", async () => {
+      const handler = server.getHandler("register_notebook");
 
       // First add succeeds
       await handler({
@@ -234,8 +234,8 @@ describe("T048: Notebook CRUD integration", () => {
       expect(result.error).toContain("already exists");
     });
 
-    it("add_notebook rejects duplicate URL", async () => {
-      const handler = server.getHandler("add_notebook");
+    it("register_notebook rejects duplicate URL", async () => {
+      const handler = server.getHandler("register_notebook");
 
       // First add succeeds
       await handler({
@@ -255,8 +255,8 @@ describe("T048: Notebook CRUD integration", () => {
       expect(result.error).toContain("already registered");
     });
 
-    it("add_notebook rejects invalid URL", async () => {
-      const handler = server.getHandler("add_notebook");
+    it("register_notebook rejects invalid URL", async () => {
+      const handler = server.getHandler("register_notebook");
       const result = parseResult(
         await handler({
           url: "https://google.com/not-a-notebook",
@@ -268,8 +268,8 @@ describe("T048: Notebook CRUD integration", () => {
       expect(result.error).toContain("Invalid");
     });
 
-    it("add_notebook rejects invalid alias format", async () => {
-      const handler = server.getHandler("add_notebook");
+    it("register_notebook rejects invalid alias format", async () => {
+      const handler = server.getHandler("register_notebook");
 
       // Uppercase not allowed
       const result1 = parseResult(
@@ -314,7 +314,7 @@ describe("T048: Notebook CRUD integration", () => {
     // -------------------------------------------------------------------
 
     it("list_notebooks returns added notebooks", async () => {
-      const addHandler = server.getHandler("add_notebook");
+      const addHandler = server.getHandler("register_notebook");
       const listHandler = server.getHandler("list_notebooks");
 
       // Add two notebooks
@@ -344,7 +344,7 @@ describe("T048: Notebook CRUD integration", () => {
     // -------------------------------------------------------------------
 
     it("set_default sets the default notebook", async () => {
-      const addHandler = server.getHandler("add_notebook");
+      const addHandler = server.getHandler("register_notebook");
       const setDefaultHandler = server.getHandler("set_default");
 
       await addHandler({
@@ -368,7 +368,7 @@ describe("T048: Notebook CRUD integration", () => {
     // -------------------------------------------------------------------
 
     it("rename_notebook changes the alias", async () => {
-      const addHandler = server.getHandler("add_notebook");
+      const addHandler = server.getHandler("register_notebook");
       const renameHandler = server.getHandler("rename_notebook");
 
       await addHandler({
@@ -396,7 +396,7 @@ describe("T048: Notebook CRUD integration", () => {
     });
 
     it("rename_notebook rejects duplicate new alias", async () => {
-      const addHandler = server.getHandler("add_notebook");
+      const addHandler = server.getHandler("register_notebook");
       const renameHandler = server.getHandler("rename_notebook");
 
       await addHandler({
@@ -424,7 +424,7 @@ describe("T048: Notebook CRUD integration", () => {
     // -------------------------------------------------------------------
 
     it("remove_notebook removes the notebook", async () => {
-      const addHandler = server.getHandler("add_notebook");
+      const addHandler = server.getHandler("register_notebook");
       const removeHandler = server.getHandler("remove_notebook");
 
       await addHandler({
@@ -446,7 +446,7 @@ describe("T048: Notebook CRUD integration", () => {
     });
 
     it("remove_notebook closes tab if open", async () => {
-      const addHandler = server.getHandler("add_notebook");
+      const addHandler = server.getHandler("register_notebook");
       const removeHandler = server.getHandler("remove_notebook");
 
       await addHandler({

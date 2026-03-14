@@ -1,40 +1,70 @@
-## 2026-03-14 22:56 — Phase 1-14 完成 + /test-real skill + AUDIT v3
+## 2026-03-15 01:00 — /test-real Phase 0 通過，Phase 1 發現大量問題
 
-**Goal**: Spike 回灌 → bug fixes → Phase 6-14 → review → real test skill
+**Goal**: 跑 /test-real 真實驗證，發現並修復問題
 
-**Done (this session, 13 commits)**:
-1. `a564347`: Spike 回灌 + speckit.analyze F1~F7 一致性修正
-2. `0e104d0`: T-HF01~03 bug fixes（tabUrl, waitForTask, Planner context）
-3. `0eb71c3`: Phase 6+7 content pipeline + query
-4. `44d7397`: Review 🔴1 cancel+waitForTask bug fix
-5. `105488d`: Sky Eye Tour 04
-6. `3fc6d8f`: FR-210~213 Circuit Breaker spec/plan/tasks
-7. `5125913`: FR-009.1 file-based paste spec/plan/tasks
-8. `07d5855`: T-SB08~13 file-based paste code
-9. `6c96b80`: T-HF04 systemMessage + T-HF12~14 Circuit Breaker + T-SB01~03 rejectInput
-10. `1914451`: Phase 8-13（url/pdf-to-text, audio, status, naming, query, list_agents）
-11. `6eb4dfa`: AUDIT v3（通過）
-12. `1418f50`: Phase 14 polish（file permissions + security review）
-13. `e91d403`: `/test-real` command skill
+**Done (this session, uncommitted)**:
 
-**Decisions**:
-- Real operation test 不做自建 test framework，用 Claude Code 本身作為 MCP client
-- `/test-real` 是 command（手動觸發），不是 skill（自動觸發）
-- 635 mock tests 保留（`npm test`），real test 用 `/test-real` checklist 跑
-- Circuit Breaker: 連續 3 timeout → degraded → reject submit → restart 恢復
-- File-based paste: Tool boundary = context boundary（0 token 消耗）
-- Agent 程式的 real test 本質 = 跑一次真實操作，不是傳統 CI/CD
+### 修復完成
+1. **SDK 型別修正**（5 個 build errors）— systemMessage, hooks, Tool generic, ToolResultType
+2. **launcher.ts** — CLI entry point + `--no-headless` flag + import guard
+3. **package.json** — build script 加 `cp -r src/config`、start 改用 `tsx`
+4. **Chrome 自動化偵測** — `ignoreDefaultArgs: ["--enable-automation"]` + `--disable-blink-features=AutomationControlled`
+5. **Google session 驗證** — daemon 啟動時自動導航 NotebookLM 檢查登入狀態
+6. **reauth 導航** — 切 headed 後自動導航到 NotebookLM + 回報 loggedIn 狀態
+7. **googleSession mutable** — 用 `{ valid: boolean }` reference，reauth 後 get_status 即時更新
+8. **未登入保留 tab** — session check 未登入時不關 tab，讓使用者看到登入頁面
+9. **exec 支援 homepage** — `__homepage__` 特殊 alias，允許無 notebook 時操作首頁
+10. **add_notebook → register_notebook** — 重新命名，語義正確
 
-**State**: Branch `001-mvp` at `e91d403`。635 tests, 37 files, lint clean。Phase 1-14 + AUDIT v3 + /test-real 全部完成。
+### /test-real 結果
+
+**Phase 0: Pre-flight ✅ PASS**
+- daemon running, agent healthy, 10 agents loaded, google session valid
+
+**Phase 1: Notebook 管理 — 部分完成，發現問題**
+- `exec("建立筆記本 nbctl-test")` ✅ agent 成功操作 NotebookLM 建立筆記本
+- 但有多個 🔴 問題（見下方）
+
+### 發現的問題
+
+**🔴 FIX NOW（影響後續測試）**:
+
+1. **Viewport 800x600** — Puppeteer 預設 viewport，應該 `defaultViewport: null` + `--window-size=1440,900`
+   - 影響：agent 操作準確度、截圖品質、UI 元素定位
+   - 修法：TabManager.launch 加 `defaultViewport: null` + `--window-size=1440,900`
+
+2. **exec result string spreading** — `...completed.result` 當 result 是 string 時展開成 `{0:"已", 1:"成",...}`
+   - 影響：response 不可讀、MCP client 拿到垃圾資料
+   - 修法：exec-tools.ts 判斷 result type，string 包成 `{ message: result }`
+
+3. **Notebook 標題輸入錯誤** — 建出 "Untitled noteCtrl+Anbctl-testbook" 而非 "nbctl-test"
+   - 可能原因：agent prompt 不夠明確、type/paste 機制問題、Ctrl+A selectAll 失敗
+   - 需診斷：檢查 manage-notebook agent prompt + daemon log
+
+**🟡 ACCUMULATE（非阻塞，之後修）**:
+
+4. **create_notebook typed tool** — 建立筆記本應該是 typed MCP tool，不是靠 exec 自然語言
+   - 行為：建立 → 拿 URL → 自動 register → 回傳完整資訊
+   - 目前用 exec + `__homepage__` workaround
+
+5. **Chrome flag 警告** — `--disable-blink-features=AutomationControlled` 顯示不受支援警告
+   - 純 cosmetic，不 block
+
+6. **Node 25 ESM** — 必須用 `tsx` 跑 daemon，`node` 無法解析 `vscode-jsonrpc/node`
+
+7. **test-real checklist 缺多筆記本同步測試** — Phase 3 只測 async 同一 notebook
+
+**State**: Build ✅ + 642 tests ✅。所有改動未 commit。Daemon 在獨立 terminal 運行中。
 
 **Next**:
-- [ ] 開新 session 跑 `/test-real`（啟動 daemon → 全 checklist）
-- [ ] 根據 real test 結果修 bug
-- [ ] 剩餘 tech debt: T-HF05(acquireTab race), T-HF06~11, T-SB04~07
-- [ ] T106/T107: quickstart validation + performance baseline（手動）
+- [ ] 🔴 修 viewport（defaultViewport: null + window-size）
+- [ ] 🔴 修 exec result spreading
+- [ ] 🔴 診斷 notebook 標題錯誤
+- [ ] 重啟 daemon，繼續 Phase 1（register → list → set_default → rename）
+- [ ] Phase 2-5
+- [ ] commit 所有改動
 
-**Key references**:
-- `.claude/commands/test-real.md` — real operation test checklist
-- `.audit/AUDIT-notebooklm-controller-v3@20260314.md` — latest audit
-- `.tours/04-sky-eye-phase6-7-content-pipeline.tour` — content pipeline architecture
-- `spike/FilePaste500KExperiment.md` — file-based paste experiment results
+**Decisions**:
+- exec 支援 `__homepage__` 無 notebook 操作（暫時方案）
+- register_notebook = 納管已存在的；create_notebook = typed tool 待做
+- test-real 需增加多筆記本 concurrent 測試 phase

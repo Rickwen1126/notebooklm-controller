@@ -10,7 +10,7 @@
 
 import { z } from "zod";
 import { defineTool } from "@github/copilot-sdk";
-import type { Tool, ToolResultObject } from "@github/copilot-sdk";
+import type { ToolResultObject } from "@github/copilot-sdk";
 import { repoToText } from "../../content/repo-to-text.js";
 import { urlToText } from "../../content/url-to-text.js";
 import { pdfToText } from "../../content/pdf-to-text.js";
@@ -24,14 +24,14 @@ function textResult(text: string): ToolResultObject {
 }
 
 function errorResult(text: string): ToolResultObject {
-  return { textResultForLlm: text, resultType: "error" };
+  return { textResultForLlm: text, resultType: "failure" };
 }
 
 // ---------------------------------------------------------------------------
 // repoToText tool
 // ---------------------------------------------------------------------------
 
-export function buildRepoToTextTool(): Tool {
+export function buildRepoToTextTool() {
   return defineTool("repoToText", {
     description:
       "Convert a local git repository into a text file for pasting into NotebookLM. " +
@@ -65,7 +65,7 @@ export function buildRepoToTextTool(): Tool {
 // urlToText tool (T084)
 // ---------------------------------------------------------------------------
 
-export function buildUrlToTextTool(): Tool {
+export function buildUrlToTextTool() {
   return defineTool("urlToText", {
     description:
       "Fetch a web page and convert its content to clean text " +
@@ -97,7 +97,7 @@ export function buildUrlToTextTool(): Tool {
 // pdfToText tool (T085)
 // ---------------------------------------------------------------------------
 
-export function buildPdfToTextTool(): Tool {
+export function buildPdfToTextTool() {
   return defineTool("pdfToText", {
     description:
       "Convert a local PDF file to plain text for pasting into NotebookLM " +
@@ -132,7 +132,7 @@ export function buildPdfToTextTool(): Tool {
 // Export all content tools
 // ---------------------------------------------------------------------------
 
-export function buildContentTools(): Tool[] {
+export function buildContentTools() {
   return [
     buildRepoToTextTool(),
     buildUrlToTextTool(),

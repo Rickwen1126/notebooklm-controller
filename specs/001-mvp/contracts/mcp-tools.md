@@ -65,6 +65,7 @@ or operation-specific result (sourceAdded, screenshot, etc.)
 ```json
 {
   "running": true,
+  "googleSessionValid": true,
   "tabPool": { "usedSlots": 3, "maxSlots": 10, "idleSlots": 1 },
   "network": { "status": "healthy", "backoffRemainingMs": null },
   "activeNotebooks": ["research", "ml-papers"],
@@ -95,7 +96,7 @@ or operation-specific result (sourceAdded, screenshot, etc.)
 
 ## Notebook 管理
 
-### `add_notebook`
+### `register_notebook`
 
 納管既有 NotebookLM notebook。
 
@@ -110,7 +111,7 @@ or operation-specific result (sourceAdded, screenshot, etc.)
 **Output**: `{ "success": true, "id": "research", "url": "...", "title": "...", "description": "...", "sources": [...] }`
 **Error**: `{ "success": false, "error": "Invalid NotebookLM URL..." }` 或 `"URL already registered as '...'"` 或 `"Alias '...' already in use"`
 
-### `add_all_notebooks`
+### `register_all_notebooks`
 
 批次納管帳號中所有 notebook（互動式）。
 
@@ -213,11 +214,35 @@ or operation-specific result (sourceAdded, screenshot, etc.)
 
 ### `reauth`
 
-重新認證 Google session（headed mode）。
+重新認證 Google session。切換 Chrome 至 headed mode 並**自動導航至 NotebookLM**，
+讓使用者在 Chrome 視窗中完成 Google 登入。完成後以 `headless=true` 呼叫切回。
 
-**Input Schema**: `{}`（無參數）
+**Input Schema**:
+```typescript
+{
+  headless: z.boolean().optional().describe("false=開啟 headed 模式登入（預設），true=切回 headless 恢復操作"),
+}
+```
 
-**Output**: `{ "success": true, "message": "Re-authenticated successfully" }`
+**Output** (headless=false — 登入模式):
+```json
+{
+  "success": true,
+  "mode": "headed",
+  "loggedIn": false,
+  "message": "Google login page detected. Please log in in the Chrome window. After logging in, call reauth with headless=true to resume."
+}
+```
+
+**Output** (headless=true — 恢復操作):
+```json
+{ "success": true, "mode": "headless", "message": "Chrome switched back to headless mode. Normal operations can resume." }
+```
+
+**行為**:
+- `headless=false`（預設）：switchMode → 導航至 `NOTEBOOKLM_HOMEPAGE` → 等待頁面載入 → 檢測 URL 判斷登入狀態 → 回報 `loggedIn: true/false`
+- `headless=true`：switchMode 回 headless，不導航
+- 如果有 active tabs 則拒絕切換（需先關閉）
 
 ### `list_agents`
 

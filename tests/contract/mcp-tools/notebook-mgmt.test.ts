@@ -31,7 +31,7 @@ const ErrorOutputSchema = z.object({
 });
 
 // ===========================================================================
-// add_notebook
+// register_notebook
 // ===========================================================================
 
 const AddNotebookInputSchema = z.object({
@@ -110,7 +110,7 @@ const RemoveNotebookSuccessSchema = z.object({
 // Tests
 // =====================================================================
 
-describe("add_notebook contract", () => {
+describe("register_notebook contract", () => {
   // ---------------------------------------------------------------
   // Input schema: valid inputs
   // ---------------------------------------------------------------

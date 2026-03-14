@@ -17,7 +17,7 @@ import type { StateManager } from "../state/state-manager.js";
 import type { NetworkGate } from "../network-gate/network-gate.js";
 import type { TaskStore } from "../state/task-store.js";
 import type { DaemonStatusResult, AgentConfig } from "../shared/types.js";
-import { MAX_TABS } from "../shared/config.js";
+import { MAX_TABS, NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,6 +31,7 @@ export interface ToolRegistrationDeps {
   taskStore: TaskStore;
   shutdownFn: () => Promise<void>;
   agentConfigs?: AgentConfig[];
+  googleSession?: { valid: boolean };
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +154,7 @@ function registerGetStatus(
         pendingTasks: deps.scheduler.getQueueSize(),
         runningTasks: deps.scheduler.getRunningCount(),
         agentHealth: deps.scheduler.getHealth(),
+        googleSessionValid: deps.googleSession?.valid ?? false,
       };
 
       return {
@@ -241,11 +243,65 @@ function registerReauth(
         };
       }
 
-      const modeLabel = targetHeadless ? "headless" : "headed";
-      const instruction = targetHeadless
-        ? "Chrome switched back to headless mode. Normal operations can resume."
-        : "Chrome opened in headed mode for re-authentication. " +
-          "Log in to your Google account, then call reauth with headless=true to resume.";
+      // When switching to headed mode, navigate to NotebookLM so the user
+      // can see the login page (or confirm they're already logged in).
+      if (!targetHeadless) {
+        try {
+          const tab = await deps.tabManager.openTab(
+            "__reauth__",
+            NOTEBOOKLM_HOMEPAGE,
+          );
+          // Brief wait for page to settle (redirects, login check).
+          await new Promise((resolve) => setTimeout(resolve, 3_000));
+          const currentUrl = tab.page.url();
+          await deps.tabManager.closeTab(tab.tabId);
+
+          const isLoggedIn =
+            currentUrl.startsWith(NOTEBOOKLM_HOMEPAGE) &&
+            !currentUrl.includes("accounts.google.com");
+
+          // Update shared session state so get_status reflects current login.
+          if (isLoggedIn && deps.googleSession) {
+            deps.googleSession.valid = true;
+          }
+
+          const loginStatus = isLoggedIn
+            ? "Already logged in to NotebookLM."
+            : "Google login page detected. Please log in in the Chrome window.";
+
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  success: true,
+                  mode: "headed",
+                  loggedIn: isLoggedIn,
+                  message: loginStatus +
+                    " After logging in, call reauth with headless=true to resume.",
+                }),
+              },
+            ],
+          };
+        } catch (navErr: unknown) {
+          const navMsg = navErr instanceof Error ? navErr.message : String(navErr);
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  success: true,
+                  mode: "headed",
+                  message:
+                    "Chrome opened in headed mode but failed to navigate to NotebookLM: " +
+                    navMsg +
+                    ". Please manually navigate to https://notebooklm.google.com and log in.",
+                }),
+              },
+            ],
+          };
+        }
+      }
 
       return {
         content: [
@@ -253,8 +309,9 @@ function registerReauth(
             type: "text" as const,
             text: JSON.stringify({
               success: true,
-              mode: modeLabel,
-              message: instruction,
+              mode: "headless",
+              message:
+                "Chrome switched back to headless mode. Normal operations can resume.",
             }),
           },
         ],
