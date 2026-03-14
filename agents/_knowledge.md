@@ -9,20 +9,22 @@
 |------|------|------|
 | `find(text)` | 按文字定位互動元素 → 座標 | `[TAG] "text" → click(x, y) rect(...) aria="..." [DISABLED] [expanded=...]` |
 | `click(x, y)` | 點擊座標 | 確認 |
-| `paste(text)` | 貼上文字到 focus 的輸入框 | 確認 |
-| `type(text)` | 鍵盤輸入或快捷鍵（SelectAll, Enter, Backspace, Ctrl+A） | 確認 |
+| `paste(text)` | 貼上文字到 focus 的輸入框。`clear=true` 會先全選再取代 | 確認 |
+| `type(text)` | 鍵盤輸入特殊鍵（Enter, Backspace, Tab, Escape） | 確認 |
 | `read(selector)` | CSS selector 讀取 DOM | `Found N element(s): [1] TAG: text...` |
 | `scroll(x, y, dx, dy)` | 滾動頁面 | 確認 |
 | `navigate(url)` | 跳轉 URL | 確認 |
 | `wait(seconds)` | 等待 N 秒 | 確認 |
-| `screenshot()` | 截圖 | base64 image |
+| `screenshot()` | 截圖（視覺分析用） | base64 image |
 
-## 操作原則
+## 核心操作原則
 
-1. **先 find 再 click**——永遠不猜座標
-2. **用 read 驗證結果**——操作後確認狀態變化
-3. **DISABLED 判斷**——find 回傳 DISABLED 的按鈕不要點擊，先完成前置條件
-4. **最小化 screenshot**——DOM 查詢比截圖快，優先 find/read
+1. **觀察→行動→驗證**——每步操作前 screenshot() 確認當前狀態，操作後 screenshot() 驗證結果
+2. **先 find 再 click**——永遠不猜座標，用 find 定位元件
+3. **元件名稱是高信心參考**——prompt 中的 `{{...}}` 標籤是系統驗證過的多語言名稱，優先使用。如果 find 沒結果，根據截圖嘗試替代文字
+4. **視覺 + DOM 綜合判斷**——screenshot 看全局狀態，find/read 確認具體元件。兩者互補，不只依賴其一
+5. **不盲目執行**——如果操作結果不如預期，分析截圖後決定：重試、換方法、或回報問題
+6. **DISABLED 判斷**——find 回傳 DISABLED 的按鈕不點擊，先完成前置條件
 
 ## 固定 Selectors（語言無關）
 
@@ -63,11 +65,14 @@
 - **BUTTON**(aria=來源名稱) → 展開來源詳情
 - **INPUT**(aria=來源名稱) → 勾選/取消選取
 
-## 錯誤恢復
+## 常見問題處理
 
-| 狀況 | 恢復 |
-|------|------|
+| 狀況 | 處理方式 |
+|------|----------|
+| find 找不到預期元件 | screenshot() 看實際畫面 → 嘗試替代文字或 scroll 找 |
 | `find("{{add_source}}")` 找不到 | 來源詳情展開中遮蔽 → `find("collapse_content")` → click → 重試 |
-| 回答還在生成 | `wait(5)` → 重新 `read` → 最多 3 次 |
+| 回答還在生成 | `wait(5)` → 重新 read → 最多 3 次 |
 | Dialog 未關閉 | `type("Escape")` |
-| 找不到元素 | `screenshot()` 確認 → 可能需要 `scroll()` 或 `navigate()` 修正 |
+| 操作後畫面無變化 | screenshot() 分析 → 可能需要 wait 或重試 |
+| 不在預期頁面 | screenshot() 確認 → navigate 回正確頁面 |
+| 元素被遮擋 | scroll 調整位置 → 重新 find |

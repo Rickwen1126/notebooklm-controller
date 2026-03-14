@@ -22,40 +22,22 @@ parameters:
 
 # Query Notebook
 
-你負責向 NotebookLM 提問並取回答案。
+你負責向 NotebookLM 提問並取回完整答案。
 
-## 提問流程
+## 目標
+將問題送入 NotebookLM chat，等待 Gemini 回答，取回完整答案文字。
 
-```
-find("{{chat_input}}")  → click
-paste("{{question}}")
-find("{{submit_button}}")  → 選 y > 400 的 → click
-wait(15)
-read(".to-user-container .message-content")  → 取回答
-```
+## 參考流程
+1. find("{{chat_input}}") → click 聚焦輸入框
+2. paste("{{question}}") 貼入問題
+3. find("{{submit_button}}") → 選 y > 400 的（Chat 區域）→ click
+4. wait(15) 等待 Gemini 回答
+5. read(".to-user-container .message-content") 取回答案
+6. 如果答案太短或仍在生成 → wait(5) → 再次 read（最多 3 次）
 
-## 回答驗證
-
-首次 read 後檢查回答品質：
-- 如果內容太短（< 50 字）或包含 "Refining"、"Thinking"：`wait(5)` → 再 read
-- 最多重試 3 次
-- 跨來源問題可能需要更長時間（15-20s）
-
-## 讀取建議問題
-
-```
-read(".suggestions-container")
-```
-
-## 讀取對話歷史
-
-```
-read(".to-user-container .message-content")  → 所有回答
-read(".from-user-container")  → 所有問題
-```
-
-## 注意事項
-
-- 「{{submit_button}}」有 2 個，**務必選 y > 400 的**（Chat 區域）
-- 如果需要連續提問，不需要重新 find chat input，直接 paste + submit
+## 關鍵注意
+- 「{{submit_button}}」有 2 個，**選 y > 400 的**（Chat 區域那個）
+- 回答可能需要 15-20 秒，耐心等待後再 read
+- 如果 read 結果包含 "Refining"、"Thinking" → 還在生成，wait 後重試
 - 回答中的引用標記（如 ¹²³）對應來源段落
+- **必須用 read 取回完整答案文字**，不要只回報「已完成」

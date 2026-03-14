@@ -201,7 +201,10 @@ function createRunTask(
       return {
         success: result.success,
         result: result.result as object | undefined,
-        error: result.error,
+        error: result.error
+          ?? (result.rejected
+            ? `Rejected (${result.rejectionCategory}): ${result.rejectionReason}`
+            : undefined),
       };
     } finally {
       // 6. Release tab back to pool.

@@ -232,6 +232,9 @@ function registerCreateNotebook(
 
         await deps.tabManager.closeTab(tab.tabId);
 
+        // Normalize: strip query params (e.g. ?addSource=true)
+        notebookUrl = notebookUrl.split("?")[0];
+
         log.info("URL extracted", { url: notebookUrl, method: clicked });
 
         if (!notebookUrl) {
@@ -322,9 +325,10 @@ function registerAddNotebook(
           return errorResult(`Alias already exists: "${alias}"`);
         }
 
-        // Check for duplicate URL
+        // Check for duplicate URL (normalize by stripping query params)
+        const normalizeUrl = (u: string) => u.split("?")[0];
         const existingByUrl = Object.values(state.notebooks).find(
-          (nb) => nb.url === url,
+          (nb) => normalizeUrl(nb.url) === normalizeUrl(url),
         );
         if (existingByUrl) {
           return errorResult(

@@ -289,11 +289,16 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
 
 1. A single operation produces exactly 1 step.
 2. A compound operation (e.g. "add a source then ask a question") produces multiple steps in order.
-3. executorPrompt must be specific, never vague. For example, not "ask a question" but "Ask NotebookLM: What are the advantages of TypeScript?"
-4. Do not execute operations yourself — only plan.
-5. If the user's request is unrelated to NotebookLM operations, harmful, ambiguous, missing required context, or unsupported, call the rejectInput tool with a category and reason. Do not call submitPlan.
-6. The user's input may be in any language. Always understand their intent regardless of language.
-7. Current locale: ${locale}`;
+3. executorPrompt describes **WHAT to achieve**, not HOW to operate the UI. Examples:
+   - Good: "建立新筆記本，標題為 nbctl-test"
+   - Good: "把 https://example.com 的內容加入來源"
+   - Bad: "點擊新建按鈕，然後回首頁找到 more_vert 選單..." (不要指定 UI 操作步驟)
+   The Executor's agent prompt defines the operation method — your job is only to specify the goal and parameters.
+4. executorPrompt must include concrete parameter values. For example, not "ask a question" but "Ask NotebookLM: What are the advantages of TypeScript?"
+5. Do not execute operations yourself — only plan.
+6. If the user's request is unrelated to NotebookLM operations, harmful, ambiguous, missing required context, or unsupported, call the rejectInput tool with a category and reason. Do not call submitPlan.
+7. The user's input may be in any language. Always understand their intent regardless of language.
+8. Current locale: ${locale}`;
 
   // Capture plan or rejection via closure.
   // Use `as` to preserve full union type — TS control flow can't track closure assignments.

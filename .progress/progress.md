@@ -1,40 +1,63 @@
-## 2026-03-15 03:00 — Phase 0-1 PASS, Phase 2 進行中
+## 2026-03-15 03:30 — /test-real 全 Phase 完成
 
-**Commits (this session)**:
+**Commits (this session, 4 commits)**:
 1. `93fb327`: build fixes + daemon startup + reauth + keyboard shortcuts
 2. `b68019a`: create_notebook tool + Chrome crash bubble + keyboard keyCode fix
 3. `6041174`: paste(clear=true) + agent-based create_notebook + tab/Chrome fixes
+4. `66e1482`: /test-real complete + remove shutdown MCP tool
 
-**Phase 0: Pre-flight ✅ PASS**
-**Phase 1: Notebook Mgmt ✅ PASS**
-- create_notebook, list, set_default, rename, get_status 全部通過
+**State**: Branch `001-mvp` at `66e1482`。640 tests ✅。
 
-**Phase 2: Content Pipeline — 進行中**
-- 2.1 repo 來源：repo 1.5M chars 超過 500K limit → 正常拒絕，需用小 repo 測
-- 2.2 URL 來源：agent 找不到「網址來源」選項 → add-source agent prompt 問題
-- 2.3-2.5：尚未測
+### /test-real Results
 
-### 發現的問題（累積）
+```
+Phase 0: Pre-flight        ✅ PASS
+Phase 1: Notebook Mgmt     ✅ PASS
+Phase 2: Content Pipeline   🟡 PARTIAL
+Phase 3: Async + Tasks     ✅ PASS
+Phase 4: Error Handling    ✅ PASS
+Phase 5: Cleanup           ✅ PASS
+```
 
-**🔴 需修復（影響功能）**:
-1. ~~SelectAll 鍵盤快捷鍵不可靠~~ → 已用 paste(clear=true) 解決
-2. add-source agent 不知道怎麼操作 URL 來源按鈕 → agent prompt 需更新
-3. create_notebook URL 提取應走 tab pool（acquireTab/releaseTab）而非 openTab/closeTab
+### 🟡 累積問題（10 項，按優先度）
 
-**🟡 需修復（非阻塞）**:
-4. Chrome --disable-blink-features 警告橫幅（cosmetic）
-5. Node 25 ESM 必須用 tsx
-6. test-real checklist 缺多筆記本 concurrent 測試
-7. 點擊多開 tab — NotebookLM target=_blank 行為導致 untracked tabs
-   - Tab pool 不知道瀏覽器自己多開的 tab
-   - 需要 browser.on('targetcreated') 攔截或操作前後比對清理
-8. create_notebook URL 有 `?addSource=true` query string，應清掉
+**功能問題**:
+1. add-source agent 不認識 URL 來源按鈕流程 → agent prompt 更新
+2. URL 來源加入後來源面板仍為空 → 需診斷（可能是 NotebookLM 處理延遲或操作失敗）
+3. query agent 回傳 "completed" 沒有 answer 內容 → agent prompt / result 擷取
+4. input gate 回傳 "unknown error" 而非 rejected → planner / rejectInput 問題
 
-**State**: Branch `001-mvp` at `6041174`。642 tests ✅。
+**架構問題**:
+5. create_notebook URL 提取不走 tab pool（用 openTab/closeTab 而非 acquireTab/releaseTab）
+6. 點擊多開 untracked tabs（NotebookLM target=_blank）→ 需 browser.on('targetcreated') 攔截
+7. URL 重複比較不 normalize（query string 差異）→ notebook-tools
+8. 缺 unset_default tool → notebook-tools
+
+**非阻塞**:
+9. Chrome --disable-blink-features 警告橫幅（cosmetic）
+10. test-real checklist 缺多筆記本 concurrent 測試
+
+### 本 session 修復總計（18 項）
+1. SDK 型別修正 5 處
+2. launcher CLI entry point
+3. package.json build/start
+4. Chrome 自動化偵測旗標
+5. Google session 啟動驗證
+6. reauth 導航 + loggedIn
+7. googleSession mutable reference
+8. exec __homepage__ 支援
+9. exec result spreading fix
+10. register_notebook 改名
+11. viewport 1440x900
+12. 鍵盤快捷鍵 dispatchKeyCombo
+13. keyCode 大寫修正
+14. create_notebook typed tool
+15. Chrome restore dialog 修正
+16. paste(clear=true) 取代 SelectAll
+17. create_notebook URL 提取（click-navigate）
+18. shutdown tool 移除
 
 **Next**:
-- [ ] 繼續 Phase 2（用小 repo 或改 URL 來源的 agent prompt）
-- [ ] Phase 3: Async + Tasks
-- [ ] Phase 4: Error Handling
-- [ ] Phase 5: Cleanup
-- [ ] 批次修復累積問題
+- [ ] 批次修復 🟡 問題 1-4（agent prompt + planner）
+- [ ] 架構問題 5-8
+- [ ] commit 所有改動
