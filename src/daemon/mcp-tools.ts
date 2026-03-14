@@ -29,7 +29,6 @@ export interface ToolRegistrationDeps {
   stateManager: StateManager;
   networkGate: NetworkGate;
   taskStore: TaskStore;
-  shutdownFn: () => Promise<void>;
   agentConfigs?: AgentConfig[];
   googleSession?: { valid: boolean };
 }
@@ -43,7 +42,7 @@ export function registerDaemonTools(
   deps: ToolRegistrationDeps,
 ): void {
   registerGetStatus(server, deps);
-  registerShutdown(server, deps);
+  // shutdown removed from MCP interface — daemon lifecycle managed via CLI (Ctrl+C / SIGTERM).
   registerReauth(server, deps);
   registerListAgents(server, deps);
 }
@@ -164,39 +163,7 @@ function registerGetStatus(
   );
 }
 
-// ---------------------------------------------------------------------------
-// T044: shutdown
-// ---------------------------------------------------------------------------
 
-function registerShutdown(
-  server: NbctlMcpServer,
-  deps: ToolRegistrationDeps,
-): void {
-  server.registerTool(
-    "shutdown",
-    {
-      description: "Gracefully stop the daemon, closing all tabs and sessions.",
-      annotations: {
-        destructiveHint: true,
-      },
-    },
-    async () => {
-      // Fire shutdown asynchronously so the response can be sent first.
-      setImmediate(() => {
-        void deps.shutdownFn();
-      });
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({ success: true, message: "Daemon stopped" }),
-          },
-        ],
-      };
-    },
-  );
-}
 
 // ---------------------------------------------------------------------------
 // T045: reauth

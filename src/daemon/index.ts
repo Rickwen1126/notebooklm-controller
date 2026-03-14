@@ -330,16 +330,9 @@ export async function startDaemon(options?: {
   });
 
   // 8. Register MCP tools
-  const shutdownFn = async () => {
-    await stopDaemon({
-      tabManager, copilotClient, mcpServer, scheduler,
-      stateManager, taskStore, cacheManager, notifier, networkGate,
-      agentConfigs, locale, uiMap, googleSession,
-    });
-  };
   registerDaemonTools(mcpServer, {
     tabManager, scheduler, stateManager, networkGate, taskStore,
-    shutdownFn, agentConfigs, googleSession,
+    agentConfigs, googleSession,
   });
   registerNotebookTools(mcpServer, {
     stateManager, tabManager, cacheManager, scheduler, taskStore,

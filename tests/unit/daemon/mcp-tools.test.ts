@@ -81,7 +81,6 @@ function createMockDeps(overrides?: Partial<ToolRegistrationDeps>): ToolRegistra
       getAll: vi.fn().mockResolvedValue([]),
       getRecent: vi.fn().mockResolvedValue([]),
     } as unknown as ToolRegistrationDeps["taskStore"],
-    shutdownFn: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -100,10 +99,10 @@ describe("registerDaemonTools", () => {
     registerDaemonTools(server as never, deps);
   });
 
-  it("registers get_status, shutdown, reauth, and list_agents tools", () => {
-    expect(server.registerTool).toHaveBeenCalledTimes(4);
+  it("registers get_status, reauth, and list_agents tools (no shutdown)", () => {
+    expect(server.registerTool).toHaveBeenCalledTimes(3);
     expect(server.tools.has("get_status")).toBe(true);
-    expect(server.tools.has("shutdown")).toBe(true);
+    expect(server.tools.has("shutdown")).toBe(false);
     expect(server.tools.has("reauth")).toBe(true);
     expect(server.tools.has("list_agents")).toBe(true);
   });
@@ -174,31 +173,6 @@ describe("registerDaemonTools", () => {
         notebook: "research",
         limit: undefined,
       });
-    });
-  });
-
-  // -----------------------------------------------------------------------
-  // shutdown
-  // -----------------------------------------------------------------------
-
-  describe("shutdown", () => {
-    it("returns success response and calls shutdownFn", async () => {
-      const handler = server.getHandler("shutdown");
-      const result = await handler({}) as { content: Array<{ text: string }> };
-
-      const parsed = JSON.parse(result.content[0].text);
-      expect(parsed.success).toBe(true);
-      expect(parsed.message).toBe("Daemon stopped");
-
-      // shutdownFn is called via setImmediate, so flush the queue.
-      await new Promise((resolve) => setImmediate(resolve));
-      expect(deps.shutdownFn).toHaveBeenCalledTimes(1);
-    });
-
-    it("has destructiveHint annotation", () => {
-      const tool = server.tools.get("shutdown")!;
-      const options = tool.options as { annotations?: { destructiveHint?: boolean } };
-      expect(options.annotations?.destructiveHint).toBe(true);
     });
   });
 
