@@ -114,6 +114,12 @@ export function createSessionHooks(context: HooksContext): SessionHooks {
       toolName,
       toolCallIndex: toolCallCount,
     });
+    // Log tool arguments at debug level for diagnosis.
+    log.debug("Tool args", {
+      toolName,
+      toolCallIndex: toolCallCount,
+      args: JSON.stringify(input.toolArgs ?? {}).slice(0, 500),
+    });
 
     // Acquire a network permit before each tool call.
     // Fail-open (FR-195): if acquirePermit throws, log a warning and proceed.
@@ -143,6 +149,14 @@ export function createSessionHooks(context: HooksContext): SessionHooks {
       toolDurationMs,
       toolCallIndex: toolCallCount,
     });
+    // Log tool result text at debug level (truncated, skip screenshot base64).
+    if (input.toolName !== "screenshot") {
+      log.debug("Tool result", {
+        toolName: input.toolName,
+        toolCallIndex: toolCallCount,
+        result: input.toolResult.textResultForLlm?.slice(0, 500),
+      });
+    }
 
     return undefined;
   };

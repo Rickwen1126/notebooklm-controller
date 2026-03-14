@@ -20,6 +20,7 @@ const { mockChildLogger, mockLogger } = vi.hoisted(() => {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
+    debug: vi.fn(),
     child: vi.fn(),
   };
   mockChildLogger.child.mockReturnValue(mockChildLogger);
@@ -28,6 +29,7 @@ const { mockChildLogger, mockLogger } = vi.hoisted(() => {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
+    debug: vi.fn(),
     child: vi.fn().mockReturnValue(mockChildLogger),
   };
 
