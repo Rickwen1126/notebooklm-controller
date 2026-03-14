@@ -370,6 +370,7 @@ interface AgentConfig {
   prompt: string;                      // Markdown body，agent-loader 做 template rendering 後傳給 SDK
   infer: boolean;                      // 是否讓 Copilot CLI 自主推斷可用 tools（預設 true）。false 時 subagent 只能用 tools 列表中的工具
   // --- 以下為我們的擴展，不傳給 SDK ---
+  startPage: "homepage" | "notebook";  // Executor pre-navigate 錨點：該 agent 的起始頁面
   parameters: Record<string, AgentParameter>;  // 動態 prompt template 變數
 }
 

@@ -189,8 +189,10 @@ Scheduler.dispatch(task)
     │   → session.disconnect()
     │
     └─ Executor Session(s) (per step, has browser tools)
+        pre-navigate: tab.url vs agentConfig.startPage → navigate if mismatch (O(1) check)
         tools: buildToolsForTab(tabHandle) filtered by step.tools
         systemMessage: agentConfig.prompt + tool constraint preamble + 「target notebook: {alias}」
+                       + page anchor hint（「系統檢查：目前 tab URL 符合 X」，agent 可自行驗證）
         → session.sendAndWait({ prompt: step.executorPrompt })
         → session.disconnect()
         → aggregate results
