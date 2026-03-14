@@ -494,6 +494,40 @@ describe("Scheduler", () => {
       const result = await taskStore.get(task.taskId);
       expect(result?.status).toBe("failed");
     });
+
+    it("resolves when a queued task is cancelled", async () => {
+      let resolveBlock: (() => void) | undefined;
+      const blockPromise = new Promise<void>((r) => { resolveBlock = r; });
+
+      const runTask = vi.fn(async (): Promise<SessionResult> => {
+        await blockPromise;
+        return { success: true };
+      });
+
+      const scheduler = new Scheduler({ taskStore, runTask });
+
+      // Submit a blocking task first, then a second task that will be queued.
+      await scheduler.submit({ notebookAlias: "nb", command: "blocking" });
+      await new Promise((r) => setTimeout(r, 10)); // let first task start
+
+      const task2 = await scheduler.submit({ notebookAlias: "nb", command: "will-cancel" });
+
+      // Start waiting on task2 (which is queued, not running yet).
+      const waitPromise = scheduler.waitForTask(task2.taskId);
+
+      // Cancel task2 while it's still queued.
+      await scheduler.cancel(task2.taskId);
+
+      // waitForTask should resolve (not hang).
+      await waitPromise;
+
+      const cancelled = await taskStore.get(task2.taskId);
+      expect(cancelled?.status).toBe("cancelled");
+
+      // Clean up.
+      resolveBlock!();
+      await scheduler.waitForIdle();
+    });
   });
 
   // -----------------------------------------------------------------------

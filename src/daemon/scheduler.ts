@@ -119,6 +119,14 @@ export class Scheduler {
           "cancelled",
           "cancelled by user",
         );
+
+        // Resolve waitForTask() if anyone is waiting (FR-177 + cancel interop).
+        const resolver = this.taskResolvers.get(taskId);
+        if (resolver) {
+          this.taskResolvers.delete(taskId);
+          resolver();
+        }
+
         log.info("queued task cancelled", { taskId });
         return updated;
       }
@@ -134,6 +142,15 @@ export class Scheduler {
         "cancelled",
         "cancelled by user (was running)",
       );
+
+      // Resolve waitForTask() — executeTask.finally will also try but find
+      // the resolver already consumed, which is fine (idempotent).
+      const resolver = this.taskResolvers.get(taskId);
+      if (resolver) {
+        this.taskResolvers.delete(taskId);
+        resolver();
+      }
+
       log.info("running task cancel signalled", { taskId });
       return updated;
     }
