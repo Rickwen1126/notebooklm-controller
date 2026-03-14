@@ -60,14 +60,17 @@
   完整工作流：啟動 → 認證 → 納管 → 餵入 → 命名 → 查詢 → 使用
   即使只完成 US1-US3 + US10 + US13，就能完成核心流程。
 
-  架構概要（MCP Server + Single Browser Multi-tab）：
+  架構概要（MCP Server + Single Browser Multi-tab + Tab Pool）：
   - Daemon 以 MCP Server 形式暴露所有功能（Streamable HTTP transport, 127.0.0.1:19224）
   - AI 工具（Claude Code 等）透過 MCP protocol 直接呼叫 tool，無需 CLI 中間層
-  - Daemon 管理一個 Chrome instance（headless），每個 notebook 一個 tab
-  - TabManager 管理 tab 生命週期（建立/關閉/列舉）
+  - Daemon 管理一個 Chrome instance（headless），透過 Tab Pool 管理 tab 資源
+  - 使用者只指定 notebook（產品概念），tab 是系統內部資源，使用者不需要也不應該管理 tab
+  - 操作期間每個 notebook 獨佔一個 tab（截圖/DOM 操控需要獨立 CDP session），
+    操作完成後 tab 歸還 pool 可被其他 notebook 重用
+  - TabManager 管理 tab pool 生命週期（acquire/release/health）
   - 認證透過 userDataDir 共享（首次 headed 登入，後續 headless 複用）
   - NetworkGate 集中式流量閘門（permit-based，不在 data path）
-  - 每個 agent session 取得獨立的 tab（CDP session）
+  - exec 時系統自動從 tab pool 取得 tab，使用者不需感知
   - 跨 notebook parallel（CDP 底層 API 支援 background tab 操作），同 notebook serial
   - Agent 透過 CDP 底層 API 操作，可自主截圖分析/retry/關 modal（自我修復）
   - Chrome 生命週期由 daemon 管理，agent 不能啟動/關閉 Chrome
@@ -78,7 +81,7 @@
   MCP Tools：
   - 操作指令（自然語言）：exec（prompt, notebook, async, context）
   - 管理工具：get_status, list_notebooks, add_notebook, add_all_notebooks,
-    open_notebook, close_notebook, set_default, rename_notebook, remove_notebook,
+    set_default, rename_notebook, remove_notebook,
     cancel_task, reauth, list_agents, shutdown
   - Daemon 啟動：`npx nbctl`（thin launcher）或 MCP client 設定
 -->
@@ -157,14 +160,14 @@ Chrome 啟動、MCP Server 可連線；呼叫 `shutdown` tool 確認乾淨關閉
 
 ---
 
-### User Story 2 - Notebook 管理與 Tab 操作 (Priority: P2)
+### User Story 2 - Notebook 管理 (Priority: P2)
 
 身為開發者，我希望能透過 MCP tools 管理 NotebookLM notebook，
-包括納管既有 notebook、為已註冊的 notebook 開啟 tab、
-以及透過自然語言指令建立全新的 notebook。
+包括納管既有 notebook、設定預設 notebook、以及透過自然語言指令建立全新的 notebook。
 
-Daemon 採用 Single Browser Multi-tab 架構：操作時透過 TabManager
-在 Chrome 中開啟新 tab 並導航至目標 notebook，操作完畢關閉 tab。
+使用者只需指定 target notebook（alias），系統自動處理 tab 資源：
+exec 時系統從 tab pool 取得 tab → 執行操作 → 完成後歸還 tab 至 pool。
+使用者不需要也不應該手動管理 tab 的開啟與關閉。
 跨 notebook 透過 CDP 底層 API 支援 parallel（background tab 操作可靠），
 同一 notebook 內的操作 serial 執行。
 使用 `exec` tool 的 `notebook` 參數指定操作目標，或用 `set_default` tool 設定預設 notebook。
@@ -172,8 +175,6 @@ Daemon 採用 Single Browser Multi-tab 架構：操作時透過 TabManager
 指令語意：
 - `add_notebook` tool（url, alias）：將既有 NotebookLM notebook 納入管理（使用者已知 URL）。
 - `add_all_notebooks` tool：以交互式方式批次納管使用者帳號中的所有既有 notebook。
-- `open_notebook` tool（alias）：標記 notebook 為 active，下次操作時開啟 tab 並導航至 notebook URL。
-- `close_notebook` tool（alias）：標記 notebook 為 closed，關閉 tab（如有），保留註冊資訊。
 - 建立新 notebook：透過 `exec` tool 自然語言指令完成（URL 由 NotebookLM 在瀏覽器中動態產生，使用者事先不知道）。
 
 **Why this priority**: 必須能管理 notebook 才能執行任何 notebook 內操作。
@@ -186,12 +187,7 @@ Daemon 採用 Single Browser Multi-tab 架構：操作時透過 TabManager
 
 **Acceptance Scenarios**:
 
-1. **Given** daemon 執行中且 notebook "research" 已註冊但非 active（`active: false`），
-   **When** 呼叫 `open_notebook` tool（alias="research"），
-   **Then** daemon 標記 notebook 為 active，下次操作時開啟新 tab 並導航至該 notebook URL，
-   回傳 `{ "success": true, "id": "research", "url": "...", "status": "ready" }`。
-
-2. **Given** 使用者已註冊 notebook "research" 和 "ml-papers"，
+1. **Given** 使用者已註冊 notebook "research" 和 "ml-papers"，
    **When** 使用者同時呼叫：
    ```
    exec tool（prompt="加來源", notebook="research", async=true）
@@ -211,14 +207,7 @@ Daemon 採用 Single Browser Multi-tab 架構：操作時透過 TabManager
    ]
    ```
 
-4. **Given** notebook "research" 正在使用 tab，
-   **When** 呼叫 `close_notebook` tool（alias="research"），
-   **Then** daemon 關閉該 notebook 的 tab 與 agent session，
-   但保留 Notebook Registry 中的註冊資訊，
-   回傳 `{ "success": true }`,
-   `list_notebooks` tool 中該 notebook 顯示 `"active": false`。
-
-5. **Given** daemon 執行中，
+4. **Given** daemon 執行中，
    **When** 呼叫 `add_notebook` tool（url="<invalid-url>", alias="test"），
    **Then** 回傳錯誤 `{ "success": false, "error": "Invalid NotebookLM URL. Expected format: https://notebooklm.google.com/notebook/<id>" }`。
 
@@ -247,10 +236,11 @@ Daemon 採用 Single Browser Multi-tab 架構：操作時透過 TabManager
     **When** daemon 找不到該 notebook，
     **Then** 回傳錯誤 `{ "success": false, "error": "Notebook '<id>' not found. 呼叫 list_notebooks tool 查看已註冊的 notebooks。" }`。
 
-11. **Given** 同時開啟的 tab 達到上限（預設 10），
-    **When** 使用者嘗試操作新 notebook，
-    **Then** 操作排入等待佇列，直到有 tab 關閉。
-    若等待超時，回傳錯誤 `{ "success": false, "error": "Tab limit reached (max 10). Wait for running operations or use close_notebook tool 關閉閒置 notebook。" }`。
+11. **Given** 系統 tab pool 已滿（預設 max=10，所有 tab 都在使用中），
+    **When** 使用者對新 notebook 發出 exec，
+    **Then** task 排入等待佇列，直到有 tab 歸還 pool。系統自動消化佇列。
+    使用者體驗為操作等待時間變長（sync exec 回應變慢，async exec 在 queued 狀態待更久），
+    不會收到 tab 相關錯誤。使用者不需要知道 pool 的存在或狀態。
 
 12. **Given** daemon 執行中，使用者想建立全新的 NotebookLM 筆記本，
     **When** 呼叫 `exec` tool（prompt="建立一本新的筆記本叫 my-research"），
@@ -265,11 +255,7 @@ Daemon 採用 Single Browser Multi-tab 架構：操作時透過 TabManager
     再將資料轉換並新增為來源（同 US3 流程），
     完成後筆記本已包含該來源且已自動命名。
 
-14. **Given** 使用者呼叫 `open_notebook` tool（alias="<不存在的 alias>"），
-    **When** Notebook Registry 中找不到該 alias，
-    **Then** 回傳錯誤 `{ "success": false, "error": "Notebook '<alias>' not registered. 呼叫 add_notebook tool 註冊，或呼叫 exec tool 建立新筆記本。" }`。
-
-15. **Given** 使用者想變更已註冊 notebook 的別名，
+14. **Given** 使用者想變更已註冊 notebook 的別名，
     **When** 呼叫 `rename_notebook` tool（oldAlias="research", newAlias="my-research"），
     **Then** Notebook Registry 更新別名，所有後續指令使用新別名，
     回傳 `{ "success": true, "oldAlias": "research", "newAlias": "my-research" }`。
@@ -290,6 +276,16 @@ Daemon 採用 Single Browser Multi-tab 架構：操作時透過 TabManager
     清理 local cache 中的該 notebook 資料，
     回傳 `{ "success": true, "removed": "ml-papers" }`。
     NotebookLM 上的筆記本不受影響。
+
+19. **Given** 使用者對 notebook "research" 呼叫 exec，
+    **When** 系統處理 exec 請求，
+    **Then** 系統自動執行：resolve notebook alias → acquire tab from pool → 執行操作 → release tab back to pool。
+    使用者不需要也不需要知道 tab 的存在。
+
+20. **Given** 使用者同時對 notebook "research" 和 "ml-papers" 發出 exec，
+    **When** pool 有足夠 tab，
+    **Then** 兩個 notebook 各自取得獨立 tab 並行執行（跨 notebook parallel）。
+    同一 notebook 的多個 exec 按 per-notebook queue 串行執行（同 notebook serial）。
 
 ---
 
@@ -527,10 +523,10 @@ Podcaster David 用 NotebookLM 整理了一個主題的多個來源。
 
 **Acceptance Scenarios**:
 
-1. **Given** daemon 執行中且註冊了 notebook "research"（正在使用 tab），
+1. **Given** daemon 執行中且註冊了 notebook "research"（正在執行操作），
    **When** 呼叫 `shutdown` tool 後再啟動 daemon（`npx nbctl`），
-   **Then** `list_notebooks` tool 仍包含 "research"（`active: false`），
-   使用者可透過 `open_notebook` tool（alias="research"）恢復 active 狀態。
+   **Then** `list_notebooks` tool 仍包含 "research"（status="ready"），
+   使用者可直接呼叫 `exec` tool 對 "research" 執行操作，系統自動取得 tab。
 
 2. **Given** 先前 session 有 notebook，但對應 URL 已不存在，
    **When** daemon 嘗試復原，
@@ -795,11 +791,14 @@ MCP 連線自然隔離取代 per-session inbox routing。
 讓底層自動化程式庫能被替換（如從 Puppeteer 切到 Patchright），
 而不需要修改 agent 邏輯或 agent config。
 
-TabManager 是 daemon 管理 Chrome tabs 的核心：
-- 管理單一 Chrome instance 中的多個 tab（建立/關閉/列舉）
-- 為每個 agent session 提供獨立的 tab（CDP session）
+TabManager 是 daemon 管理 Chrome tabs 的核心，採用 **fixed-size tab pool** 設計：
+- 管理單一 Chrome instance 中的 tab pool（預設 max=10）
+- `acquireTab(notebookUrl)`: 有該 notebook 的 idle tab → 重用；pool 未滿 → 開新 tab；pool 滿 → 回收其他 idle tab；全佔用 → 排隊等待
+- `releaseTab(tabId)`: 標記為 idle（可被回收重用），不立即關閉
+- 正在執行操作（active）的 tab 不可被回收
+- 為什麼需要獨立 tab：截圖/DOM 操控需要獨立 CDP session，操作期間 notebook 必須獨佔 tab
 - Agent 透過 CDP 底層 API 操作 tab，可自主操作（非 bounded tools interface）
-- Tab 超時未歸還 → daemon 強制關閉
+- Tab 超時未歸還 → daemon 強制回收至 pool
 
 認證透過 userDataDir 共享：
 - 首次 headed Chrome 登入 → cookies 寫入 userDataDir
@@ -833,6 +832,18 @@ NetworkGate 集中管理流量：
    **When** TabManager 偵測到異常，
    **Then** 只有該 tab 受影響，其他 tab 正常運作，
    TabManager 回報健康狀態並支援重新建立 tab。
+
+5. **Given** 新 task 需要 tab 且 pool 中有該 notebook 的 idle tab，
+   **When** 系統呼叫 `acquireTab(notebookUrl)`，
+   **Then** 重用既有 idle tab（不需重新 navigate），標記為 active。
+   若 pool 中無該 notebook 的 tab 但 pool 未滿，開新 tab 並 navigate。
+   若 pool 已滿但有 idle tab，回收最久未使用的 idle tab，開新 tab。
+   操作完成後呼叫 `releaseTab(tabId)` 標記為 idle。
+
+6. **Given** tab pool 已滿且所有 tab 都在使用中（active），
+   **When** 新 task 需要 tab，
+   **Then** task 進入等待佇列（producer-consumer 模式），
+   直到有 tab 被 release 回 pool。系統自動消化佇列，使用者不會收到 pool 相關錯誤。
 
 ---
 
@@ -1018,8 +1029,9 @@ notebook 包含哪些來源是一種認知負擔。
 - **Chrome crash**：Chrome 對 daemon 至關重要（所有 agent 的工作環境）。
   `browser.on('disconnected')` → 立即通知所有 agent 停止工作 →
   重啟 Chrome → agent 從 task queue 的上一個完成點接手。
-- **Tab 上限**：同時活躍的 tab MUST 有可設定上限（預設 10），
-  超過時等待直到有 tab 關閉。
+- **Tab pool 容量**：tab pool MUST 有可設定上限（預設 max=10）。
+  Pool 滿時回收 idle tab；全佔用時 task 排隊等 tab 歸還（producer-consumer）。
+  使用者不會收到 pool/tab 相關錯誤。
 - **同 notebook 多個操作**：per-notebook queue 序列化。
 - **跨 notebook 操作**：parallel 執行（CDP 底層 API 支援 background tab），互不干擾。
 
@@ -1086,15 +1098,16 @@ notebook 包含哪些來源是一種認知負擔。
 **MCP Server & Daemon**:
 - **FR-001**: 系統 MUST 以 MCP Server 形式暴露所有功能，提供以下 MCP tools：
   `exec`、`get_status`、`list_notebooks`、`add_notebook`、`add_all_notebooks`、
-  `open_notebook`、`close_notebook`、`set_default`、`rename_notebook`、`remove_notebook`、
+  `set_default`、`rename_notebook`、`remove_notebook`、
   `cancel_task`、`reauth`、`list_agents`、`shutdown`。
 - **FR-002**: 系統 MUST 提供 `exec` MCP tool（prompt, notebook, async, context），
   將自然語言指令傳送給該 notebook 的 agent session。
   未指定 `notebook` 時使用預設 notebook（由 `set_default` tool 設定）。
 - **FR-003**: 系統 MUST 將 daemon 作為背景程序執行，暴露 MCP Server（Streamable HTTP transport）
   於 127.0.0.1:19224（僅 localhost binding，不加額外認證）。若 port 已被佔用，MUST 回報錯誤。
-- **FR-004**: Daemon MUST 透過 TabManager 管理單一 Chrome instance 中多個 tab 的
-  生命週期（建立、關閉、健康檢查），每個 agent session 取得獨立 tab（CDP session）。
+- **FR-004**: Daemon MUST 透過 TabManager 管理單一 Chrome instance 中的 tab pool（預設 max=10）。
+  TabManager 提供 `acquireTab(notebookUrl)` 取得 tab 和 `releaseTab(tabId)` 歸還 tab。
+  每個操作期間 notebook 獨佔一個 tab（CDP session）。
 - **FR-005**: 所有 MCP tool 回應 MUST 為 JSON 格式內容，錯誤訊息亦為 JSON。
 - **FR-006**: 系統 MUST 支援 `set_default` MCP tool 設定預設 notebook，
   後續 `exec` tool 不帶 `notebook` 參數時自動使用此 notebook。
@@ -1149,7 +1162,7 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-025**: `exec` tool 對非 `ready`/`operating` 狀態的 notebook MUST 依狀態區分處理：
   - `stale`（URL 無效）：直接回報錯誤 `{ "success": false, "error": "Notebook '<alias>' is stale (URL invalid). 呼叫 remove_notebook 移除或重新確認 URL。" }`，不嘗試連線。
   - `error`（連線錯誤）：嘗試重新開 tab 連線一次，成功則繼續執行，失敗則回報錯誤。
-  - `closed`（非 active）：自動 open（標記 active + 開 tab），然後繼續執行。
+  - 其他非預期狀態：嘗試恢復至 `ready` 後繼續執行。
 
 **智慧選擇**:
 - **FR-028**: Agent MUST 能在使用者未指定 notebook 時，根據指令內容
@@ -1160,9 +1173,12 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-030**: 每個 notebook MUST 有獨立的 operation queue。
   同一 notebook 內的操作 MUST 序列化執行（serial），
   不同 notebook 的操作 MUST 可 parallel 執行（獨立 tab，CDP 底層 API 支援 background tab）。
+  Tab pool 滿且全佔用時，task 排隊等 tab 空出，系統自動消化（producer-consumer）。
+  不向使用者暴露 pool 滿錯誤——sync exec 等待時間變長，async exec 在 queued 狀態待更久。
   純讀取記憶體狀態的 tool（`list_notebooks`、`get_status`）MUST 即時回應，不進入佇列。
 - **FR-031**: 每個操作 MUST 有 timeout 機制避免無窮等待，
   超時回傳錯誤與截圖。具體 timeout 數值依操作類型於實測後決定。
+  Sync exec 使用 per-task wait（waitForTask），只等自己的 task 完成，不是 global waitForIdle。
 
 **既有 Notebook 納管**:
 - **FR-032**: 系統 MUST 提供 `add_notebook` MCP tool（url, alias），
@@ -1199,7 +1215,7 @@ notebook 包含哪些來源是一種認知負擔。
   同步 notebook 狀態到 local cache。
 
 **Notebook Description 自動維護**:
-- **FR-045**: 系統 MUST 在 add_notebook/open_notebook 後，由 agent 根據 notebook
+- **FR-045**: 系統 MUST 在 add_notebook 後，由 agent 根據 notebook
   的來源清單自動產生 1-2 句 description。
 - **FR-046**: 每次來源異動後，系統 MUST 自動更新 description。
 - **FR-047**: Agent MUST 能根據使用者 exec 指令手動覆寫 description。
@@ -1230,8 +1246,7 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-052**: Agent MUST 能透過 NotebookLM UI 建立新的筆記本
   （導航至首頁、點擊「新增筆記本」按鈕），取得動態產生的 URL，
   並自動註冊至 Notebook Registry。
-- **FR-053**: `open_notebook` MCP tool MUST 僅用於標記已註冊 notebook 為 active（by alias），
-  不接受 URL 參數。註冊新 notebook 使用 `add_notebook` tool。
+- **FR-053**: _(已移除——`open_notebook` 已砍掉。註冊新 notebook 使用 `add_notebook` tool。)_
 
 **Notebook 別名與唯一性**:
 - **FR-056**: Notebook alias MUST 在 Notebook Registry 中全域唯一。
@@ -1308,12 +1323,12 @@ notebook 包含哪些來源是一種認知負擔。
 不需要 export-skill 指令。）
 
 **TabManager** (FR-140 series):
-- **FR-140**: 系統 MUST 實作 TabManager，管理單一 Chrome instance 中的多個 tab。
-  負責：tab 建立/關閉、生命週期管理、超時強制關閉、健康檢查。
-  Tab 上限可設定（預設 max=10）。
-- **FR-141**: TabManager MUST 提供 `openTab(notebookUrl)` → 建立新 tab +
-  navigate 到目標 URL，回傳 tab handle（CDP session）。
-  `closeTab(tabId)` 關閉 tab。
+- **FR-140**: 系統 MUST 實作 TabManager，以 fixed-size tab pool 管理單一 Chrome instance 中的 tab 資源。
+  負責：tab pool acquire/release、idle tab 回收、超時強制回收、健康檢查。
+  Pool 容量可設定（預設 max=10）。
+- **FR-141**: TabManager MUST 提供 `acquireTab(notebookUrl)` → 從 pool 取得 tab（重用 idle 或開新），
+  回傳 tab handle（CDP session）。
+  `releaseTab(tabId)` → 標記 tab 為 idle，歸還 pool（不立即關閉）。
 - **FR-142**: TabManager 底層自動化程式庫 MUST 可替換。
   預設為 Puppeteer + CDP 底層 API（vision-based）。
 - **FR-143**: 底層實作 MUST 可透過設定檔指定。
@@ -1348,11 +1363,19 @@ notebook 包含哪些來源是一種認知負擔。
   agent session 分配獨立的 tab（CDP session）。
 - **FR-171**: _(alias of FR-030)_ 每個 notebook MUST 有獨立的 operation queue。
   同 notebook serial，跨 notebook parallel（CDP 底層 API 支援 background tab 操作）。
-- **FR-172**: 每個 notebook 操作 MUST 對應一個獨立的 AI agent session +
-  獨立的 tab。Agent 透過 CDP 底層 API 操作，可自主操作與自我修復。
+- **FR-172**: 每個 notebook 操作 MUST 由系統自動從 tab pool 取得獨立 tab + 建立 AI agent session。
+  Agent 透過 CDP 底層 API 操作，可自主操作與自我修復。
+  操作完成後 tab 歸還 pool。
 - **FR-173**: 同時活躍的 tab 數量 MUST 有可設定上限（預設 10）。
 - **FR-174**: 單一 tab 崩潰不影響其他 tab 與 Chrome process，支援重新建立。
-- **FR-175**: Daemon MUST 支援 `open_notebook`（標記 active）、`close_notebook`（關閉 tab）MCP tools。
+- **FR-175**: _(已移除——`open_notebook`/`close_notebook` YAGNI，tab 由系統自動管理)_
+- **FR-176**: Canonical notebook context（alias、URL、description）MUST 顯式注入 Planner 和 Executor 的 systemMessage，
+  確保 agent 明確知道操作的 target notebook identity。
+- **FR-177**: Sync exec MUST 使用 per-task wait（waitForTask），只等待自己的 task 完成，
+  不是 global waitForIdle（等全部 queue idle）。
+- **FR-178**: Tab 是操作的執行單位——截圖/DOM 操控需要獨立 CDP session，
+  因此操作期間 notebook 獨佔一個 tab。完成後 tab 歸還 pool 可被其他 notebook 重用。
+  這是操作期間的獨佔，不是永久 1:1 綁定。
 
 **NetworkGate** (FR-190 series):
 - **FR-190**: 系統 MUST 實作 NetworkGate，作為集中式流量閘門。
@@ -1399,24 +1422,26 @@ notebook 包含哪些來源是一種認知負擔。
   Shutdown 策略：不做 agent-level graceful shutdown，直接終止。
   恢復靠 task queue（細粒度任務 + 每步進度外部化），不靠 cleanup handler。
 
-- **TabManager**：管理單一 Chrome instance 中的多個 tab（max N，預設 10）。
-  負責 tab 建立/關閉、生命週期管理、超時強制關閉、健康檢查。
+- **TabManager**：以 fixed-size tab pool 管理單一 Chrome instance 中的 tab 資源（預設 max=10）。
+  負責 tab pool acquire/release、idle tab 回收、超時強制回收、健康檢查。
   底層實作可替換（預設 Puppeteer + CDP 底層 API）。
-  Agent 透過 openTab() 取得獨立 tab（CDP session），closeTab() 歸還。
+  系統透過 `acquireTab(notebookUrl)` 取得獨立 tab（CDP session），`releaseTab(tabId)` 歸還 pool。
+  Tab 是系統內部資源，使用者不需要也不應該管理。
 
 - **NetworkGate**：集中式流量閘門（不在 data path，只管「能不能做」）。
   Agent 操作前 MUST `acquirePermit()`。偵測 429/timeout 觸發全域 backoff。
   提供 `getHealth()` 回報 healthy/throttled/disconnected。
 
 - **Notebook Registry**：所有已註冊 notebook 的元資料清單
-  （alias、URL、標題、description、active 狀態、來源清單摘要），持久化於磁碟。
+  （alias、URL、標題、description、狀態、來源清單摘要），持久化於磁碟。
   Alias 全域唯一，URL 全域唯一（不可重複註冊），alias 可透過 `rename_notebook` tool 變更。
   `description` 由 agent 自動產生，每次來源異動後更新。使用者可覆寫。
 
-- **Agent Session**：Per-notebook 的 AI agent。透過 TabManager openTab()
+- **Agent Session**：Per-task 的 AI agent。系統自動透過 TabManager `acquireTab(notebookUrl)`
   取得獨立 tab（CDP session），透過 CDP 底層 API 操作，具備自主截圖分析、
   retry、關 modal 的完整自我修復能力。操作前 MUST 透過 NetworkGate acquirePermit()。
   不能自行啟動/關閉 Chrome（由 daemon 管理）。
+  Canonical notebook context（alias、URL、description）MUST 顯式注入 Planner 和 Executor 的 systemMessage。
   Agent 透過 Copilot SDK 註冊 9 個 browser tools（screenshot, click, type, scroll, paste,
   find, read, navigate, wait），Copilot CLI agent 自主決定何時呼叫哪個 tool。
   Tool 自包操作邏輯（例：screenshot tool 自行透過 CDP 截圖 + 格式轉換），daemon 不中轉。
@@ -1478,6 +1503,7 @@ notebook 包含哪些來源是一種認知負擔。
 
 - **Operation Queue**：per-notebook 的 exec 請求等待佇列。
   同 notebook serial，跨 notebook parallel（獨立 tab，CDP 底層 API 支援 background tab）。
+  Tab pool 滿且全佔用時，task 排隊等 tab 歸還（producer-consumer），系統自動消化。
 
 ---
 
@@ -1546,6 +1572,17 @@ notebook 包含哪些來源是一種認知負擔。
 - Q: Chrome crash 怎麼處理？ → A: Chrome 對 daemon 至關重要。`browser.on('disconnected')` → 通知所有 agent 停止 → 重啟 Chrome → agent 從 task queue 接手。
 - Q: Agent 怎麼偵測 429？ → A: 不規範偵測方式（CDP 或視覺分析都可），agent 自主決定。Daemon 提供 `reportRateLimit` tool 讓 agent 回報，NetworkGate 負責 backoff 決策。
 - Q: MCP notification 斷線後怎麼補？ → A: 不補。Fire-and-forget。MCP 對 client 而言是可重試的資料來源，非 mission-critical 即時通道。Client 再 query 一次就好。
+
+### Review Point 1.5 (2026-03-14): Notebook-First + Tab Pool 架構
+
+Code review（Phase 3→5.5）發現 Notebook（產品概念）vs Tab（內部資源）的邊界未畫清楚。以下為決策記錄：
+
+- Q: Notebook 和 Tab 的關係？ → A: **Notebook = 產品概念，Tab = 內部資源**。使用者只指定 target notebook（alias），系統負責 tab。Tab 是操作的執行單位——截圖/DOM 操控需要獨立 CDP session，所以操作期間 notebook 獨佔一個 tab（runtime 仍是 1:1）。但這是操作期間的獨佔，不是永久綁定——完成後歸還 pool 供其他 notebook 使用。
+- Q: `open_notebook` / `close_notebook` 還需要嗎？ → A: **砍掉**。YAGNI — debug 用途透過 code/test 處理即可，不需要暴露 MCP tool。使用者不需要手動管理 tab。
+- Q: Tab pool 滿了怎麼辦？ → A: **純 producer-consumer**。使用者不需要知道 pool 滿不滿。Task 排隊等 tab 空出，系統自動消化。不回 pool full error 給使用者。Sync exec 就是等久一點，async exec 就是 queued 久一點。
+- Q: Sync exec 怎麼等？ → A: **Per-task wait（waitForTask）**，只等自己的 task 完成。不是 global waitForIdle（等全部 queue idle），那會讓一個 sync exec 被其他 notebook 的操作卡住。
+- Q: Agent 怎麼知道操作哪本 notebook？ → A: **Canonical notebook context 顯式注入** Planner 和 Executor 的 systemMessage。包含 alias、URL、description，確保 agent 明確知道 target notebook identity。
+- Q: 同 notebook 多個操作、跨 notebook 操作？ → A: 同 notebook 串行（per-notebook queue），不同 notebook 並行（各自獨立 tab）。與先前設計一致，但現在 tab 來自 pool 而非永久綁定。
 
 ---
 

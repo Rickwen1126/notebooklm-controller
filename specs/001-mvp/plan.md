@@ -75,7 +75,7 @@ src/
 │   ├── scheduler.ts     # Per-notebook operation queue, task dispatch
 │   └── launcher.ts      # Thin launcher（npx nbctl）：fork daemon, PID file
 ├── tab-manager/         # Single Chrome multi-tab management
-│   ├── tab-manager.ts   # Chrome instance + tab lifecycle（open/close/list/health）
+│   ├── tab-manager.ts   # Chrome instance + tab pool lifecycle（acquireTab/releaseTab/health）
 │   ├── tab-handle.ts    # TabHandle type + CDP session wrapper
 │   └── cdp-helpers.ts   # CDP 底層 API helpers（click, type, screenshot, scroll, paste）
 ├── network-gate/        # 集中式流量閘門
@@ -153,6 +153,14 @@ tests/
 - **Session 2 (Executor, per step)**：帶 browser tools via `defineTool()`。接收 agent prompt + tool constraint preamble。
 - MCP 介面只暴露 `exec(NL prompt)`，browser tools 完全封裝在 session-runner 內部。
 
+**⚠️ 架構更新（Review Point 1.5: Notebook-First + Tab Pool）**：
+- **Notebook = 產品概念，Tab = 內部資源**。使用者只指定 target notebook，系統負責 tab。
+- Tab pool（fixed-size, 預設 max=10）：`acquireTab(notebookUrl)` / `releaseTab(tabId)`。操作期間 notebook 獨佔 tab（截圖需要獨立 CDP session），完成後歸還 pool。
+- **砍掉 `open_notebook` / `close_notebook`** MCP tools。YAGNI。
+- **Pool 滿 = producer-consumer**。不向使用者暴露 pool 滿錯誤。Task 排隊等 tab 空出。
+- **Canonical notebook context** 顯式注入 Planner 和 Executor 的 systemMessage。
+- **Sync exec = per-task wait（waitForTask）**，不是 global waitForIdle。
+
 **v2 結構調整理由**（基於 SDK 研究）：
 1. `agent/session.ts` → `agent/client.ts`（CopilotClient singleton）+ `agent/session-runner.ts`（per-task session lifecycle）。
    SDK 的 `CopilotClient` 管理 CLI process，`CopilotSession` 是 per-conversation 的。
@@ -170,20 +178,23 @@ tests/
 **Per-task execution flow (Two-Session Planner+Executor)**:
 ```
 Scheduler.dispatch(task)
-  → SessionRunner.runDualSession(task, tabHandle, agentConfigs)
+  → resolve canonical notebook (alias → NotebookEntry)
+  → TabPool.acquireTab(notebook.url)  ← auto-acquire from pool
+  → SessionRunner.runDualSession(task, tabHandle, agentConfigs, notebookContext)
     ┌─ Planner Session (no browser tools)
     │   tools: [submitPlan]
-    │   systemMessage: agent catalog (from buildPlannerCatalog) + routing rules
+    │   systemMessage: agent catalog + routing rules + 「target notebook: {alias}」
     │   → session.sendAndWait({ prompt: task.command })
     │   → captured ExecutionPlan { steps[{ agentName, executorPrompt, tools[] }] }
     │   → session.disconnect()
     │
     └─ Executor Session(s) (per step, has browser tools)
         tools: buildToolsForTab(tabHandle) filtered by step.tools
-        systemMessage: agentConfig.prompt + tool constraint preamble
+        systemMessage: agentConfig.prompt + tool constraint preamble + 「target notebook: {alias}」
         → session.sendAndWait({ prompt: step.executorPrompt })
         → session.disconnect()
         → aggregate results
+  → TabPool.releaseTab(tabHandle)  ← release back to pool
 ```
 
 `agents/` 在 repo root（版本控制 + 可覆寫至 `~/.nbctl/agents/`）。格式為 `.md`（YAML frontmatter + Markdown prompt body），對齊 Copilot CLI `.agent.md` 慣例，prompt 長文本用 Markdown 撰寫更自然。

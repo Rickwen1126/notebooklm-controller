@@ -65,7 +65,7 @@ or operation-specific result (sourceAdded, screenshot, etc.)
 ```json
 {
   "running": true,
-  "tabManager": { "activeTabs": 3, "maxTabs": 10 },
+  "tabPool": { "usedSlots": 3, "maxSlots": 10, "idleSlots": 1 },
   "network": { "status": "healthy", "backoffRemainingMs": null },
   "activeNotebooks": ["research", "ml-papers"],
   "defaultNotebook": "research",
@@ -128,37 +128,12 @@ or operation-specific result (sourceAdded, screenshot, etc.)
 ```json
 [
   { "id": "research", "url": "...", "title": "...", "description": "...",
-    "status": "ready", "active": true, "sourceCount": 5 },
+    "status": "ready", "sourceCount": 5, "hasTab": false },
   ...
 ]
 ```
 
-### `open_notebook`
-
-標記已註冊 notebook 為 active。
-
-**Input Schema**:
-```typescript
-{
-  alias: z.string().describe("Notebook 別名"),
-}
-```
-
-**Output**: `{ "success": true, "id": "research", "url": "...", "status": "ready" }`
-**Error**: `{ "success": false, "error": "Notebook '<alias>' not registered..." }`
-
-### `close_notebook`
-
-關閉 notebook 的 tab，保留註冊資訊。
-
-**Input Schema**:
-```typescript
-{
-  alias: z.string().describe("Notebook 別名"),
-}
-```
-
-**Output**: `{ "success": true }`
+`hasTab` 為純資訊性欄位（表示目前是否有 tab 在 pool 中指向此 notebook），使用者不需操作。
 
 ### `set_default`
 
@@ -306,7 +281,7 @@ or operation-specific result (sourceAdded, screenshot, etc.)
 ### NotebookStatus
 
 ```typescript
-type NotebookStatus = "ready" | "operating" | "closed" | "stale" | "error";
+type NotebookStatus = "ready" | "operating" | "stale" | "error";
 ```
 
 ### TaskStatus
