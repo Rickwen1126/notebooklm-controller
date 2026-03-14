@@ -268,6 +268,12 @@
 - [ ] T-HF10 Executor tool filtering string name typo risk — `session-runner.ts:353` 用 name string matching filter tools，typo 靜默失敗（拿到空 tool set）。
 - [ ] T-HF11 兩份 SessionResult type 重複 — `scheduler.ts:19` 和 `session-runner.ts:46` 各定義一份 SessionResult，語意重疊但 import 路徑不同。
 
+### Agent Runtime Health（Circuit Breaker, FR-210~213, Tour 04 Step 2 討論產出）
+
+- [ ] T-HF12 **executeTask 外層 timeout** — `src/daemon/scheduler.ts` 的 `executeTask` 用 `Promise.race` 包 `runTask` + deadline timer。timeout fire → `session.disconnect()` → task 標 failed → 累計連續 timeout 計數。timeout 上限值加入 `config.ts`（預設 10 min）。
+- [ ] T-HF13 **Circuit Breaker degraded state** — Scheduler 追蹤連續 timeout 次數（`consecutiveTimeouts` counter）。達閾值（預設 3）→ 進入 `degraded` state → `submit()` throw 明確錯誤「Agent runtime 連續 timeout，請重啟」。`get_status` 回報 `agentHealth: "degraded"` + 計數 + 最後 timeout 時間。
+- [ ] T-HF14 **degraded 恢復：CopilotClient restart** — 新增 `restart_agent` MCP tool 或擴充 `reauth`：呼叫 `copilotClient.restart()`（kill CLI process + 重啟），重置 consecutiveTimeouts，恢復 Scheduler accept。確保 zombie session 的 CLI process 被清除。
+
 **Checkpoint**: 所有 Bug + Architecture 項目修完後，再進 Phase 6。Tech Debt 可穿插或 defer。
 
 ---

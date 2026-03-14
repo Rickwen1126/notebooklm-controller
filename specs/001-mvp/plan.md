@@ -214,6 +214,13 @@ Tests 按 unit/integration/contract 分層，unit 按模組對應。
 - **KNOWLEDGE 注入**：agent-loader 載入 agent config → 偵測 `{{NOTEBOOKLM_KNOWLEDGE}}` → 讀 `src/config/ui-maps/<locale>.json` → 生成 knowledge string → 替換進 prompt。
 - **i18n**：MVP 內建 zh-TW/en/zh-CN 三個 locale。Daemon 啟動時偵測 Chrome locale，載入對應 UI map。Post-MVP 支援 `tools repair` 自動 discover。
 - **Model 選擇**（Spike Finding #50 驗證）：Planner 和 Executor 都使用 GPT-4.1（免費、快速）。非推理模型足夠——Planner 做分類路由，Executor 做機械操作，prompt 品質 > 模型能力。`createSession()` MUST hardcode model 參數。
+- **Agent Runtime Health（Circuit Breaker, FR-210~213）**：
+  Scheduler `executeTask` 包外層 `Promise.race` timeout（不依賴 SDK 內部 timeout）。
+  timeout fire → `session.disconnect()` 嘗試釋放 → task 標 failed → 累計連續 timeout 計數。
+  連續 N 次 timeout → Scheduler 進入 `degraded` state → reject 新 submit → `get_status` 回報 `agentHealth: "degraded"`。
+  恢復路徑：`copilotClient.restart()`（kill CLI process + 重啟），清除 zombie session，重置計數。
+  設計原因：單純 timeout 只解決「不 hang」，但連續 timeout = CLI process 僵死 → zombie session 累積 → memory leak。
+  Circuit breaker 防止連鎖故障，強制使用者介入處理根因。
 
 ## Complexity Tracking
 

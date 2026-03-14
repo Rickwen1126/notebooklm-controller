@@ -1430,6 +1430,21 @@ notebook 包含哪些來源是一種認知負擔。
 - **FR-183**: 系統 MUST 偵測 session 過期，提供 `reauth` MCP tool 重新認證。
 - **FR-184**: Headless 截圖渲染 MUST 與 headed 一致。
 
+**Agent Runtime Health（Circuit Breaker）** (FR-210 series):
+- **FR-210**: Scheduler MUST 對每次 `runTask` 設定外層 timeout（上限值可設定），
+  超時後放棄等待並標記 task 為 failed。timeout 後 MUST 呼叫 `session.disconnect()`
+  嘗試釋放 zombie session 資源。
+- **FR-211**: Scheduler MUST 追蹤連續 timeout 次數。當連續 timeout 達到閾值（預設 3 次）時，
+  系統進入 `degraded` 狀態，拒絕接受新的 exec 請求，
+  回傳明確訊息：「Agent runtime 連續 timeout，請呼叫 restart tool 或重啟 daemon」。
+- **FR-212**: `get_status` MCP tool MUST 在 `degraded` 狀態時回報
+  `agentHealth: "degraded"` + 連續 timeout 次數 + 最後一次 timeout 時間，
+  確保使用者/AI 工具能感知系統健康狀態。
+- **FR-213**: 系統 MUST 提供從 `degraded` 狀態恢復的機制：
+  重啟 CopilotClient（kill CLI process + 重啟）清除所有 zombie session，
+  重置連續 timeout 計數，恢復接受新任務。
+  恢復可透過 `reauth` tool 或新增的 `restart_agent` tool 觸發。
+
 **MCP Server** (FR-200 series):
 - **FR-200**: MCP Server MUST 使用 Streamable HTTP transport，監聽 127.0.0.1:19224。
 - **FR-201**: MCP Server MUST 將所有管理操作暴露為 MCP tools，
