@@ -178,6 +178,10 @@ vi.mock("../../../src/daemon/exec-tools.js", () => ({
   registerExecTools: vi.fn(),
 }));
 
+vi.mock("../../../src/shared/permissions.js", () => ({
+  enforcePermissions: vi.fn().mockResolvedValue(undefined),
+}));
+
 // ---------------------------------------------------------------------------
 // Mock: Notifier
 // ---------------------------------------------------------------------------

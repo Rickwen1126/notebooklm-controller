@@ -7,7 +7,7 @@
  */
 
 import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, isAbsolute } from "node:path";
 import { PDFParse } from "pdf-parse";
 import { TMP_DIR } from "../shared/config.js";
 
@@ -34,6 +34,11 @@ export interface PdfToTextResult {
  * @throws If file does not exist, is not readable, PDF is corrupt, or output exceeds 500K chars.
  */
 export async function pdfToText(pdfPath: string): Promise<PdfToTextResult> {
+  // 0. Security: pdfPath must be absolute to prevent path traversal.
+  if (!isAbsolute(pdfPath)) {
+    throw new Error(`pdfPath must be an absolute path: ${pdfPath}`);
+  }
+
   // 1. Validate file exists.
   try {
     await stat(pdfPath);

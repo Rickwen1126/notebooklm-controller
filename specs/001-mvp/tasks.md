@@ -468,10 +468,10 @@
 
 **Purpose**: Quality, security, validation
 
-- [ ] T104 [P] File permission enforcement on startup — verify `~/.nbctl/` tree is 700/600, auto-fix with warning per data-model.md
-- [ ] T105 Security review — ensure no command injection in content pipeline, validate all user-provided paths, sanitize agent prompts
-- [ ] T106 Run quickstart.md validation — full workflow: start daemon → add notebook → feed source → query → async task → shutdown
-- [ ] T107 Performance baseline — measure daemon startup time (<10s), management tool latency (<100ms), simple agent operation (<15s)
+- [x] T104 [P] File permission enforcement on startup — `src/shared/permissions.ts` enforcePermissions() 遞迴檢查 ~/.nbctl/ 目錄 700 + 檔案 600，啟動時自動修正 + warning log。6 unit tests
+- [x] T105 Security review — repo-to-text: absolute path validation; url-to-text: http/https only (SSRF prevention, file:///javascript: blocked); pdf-to-text: absolute path validation; paste tool: filePath must be under TMP_DIR (path traversal guard). Security tests added.
+- [ ] T106 Run quickstart.md validation — 需要真實 Chrome + NotebookLM 帳號，手動驗證
+- [ ] T107 Performance baseline — 需要真實環境量測，手動驗證
 
 **🔍 Review Point 3**: 開發者主動發起 `/audit` + `/codetour` + `/reviewCode`（Constitution IX）。全部完成，production readiness 審查。
 

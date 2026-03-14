@@ -9,6 +9,11 @@ vi.mock("@github/copilot-sdk", () => ({
   }),
 }));
 
+// Mock config for TMP_DIR (used by paste tool path validation)
+vi.mock("../../../../src/shared/config.js", () => ({
+  TMP_DIR: "/tmp/nbctl-test",
+}));
+
 import { createBrowserTools } from "../../../../src/agent/tools/browser-tools.js";
 import type { TabHandle } from "../../../../src/shared/types.js";
 
@@ -344,6 +349,37 @@ describe("browser-tools", () => {
 
       expect(result.binaryResultsForLlm).toBeUndefined();
       expect(result.textResultForLlm).toContain("3");
+    });
+
+    // T105: Security — filePath must be within TMP_DIR
+    it("rejects filePath outside TMP_DIR (security: prevent reading arbitrary files)", async () => {
+      const tool = findTool(tools, "paste");
+      const result = await invoke(tool, { filePath: "/etc/passwd" });
+
+      expect(result.textResultForLlm).toContain("must be within");
+      expect(result.textResultForLlm).toContain("/tmp/nbctl-test");
+      // Should NOT have called dispatchPaste
+      expect(cdp.calls).toHaveLength(0);
+    });
+
+    it("rejects filePath with path traversal (security)", async () => {
+      const tool = findTool(tools, "paste");
+      const result = await invoke(tool, {
+        filePath: "/tmp/nbctl-test/../../etc/shadow",
+      });
+
+      expect(result.textResultForLlm).toContain("must be within");
+      expect(cdp.calls).toHaveLength(0);
+    });
+
+    it("rejects relative filePath (security)", async () => {
+      const tool = findTool(tools, "paste");
+      const result = await invoke(tool, {
+        filePath: "../../etc/passwd",
+      });
+
+      expect(result.textResultForLlm).toContain("must be within");
+      expect(cdp.calls).toHaveLength(0);
     });
   });
 

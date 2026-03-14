@@ -9,7 +9,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { stat, writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, isAbsolute } from "node:path";
 import { TMP_DIR } from "../shared/config.js";
 
 const execFileAsync = promisify(execFile);
@@ -37,6 +37,12 @@ export interface RepoToTextResult {
  * @throws If path is not a git repo, repomix fails, or output exceeds 500K chars.
  */
 export async function repoToText(repoPath: string): Promise<RepoToTextResult> {
+  // 0. Security: repoPath must be absolute to prevent path confusion.
+  //    (execFile is safe against shell injection since it doesn't use a shell.)
+  if (!isAbsolute(repoPath)) {
+    throw new Error(`repoPath must be an absolute path: ${repoPath}`);
+  }
+
   // 1. Validate path is a git repo.
   try {
     await stat(join(repoPath, ".git"));

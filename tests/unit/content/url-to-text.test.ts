@@ -118,8 +118,21 @@ describe("urlToText", () => {
     await expect(urlToText("not-a-url")).rejects.toThrow("Invalid URL");
   });
 
-  it("throws for non-http protocol", async () => {
+  it("throws for non-http protocol (ftp)", async () => {
     await expect(urlToText("ftp://example.com")).rejects.toThrow(
+      "Unsupported protocol",
+    );
+  });
+
+  // T105: Security — only http: and https: allowed (SSRF prevention)
+  it("throws for file:// protocol (security: SSRF prevention)", async () => {
+    await expect(urlToText("file:///etc/passwd")).rejects.toThrow(
+      "Unsupported protocol",
+    );
+  });
+
+  it("throws for javascript: protocol (security)", async () => {
+    await expect(urlToText("javascript:alert(1)")).rejects.toThrow(
       "Unsupported protocol",
     );
   });

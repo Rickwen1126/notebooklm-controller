@@ -25,6 +25,7 @@ import { buildToolsForTab } from "../agent/tools/index.js";
 import { createSessionHooks } from "../agent/hooks.js";
 import { MCP_PORT, AGENTS_DIR_USER, AGENTS_DIR_BUNDLED } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
+import { enforcePermissions } from "../shared/permissions.js";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import type { UIMap, AgentConfig, AsyncTask, OperationActionType, OperationLogEntry } from "../shared/types.js";
@@ -241,6 +242,9 @@ export async function startDaemon(options?: {
     chromePath: options?.chromePath,
     userDataDir: options?.userDataDir,
   });
+
+  // 2.5. T104: Enforce file permissions on ~/.nbctl/
+  await enforcePermissions();
 
   // 3. T041.1: Detect Chrome locale
   //    Open a temporary tab, evaluate navigator.language, close it

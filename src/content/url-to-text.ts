@@ -46,7 +46,7 @@ export async function urlToText(url: string): Promise<UrlToTextResult> {
     throw new Error(`Invalid URL: ${url}`);
   }
 
-  if (!parsedUrl.protocol.startsWith("http")) {
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
     throw new Error(`Unsupported protocol: ${parsedUrl.protocol} (only http/https supported)`);
   }
 

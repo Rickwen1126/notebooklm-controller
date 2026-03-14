@@ -162,6 +162,19 @@ describe("pdfToText", () => {
     );
   });
 
+  // T105: Security — pdfPath must be absolute
+  it("throws if pdfPath is relative (security: prevent path traversal)", async () => {
+    await expect(pdfToText("relative/file.pdf")).rejects.toThrow(
+      "pdfPath must be an absolute path",
+    );
+  });
+
+  it("throws if pdfPath is dot-relative (security)", async () => {
+    await expect(pdfToText("../../../etc/passwd")).rejects.toThrow(
+      "pdfPath must be an absolute path",
+    );
+  });
+
   it("calculates word count correctly", async () => {
     mockGetTextResult = { text: "alpha beta gamma delta epsilon", total: 1 };
 

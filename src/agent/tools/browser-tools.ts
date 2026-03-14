@@ -11,6 +11,8 @@ import { defineTool } from "@github/copilot-sdk";
 import type { Tool, ToolResultObject } from "@github/copilot-sdk";
 import type { TabHandle } from "../../shared/types.js";
 import { readFileSync } from "node:fs";
+import { resolve, relative } from "node:path";
+import { TMP_DIR } from "../../shared/config.js";
 import {
   captureScreenshot,
   dispatchClick,
@@ -158,7 +160,16 @@ export function createBrowserTools(tabHandle: TabHandle): Tool[] {
     handler: async (args: { filePath?: string; text?: string }) => {
       let content: string;
       if (args.filePath) {
-        content = readFileSync(args.filePath, "utf-8");
+        // Security: filePath must resolve within TMP_DIR to prevent
+        // reading arbitrary files via path traversal.
+        const resolved = resolve(args.filePath);
+        const rel = relative(TMP_DIR, resolved);
+        if (rel.startsWith("..") || resolve(TMP_DIR, rel) !== resolved) {
+          return textResult(
+            `Error: filePath must be within ${TMP_DIR}. Got: ${args.filePath}`,
+          );
+        }
+        content = readFileSync(resolved, "utf-8");
       } else if (args.text) {
         content = args.text;
       } else {

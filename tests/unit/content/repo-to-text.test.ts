@@ -114,6 +114,19 @@ describe("repoToText", () => {
     );
   });
 
+  // T105: Security — repoPath must be absolute
+  it("throws if repoPath is relative (security: prevent path confusion)", async () => {
+    await expect(repoToText("relative/path")).rejects.toThrow(
+      "repoPath must be an absolute path",
+    );
+  });
+
+  it("throws if repoPath is dot-relative (security)", async () => {
+    await expect(repoToText("./some-repo")).rejects.toThrow(
+      "repoPath must be an absolute path",
+    );
+  });
+
   it("calculates word count correctly", async () => {
     const text = "one two three\nfour five";
 
