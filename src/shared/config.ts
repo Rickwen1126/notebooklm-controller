@@ -12,6 +12,7 @@ export const TASKS_DIR = join(NBCTL_HOME, "tasks");
 export const CACHE_DIR = join(NBCTL_HOME, "cache");
 export const PROFILES_DIR = join(NBCTL_HOME, "profiles");
 export const LOGS_DIR = join(NBCTL_HOME, "logs");
+export const TMP_DIR = join(NBCTL_HOME, "tmp");
 
 // Agent configs directories (checked in order, first existing one wins).
 // User-local override > project bundled.

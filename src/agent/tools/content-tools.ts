@@ -32,10 +32,10 @@ function errorResult(text: string): ToolResultObject {
 export function buildRepoToTextTool(): Tool {
   return defineTool("repoToText", {
     description:
-      "Convert a local git repository into a single text representation " +
-      "suitable for pasting into NotebookLM as a source. " +
+      "Convert a local git repository into a text file for pasting into NotebookLM. " +
       "Uses repomix to produce AI-friendly output respecting .gitignore. " +
-      "Returns the text content, character count, and word count.",
+      "Returns a filePath (text saved to temp file) + character/word count. " +
+      "Use paste(filePath=...) to paste the content — text is NOT returned here.",
     parameters: z.object({
       path: z
         .string()
@@ -46,9 +46,10 @@ export function buildRepoToTextTool(): Tool {
         const result = await repoToText(args.path);
         return textResult(
           `Repository converted successfully.\n` +
+          `File: ${result.filePath}\n` +
           `Characters: ${result.charCount.toLocaleString()}\n` +
           `Words: ${result.wordCount.toLocaleString()}\n\n` +
-          `--- CONTENT START ---\n${result.text}\n--- CONTENT END ---`,
+          `Use paste(filePath="${result.filePath}") to paste this content into NotebookLM.`,
         );
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);

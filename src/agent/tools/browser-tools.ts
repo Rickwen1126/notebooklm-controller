@@ -10,6 +10,7 @@ import { z } from "zod";
 import { defineTool } from "@github/copilot-sdk";
 import type { Tool, ToolResultObject } from "@github/copilot-sdk";
 import type { TabHandle } from "../../shared/types.js";
+import { readFileSync } from "node:fs";
 import {
   captureScreenshot,
   dispatchClick,
@@ -147,14 +148,25 @@ export function createBrowserTools(tabHandle: TabHandle): Tool[] {
 
   const pasteTool = defineTool("paste", {
     description:
-      "Paste text at the current cursor position using Input.insertText (bypasses keyboard events).",
+      "Paste text at the current cursor position using Input.insertText. " +
+      "Two modes: (1) filePath — read from file and paste (for large content from repoToText/urlToText/pdfToText, " +
+      "text never enters LLM context); (2) text — paste short text directly.",
     parameters: z.object({
-      text: z.string().describe("Text to paste"),
+      filePath: z.string().optional().describe("File path to read and paste (for large content from repoToText)"),
+      text: z.string().optional().describe("Short text to paste directly"),
     }),
-    handler: async (args) => {
-      await dispatchPaste(cdp, args.text);
+    handler: async (args: { filePath?: string; text?: string }) => {
+      let content: string;
+      if (args.filePath) {
+        content = readFileSync(args.filePath, "utf-8");
+      } else if (args.text) {
+        content = args.text;
+      } else {
+        return textResult("Error: provide either filePath or text parameter.");
+      }
+      await dispatchPaste(cdp, content);
       return textResult(
-        `Pasted ${args.text.length} character(s).`,
+        `Pasted ${content.length.toLocaleString()} character(s).`,
       );
     },
   });

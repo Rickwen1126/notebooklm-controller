@@ -300,12 +300,12 @@
 
 ### File-based Paste（Finding #51, FR-009.1, Spike 驗證通過）
 
-- [ ] T-SB08 [P] Unit tests for file-based repo-to-text in `tests/unit/content/repo-to-text.test.ts` — 更新 assertion：返回 `{ filePath, charCount, wordCount }` 而非 `{ text, ... }`。驗證 temp file 寫入 `~/.nbctl/tmp/`。
-- [ ] T-SB09 Refactor repo-to-text.ts — repomix 輸出寫 temp file（`~/.nbctl/tmp/repo-{timestamp}.txt`），返回 filePath + metrics。text 不再存在於 return value。
-- [ ] T-SB10 Refactor content-tools.ts repoToText handler — 返回 filePath + charCount + wordCount（不含 text），agent 只看到 metadata。
-- [ ] T-SB11 Extend paste tool with filePath parameter — `src/agent/tools/browser-tools.ts` paste tool 新增 `filePath` optional 參數。有 filePath 時 handler 讀檔貼入，text 不進 LLM context。
-- [ ] T-SB12 [P] Update add-source agent prompt — `agents/add-source.md` 改為「呼叫 repoToText → 取得 filePath → paste(filePath=...)」。urlToText/pdfToText Phase 8 同理。
-- [ ] T-SB13 [P] Temp file cleanup — content tools 操作完成後刪除 `~/.nbctl/tmp/` 中的 temp file。在 createRunTask finally block 或 session-runner 清理。
+- [x] T-SB08 [P] Unit tests for file-based repo-to-text in `tests/unit/content/repo-to-text.test.ts` — 更新 assertion：返回 `{ filePath, charCount, wordCount }` 而非 `{ text, ... }`。驗證 temp file 寫入 `~/.nbctl/tmp/`。
+- [x] T-SB09 Refactor repo-to-text.ts — repomix 輸出寫 temp file（`~/.nbctl/tmp/repo-{timestamp}.txt`），返回 filePath + metrics。text 不再存在於 return value。
+- [x] T-SB10 Refactor content-tools.ts repoToText handler — 返回 filePath + charCount + wordCount（不含 text），agent 只看到 metadata。
+- [x] T-SB11 Extend paste tool with filePath parameter — `src/agent/tools/browser-tools.ts` paste tool 新增 `filePath` optional 參數。有 filePath 時 handler 讀檔貼入，text 不進 LLM context。
+- [x] T-SB12 [P] Update add-source agent prompt — `agents/add-source.md` 改為「呼叫 repoToText → 取得 filePath → paste(filePath=...)」。urlToText/pdfToText Phase 8 同理。
+- [x] T-SB13 [P] Temp file cleanup — content tools 操作完成後刪除 `~/.nbctl/tmp/` 中的 temp file。在 createRunTask finally block 或 session-runner 清理。
 
 **Checkpoint**: Spike 結論完全回灌。所有 agent prompt 已遵循零留白原則（Finding #44，plan.md 已記載，agent configs 已部分修正）。
 

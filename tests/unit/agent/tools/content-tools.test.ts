@@ -1,8 +1,7 @@
 /**
- * T070: Unit tests for content-tools (defineTool wrappers).
+ * T070 + T-SB10: Unit tests for content-tools (defineTool wrappers, file-based).
  *
- * Tests repoToText tool parameter validation and result format.
- * Mocks the underlying repo-to-text module.
+ * Tests repoToText tool returns filePath + metrics (NOT text content).
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -15,17 +14,17 @@ vi.mock("@github/copilot-sdk", () => ({
   }),
 }));
 
+// Mock the underlying content module
+vi.mock("../../../../src/content/repo-to-text.js", () => ({
+  repoToText: vi.fn(),
+}));
+
 import {
   buildRepoToTextTool,
   buildUrlToTextTool,
   buildPdfToTextTool,
   buildContentTools,
 } from "../../../../src/agent/tools/content-tools.js";
-
-// Mock the underlying content module
-vi.mock("../../../../src/content/repo-to-text.js", () => ({
-  repoToText: vi.fn(),
-}));
 
 import { repoToText } from "../../../../src/content/repo-to-text.js";
 const mockRepoToText = vi.mocked(repoToText);
@@ -41,12 +40,12 @@ describe("content-tools", () => {
     vi.clearAllMocks();
   });
 
-  describe("repoToText tool", () => {
-    it("returns converted text with metrics on success", async () => {
+  describe("repoToText tool (file-based)", () => {
+    it("returns filePath + metrics on success, NOT text content", async () => {
       mockRepoToText.mockResolvedValue({
-        text: "hello world",
-        charCount: 11,
-        wordCount: 2,
+        filePath: "/home/user/.nbctl/tmp/repo-123.txt",
+        charCount: 11000,
+        wordCount: 2000,
       });
 
       const tool = buildRepoToTextTool();
@@ -54,9 +53,14 @@ describe("content-tools", () => {
 
       expect(mockRepoToText).toHaveBeenCalledWith("/my/repo");
       expect(result.resultType).toBe("success");
-      expect(result.textResultForLlm).toContain("Characters: 11");
-      expect(result.textResultForLlm).toContain("Words: 2");
-      expect(result.textResultForLlm).toContain("hello world");
+      expect(result.textResultForLlm).toContain("File: /home/user/.nbctl/tmp/repo-123.txt");
+      expect(result.textResultForLlm).toContain("Characters: 11,000");
+      expect(result.textResultForLlm).toContain("Words: 2,000");
+      expect(result.textResultForLlm).toContain('paste(filePath=');
+
+      // CRITICAL: text content must NOT be in the result
+      expect(result.textResultForLlm).not.toContain("CONTENT START");
+      expect(result.textResultForLlm).not.toContain("CONTENT END");
     });
 
     it("returns error result when repo conversion fails", async () => {

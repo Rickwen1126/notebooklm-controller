@@ -1,13 +1,16 @@
 /**
- * Convert a git repository into a single text representation using repomix.
+ * Convert a git repository into a single text file using repomix.
  *
  * T072: repomix CLI wrapper with word count + 500K limit validation.
+ * T-SB09: File-based output — text written to temp file, never returned in memory.
+ *         Tool boundary = context boundary (Finding #51, FR-009.1).
  */
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { stat } from "node:fs/promises";
+import { stat, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { TMP_DIR } from "../shared/config.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,16 +18,21 @@ const execFileAsync = promisify(execFile);
 const MAX_CHAR_COUNT = 500_000;
 
 export interface RepoToTextResult {
-  text: string;
+  /** Path to the temp file containing converted text. */
+  filePath: string;
   charCount: number;
   wordCount: number;
 }
 
 /**
- * Convert a git repo at `repoPath` to a single plain-text string.
+ * Convert a git repo at `repoPath` to a temp file containing plain text.
  *
  * Uses `repomix --stdout --style plain` to produce AI-friendly output.
  * Respects .gitignore and repomix.config.json if present.
+ *
+ * The text is written to `~/.nbctl/tmp/repo-{timestamp}.txt` and NEVER
+ * returned in memory — ensuring LLM context is not polluted with large content
+ * (Tool boundary = context boundary, Finding #51).
  *
  * @throws If path is not a git repo, repomix fails, or output exceeds 500K chars.
  */
@@ -66,5 +74,10 @@ export async function repoToText(repoPath: string): Promise<RepoToTextResult> {
     );
   }
 
-  return { text, charCount, wordCount };
+  // 5. Write to temp file (text never returned in memory to caller).
+  await mkdir(TMP_DIR, { recursive: true });
+  const filePath = join(TMP_DIR, `repo-${Date.now()}.txt`);
+  await writeFile(filePath, text, "utf-8");
+
+  return { filePath, charCount, wordCount };
 }

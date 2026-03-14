@@ -25,8 +25,9 @@ import { buildToolsForTab } from "../agent/tools/index.js";
 import { createSessionHooks } from "../agent/hooks.js";
 import { MCP_PORT, AGENTS_DIR_USER, AGENTS_DIR_BUNDLED } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import type { UIMap, AgentConfig, AsyncTask } from "../shared/types.js";
+import { TMP_DIR } from "../shared/config.js";
 
 // ---------------------------------------------------------------------------
 // DaemonRuntime
@@ -127,6 +128,17 @@ function createRunTask(
     } finally {
       // 6. Release tab back to pool.
       await tabManager.releaseTab(tabHandle.tabId);
+
+      // 7. Cleanup temp files from content tools (T-SB13).
+      try {
+        if (existsSync(TMP_DIR)) {
+          for (const f of readdirSync(TMP_DIR)) {
+            unlinkSync(`${TMP_DIR}/${f}`);
+          }
+        }
+      } catch {
+        // Non-critical — temp files will be cleaned next run.
+      }
     }
   };
 }

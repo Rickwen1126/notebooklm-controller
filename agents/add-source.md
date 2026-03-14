@@ -37,24 +37,27 @@ parameters:
 
 根據 sourceType 準備內容：
 
-- **text**：直接使用 sourceContent
-- **url**：呼叫 `urlToText(sourceContent)` 轉換為文字
-- **repo**：呼叫 `repoToText(sourceContent)` 轉換為文字
-- **pdf**：呼叫 `pdfToText(sourceContent)` 轉換為文字
+- **text**：直接使用 sourceContent（短文字直接 paste(text=...)）
+- **url**：呼叫 `urlToText(sourceContent)` → 取得 filePath
+- **repo**：呼叫 `repoToText(sourceContent)` → 取得 filePath
+- **pdf**：呼叫 `pdfToText(sourceContent)` → 取得 filePath
 
-轉換後的文字就是要貼入的來源內容。
+**重要**：repoToText / urlToText / pdfToText 回傳的是 **filePath**（文字已存在檔案中），不是文字本身。你不會看到文字內容，這是正常的。用 `paste(filePath=...)` 貼入。
 
 ## 貼上文字來源
 
-```
-find("{{add_source}}")  → click
-find("{{paste_source_type}}")  → click
-find("{{paste_textarea}}")  → click
-paste(<準備好的內容>)
-find("{{insert_button}}")  → 確認非 DISABLED → click
-wait(5)
-read(".source-panel")  → 驗證新來源出現
-```
+嚴格按照以下步驟順序執行：
+
+1. 如果 sourceType 不是 text → 呼叫對應的轉換 tool → 記下回傳的 filePath
+2. `find("{{add_source}}")` → click（找到「新增來源」按鈕）
+3. `find("{{paste_source_type}}")` → click（選擇「Copied text」選項）
+4. `find("{{paste_textarea}}")` → click（點擊文字輸入框）
+5. 貼入內容：
+   - 如果有 filePath → `paste(filePath="<步驟1的filePath>")`
+   - 如果是短文字 → `paste(text="<sourceContent>")`
+6. `find("{{insert_button}}")` → 確認非 DISABLED → click（點擊「Insert」按鈕）
+7. `wait(5)`（等待來源處理）
+8. `read(".source-panel")` → 驗證新來源出現在來源面板
 
 ## URL / YouTube 來源（直接連結，NotebookLM 原生抓取）
 

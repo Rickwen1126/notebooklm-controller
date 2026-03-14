@@ -1,16 +1,18 @@
 /**
- * T069: Unit tests for repo-to-text.
+ * T069 + T-SB08: Unit tests for repo-to-text (file-based output).
  *
- * Tests the repomix wrapper: git validation, word count, 500K limit.
- * Uses vi.mock to mock child_process.execFile so we don't need a real repo.
+ * Tests the repomix wrapper: git validation, word count, 500K limit,
+ * file-based output (text written to temp file, filePath returned).
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { repoToText } from "../../../src/content/repo-to-text.js";
 
-// Mock fs/promises for .git directory check
+// Mock fs/promises for .git directory check + temp file write
 vi.mock("node:fs/promises", () => ({
   stat: vi.fn(),
+  writeFile: vi.fn(),
+  mkdir: vi.fn(),
 }));
 
 // Mock child_process for repomix CLI
@@ -18,10 +20,17 @@ vi.mock("node:child_process", () => ({
   execFile: vi.fn(),
 }));
 
-import { stat } from "node:fs/promises";
+// Mock config for TMP_DIR
+vi.mock("../../../src/shared/config.js", () => ({
+  TMP_DIR: "/tmp/nbctl-test",
+}));
+
+import { stat, writeFile, mkdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 
 const mockStat = vi.mocked(stat);
+const mockWriteFile = vi.mocked(writeFile);
+const mockMkdir = vi.mocked(mkdir);
 const mockExecFile = vi.mocked(execFile);
 
 describe("repoToText", () => {
@@ -30,9 +39,12 @@ describe("repoToText", () => {
 
     // Default: .git exists
     mockStat.mockResolvedValue({} as Awaited<ReturnType<typeof stat>>);
+    // Default: mkdir/writeFile succeed
+    mockMkdir.mockResolvedValue(undefined);
+    mockWriteFile.mockResolvedValue(undefined);
   });
 
-  it("converts a git repo to text with metrics", async () => {
+  it("converts a git repo and returns filePath + metrics (not text)", async () => {
     const fakeOutput = "file: hello.ts\nconsole.log('hello world');\n";
 
     mockExecFile.mockImplementation(
@@ -46,9 +58,22 @@ describe("repoToText", () => {
 
     const result = await repoToText("/fake/repo");
 
-    expect(result.text).toBe(fakeOutput);
+    // Returns filePath, not text
+    expect(result.filePath).toContain("/tmp/nbctl-test/repo-");
+    expect(result.filePath).toContain(".txt");
     expect(result.charCount).toBe(fakeOutput.length);
     expect(result.wordCount).toBeGreaterThan(0);
+
+    // Text was NOT in the return value
+    expect(result).not.toHaveProperty("text");
+
+    // Temp file was written
+    expect(mockMkdir).toHaveBeenCalledWith("/tmp/nbctl-test", { recursive: true });
+    expect(mockWriteFile).toHaveBeenCalledWith(
+      expect.stringContaining("repo-"),
+      fakeOutput,
+      "utf-8",
+    );
   });
 
   it("throws if path is not a git repo", async () => {
@@ -103,5 +128,6 @@ describe("repoToText", () => {
 
     const result = await repoToText("/fake/repo");
     expect(result.wordCount).toBe(5);
+    expect(result.charCount).toBe(text.length);
   });
 });
