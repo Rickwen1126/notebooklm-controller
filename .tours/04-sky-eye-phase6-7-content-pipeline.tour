@@ -1,0 +1,59 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "04 - Sky Eye: Phase 6+7 Content Pipeline + MVP Core Flow",
+  "steps": [
+    {
+      "title": "Context",
+      "description": "## 這條 tour 在看什麼\n\n這條 tour 追蹤 MVP 核心 data flow：使用者說「把 repo 加入來源」→ exec MCP tool → scheduler → dual session（Planner + Executor）→ content pipeline（repomix）→ browser tools（paste into NotebookLM）。\n\n如果只記一件事：**exec 是唯一的入口，所有操作都經過 Planner 分類 → Executor 執行的雙 session 管線**。Content tools 和 browser tools 是 Executor 的兩類武器。\n\n## 錨定已知\n\n如果你用過 CI/CD pipeline：exec tool = trigger、scheduler = job queue、Planner = pipeline router（決定跑哪個 stage）、Executor = job runner（帶特定 tools）。Content pipeline 就像 build step 的 artifact generation。\n\n## 走完能建立的 mental model\n\n1. 資料從 MCP tool 到 agent 到瀏覽器的完整流動路徑\n2. Content pipeline（repo → text）是純函數，被 Copilot SDK tool 包裝後注入 agent\n3. waitForTask 如何讓 sync exec 只等自己的 task\n4. Planner 的 canonical context 注入（為什麼 agent 知道操作哪本 notebook）\n\n## 為什麼值得讀\n\n這是 MVP 的 end-to-end data flow。理解這條路徑就能理解系統的 80% 行為——每個 exec 請求都走這條路。"
+    },
+    {
+      "file": "src/daemon/exec-tools.ts",
+      "line": 130,
+      "ref": "44d73970e2753dd5b0a806b313f5b17fe567bcf8",
+      "title": "Step 1: exec MCP tool — 所有操作的唯一入口",
+      "description": "## Insight\n\n**機制**：exec tool 是 MCP Server 暴露的唯一操作入口（管理 tools 除外）。所有 NL 指令（加來源、查詢、產生 audio）都從這裡進入系統。Tool 自己只做三件事：resolve notebook alias → submit to scheduler → 等結果。\n\n**故障模式**：如果 exec 直接呼叫 agent session（跳過 scheduler），同 notebook 多個 exec 會 race。Scheduler 的 per-notebook queue 是同 notebook serial 的唯一保證。\n\n**設計取捨**：exec 只暴露 `prompt` + `notebook` + `async`，不暴露 agent 選擇。使用者不知道也不需要知道 Planner/Executor。選擇在 exec 層隱藏 agent 選擇，是為了讓 MCP client（AI 工具）只需用自然語言。\n\n## 白話\n\n它就是個 dispatcher：收 NL prompt → 丟給 scheduler → 等結果回來。sync mode 用 `waitForTask(taskId)` 只等自己的 task（L151），不會被其他 notebook 的 queue 卡住。\n\n## Code Detail\n\n**這段在幹嘛**：L106-134 resolve notebook alias（可能用 default），驗證 notebook 存在，submit 到 scheduler 拿到 AsyncTask。L139-146 async mode 直接返回 taskId。L148-182 sync mode 等 task 完成後取結果。\n\n**好處**：\n- sync/async 分支共用同一個 submit 路徑，保證行為一致\n- waitForTask 精準等待，不影響其他 notebook 的並行操作\n\n**壞處**：\n- sync mode timeout 完全依賴 scheduler/agent 的 timeout，exec 層沒有自己的 deadline\n\n**思考**：\n1. 如果 scheduler 永遠不完成（agent hang），sync caller 怎麼辦？\n2. waitForTask 和 waitForIdle 的語意差異是什麼？為什麼前者是正確的？"
+    },
+    {
+      "file": "src/daemon/scheduler.ts",
+      "line": 205,
+      "ref": "44d73970e2753dd5b0a806b313f5b17fe567bcf8",
+      "title": "Step 2: waitForTask — per-task Promise resolution",
+      "description": "## Insight\n\n**機制**：`waitForTask` 用 per-task Promise + Map<taskId, resolver> 實現精準等待。先 check terminal state（已完成直接返回），否則註冊 resolver，等 `executeTask.finally` 或 `cancel()` 呼叫。\n\n**故障模式**：如果只用 `waitForIdle()`（等全部 queue 清空），sync exec 會被其他 notebook 的操作卡住——notebook A 的 sync caller 要等 notebook B 的 long-running task 完成才能拿到自己的結果。這是 T-HF02 發現的 CRITICAL bug。\n\n**設計取捨**：resolver 在三個地方被消費（executeTask.finally、cancel queued、cancel running），任一先到即 resolve。idempotent check（delete → resolver 消失）確保不會 double-resolve。\n\n## 白話\n\n它是一個「等號碼牌」機制。你提交 task 拿到 taskId，waitForTask 就是拿著號碼牌等叫號。不管別的號碼牌是快是慢，你只等自己的。\n\n## Code Detail\n\n**這段在幹嘛**：L206-210 快速路徑（task 已完成直接返回）。L213 註冊 Promise resolver 到 Map。消費端在 L397（executeTask.finally）和 L130/L147（cancel 兩個路徑）。\n\n**好處**：\n- O(1) 查找 + resolve（Map-based）\n- cancel interop（取消也 resolve，不會 hang）\n\n**壞處**：\n- 理論 TOCTOU：get() await 期間 task 可能完成且 resolver 未註冊。Node.js 單線程模型下實際安全，但沒有防禦性 re-check\n\n**思考**：\n1. 如果 taskResolvers 漏了 cleanup（比如 executeTask 拋未預期異常），promise 會 leak 嗎？\n2. 為什麼 cancel() 和 executeTask.finally 都要 resolve？只放一邊行嗎？"
+    },
+    {
+      "file": "src/daemon/index.ts",
+      "line": 109,
+      "ref": "44d73970e2753dd5b0a806b313f5b17fe567bcf8",
+      "title": "Step 3: createRunTask — 從 tab pool 到 dual session",
+      "description": "## Insight\n\n**機制**：`createRunTask` 是 scheduler 的 injected dependency——scheduler 不知道 agent session 的存在，只呼叫 `runTask(task)` 拿結果。這個函數做四件事：resolve notebook URL → acquireTab → buildTools + runDualSession → releaseTab。\n\n**故障模式**：L117 `tabHandle.page.url()` 是 T-HF01 修正的結果。原本用 `tabHandle.url`（assignment metadata），affinity reuse 時拿到的是上次 assign 的 URL 而非實際頁面 URL，導致 pre-navigate hint 判斷錯誤——agent 以為頁面已在 notebook X 但實際在 notebook Y。\n\n**設計取捨**：try/finally 保證 releaseTab 一定被呼叫，即使 runDualSession 拋異常。Tab 是 pool 資源，leak 一個 tab = pool 容量永久減 1。\n\n## 白話\n\n它是 scheduler 和 agent session 之間的橋樑。scheduler 只管排隊和調度，createRunTask 負責「拿資源 → 跑 agent → 還資源」。try/finally 確保 tab 不會被 leak。\n\n## Code Detail\n\n**這段在幹嘛**：L73-79 resolve notebook URL。L83-92 acquireTab（可能 throw TabLimitError）。L96-120 build tools + hooks + runDualSession。L128-130 releaseTab。\n\n**好處**：\n- Dependency injection：scheduler 可獨立測試（mock runTask）\n- Tab lifecycle 和 session lifecycle 解耦\n\n**壞處**：\n- acquireTab 失敗返回 error result 而非 throw — scheduler 看到 `{ success: false }` 會把 task 標為 failed，但 spec 說 pool 滿應該排隊等待（producer-consumer），這裡暫時是 throw + catch\n\n**思考**：\n1. 如果 runDualSession hang 10 分鐘，tab 會一直被佔用嗎？timeout 在哪一層？\n2. `tabHandle.page.url()` vs `tabHandle.url`——什麼場景下它們會不同？"
+    },
+    {
+      "file": "src/agent/session-runner.ts",
+      "line": 234,
+      "ref": "44d73970e2753dd5b0a806b313f5b17fe567bcf8",
+      "title": "Step 4: Planner Session — 意圖解析 + canonical context",
+      "description": "## Insight\n\n**機制**：Planner 是雙 session 的第一步。它收到使用者 NL prompt + agent catalog → 透過 `submitPlan` tool 輸出結構化 ExecutionPlan。L237-239 注入 canonical notebook context（T-HF03 修正），讓 Planner 知道系統已 resolve 的 target notebook，不需要從使用者文字猜測。\n\n**故障模式**：沒有 notebook context 時，Planner 只能從 prompt 猜——使用者說「加來源」時不一定提 notebook 名稱（因為已有 default）。Planner 猜錯 = 選錯 agent 或生成錯誤的 executorPrompt。\n\n**設計取捨**：Planner 只有兩個 tool（submitPlan + rejectInput），沒有 browser tools。這是 Input Gate（FR-185~188）的安全邊界——使用者的 NL 必須先經過 Planner 分類，只有通過的才觸發帶 browser tools 的 Executor。\n\n## 白話\n\n它是一個分類器：「使用者想做什麼 → 派哪個 agent 去做」。L237 明確告訴它「你現在操作的是 notebook X」，就像 dispatch center 告訴司機「你的目的地已確認，不用自己看地址」。\n\n## Code Detail\n\n**這段在幹嘛**：L229 buildPlannerCatalog 生成所有 agent 的 name/description/tools 摘要。L231-260 Planner systemMessage（規則 1-6）。L265-282 submitPlan tool 透過 closure 捕獲 plan。L293-294 用低層 runSession 執行。\n\n**好處**：\n- Prompt 零留白原則（Finding #44）：規則 1-6 每條都是明確指令，GPT-4.1 不需推理\n- Canonical context 消除歧義\n\n**壞處**：\n- Planner systemMessage + user prompt 硬拼接（L298 `fullPlannerPrompt`），未用 SDK 的 `systemMessage` 參數分層（T-HF04）\n\n**思考**：\n1. rejectInput tool 目前還沒實作（T-SB01~03）。Planner 遇到非 NotebookLM 請求時現在怎麼處理？\n2. 為什麼 Planner 不需要 browser tools？它如果需要看一下當前頁面狀態呢？"
+    },
+    {
+      "file": "src/agent/tools/content-tools.ts",
+      "line": 44,
+      "ref": "44d73970e2753dd5b0a806b313f5b17fe567bcf8",
+      "title": "Step 5: repoToText tool — content pipeline 的 SDK 包裝",
+      "description": "## Insight\n\n**機制**：Content tools 是純函數（src/content/）的 Copilot SDK 包裝。`repoToText` tool handler 呼叫 `repo-to-text.ts`，把結果包成 `ToolResultObject`（text + metrics）。Agent 拿到轉換後的文字，用 `paste` browser tool 貼入 NotebookLM。\n\n**故障模式**：如果 repoToText 返回超過 500K chars，底層函數直接 throw。Handler 的 try/catch 把 error 轉為 `errorResult`，agent 收到結構化的 error message 而非 unhandled exception。這是 tool 自包原則——error boundary 在 handler 內，不 bubble up 到 session 層。\n\n**設計取捨**：返回 text 而非 file path。Agent 需要 text 來 paste，如果只返回 path，agent 還需要另一個 tool 讀檔。Trade-off：text 可能很大（500K chars = ~500KB），走 JSON-RPC 傳輸。但 Copilot SDK 的 `textResultForLlm` 就是設計來承載大文本的。\n\n## 白話\n\n它是 repo → text 的最後一哩路：底層 repomix 做轉換，這裡包裝成 agent 能呼叫的 tool。Agent 說「幫我把 /path/repo 轉成文字」，tool 做完後直接回傳文字 + 統計數據。\n\n## Code Detail\n\n**這段在幹嘛**：L44-58 handler：call repoToText → 成功返回 text + charCount + wordCount；失敗返回 errorResult。L48-51 的 `--- CONTENT START/END ---` 標記幫助 agent 定位要 paste 的範圍。\n\n**好處**：\n- Builder pattern（`buildRepoToTextTool()`）方便測試和組合\n- urlToText/pdfToText 已預留 stub（Phase 8 只需換 handler）\n\n**壞處**：\n- 500K chars 全量放在 `textResultForLlm` 裡走 JSON-RPC，memory 佔用高\n\n**思考**：\n1. Agent 拿到 500K chars 的 text 後，怎麼 paste 進 NotebookLM？有字數限制嗎？\n2. 為什麼 content-tools 不需要 TabHandle（不綁定 tab），但 browser-tools 需要？"
+    },
+    {
+      "file": "src/content/repo-to-text.ts",
+      "line": 42,
+      "ref": "44d73970e2753dd5b0a806b313f5b17fe567bcf8",
+      "title": "Step 6: repo-to-text — 純函數層（repomix CLI wrapper）",
+      "description": "## Insight\n\n**機制**：用 `execFile('npx', ['repomix', '.', '--stdout', '--style', 'plain'])` 呼叫 repomix CLI，`cwd: repoPath` 指定 repo 位置。repomix 讀 .gitignore + repomix.config.json → 掃描檔案 → 輸出 AI-friendly 的 plain text。\n\n**故障模式**：maxBuffer 設 100MB 防止 OOM（stdout pipe 預設 1MB 在大 repo 會 crash）。timeout 120s 防止 repomix 在超大 repo 上無限跑。500K char check 在 repomix 輸出後但返回前——先讓 repomix 跑完，再驗證大小，避免 half-processed 的 error handling 複雜度。\n\n**設計取捨**：用 CLI 而非 programmatic API。repomix 的 `pack()` function 需要複雜的 config object（nested properties，undocumented defaults），CLI 的 `--stdout --style plain` 兩個 flag 就搞定。Trade-off：每次呼叫多 200-500ms（npx resolution）。\n\n## 白話\n\n最底層的轉換函數。它不知道 agent、tool、MCP 的存在，只知道「給我一個 repo path → 我返回 text」。是整個 content pipeline 中唯一真正做 I/O 的地方。\n\n## Code Detail\n\n**這段在幹嘛**：L32-37 驗證 .git 存在。L41-55 execFile 呼叫 repomix。L58-59 計算 metrics。L62-67 驗證 500K 限制。\n\n**好處**：\n- 純函數設計（input → output，no side effects except I/O），易測試\n- 分離轉換邏輯和 SDK 包裝（content/ vs tools/）\n\n**壞處**：\n- `npx` 比直接呼叫 binary 慢（200-500ms overhead）\n- 500K chars 是 hardcoded，spec 說「具體限制值需實測確認」\n\n**思考**：\n1. repomix 輸出的 plain style 包含什麼？file tree + 每個檔案的內容？格式對 NotebookLM 重要嗎？\n2. 為什麼不用 repomix 的 programmatic API？什麼情況下應該改用？"
+    },
+    {
+      "file": "src/agent/tools/index.ts",
+      "line": 41,
+      "ref": "44d73970e2753dd5b0a806b313f5b17fe567bcf8",
+      "title": "Step 7: Tool Registry — 三類 tools 的組裝點",
+      "description": "## Insight\n\n**機制**：`buildToolsForTab` 是 tool factory——組裝 browser tools（9 個，綁 TabHandle）+ state tools（3 個，綁 NetworkGate/CacheManager）+ content tools（3 個，無綁定）。Executor session 從這裡拿到完整 tool set，再根據 step.tools 篩選只留需要的。\n\n**故障模式**：如果 content tools 沒加進 registry，Executor 的 tool filter 會找不到 `repoToText`——agent 想呼叫但 tool 不存在，Copilot SDK 會 throw。這是 Phase 6 新增 content tools 時最可能出錯的地方（registry 忘了更新）。\n\n**設計取捨**：三類 tools 平鋪在同一個陣列裡（不分層），由 Executor 的 tool name filter 決定每個 step 看到哪些 tools。簡單但依賴 tool name 的全域唯一性（name collision = 靜默覆蓋）。\n\n## 白話\n\n它是軍火庫管理員：browser tools 是近身武器（需要 tab），state tools 是通訊裝備（需要 network gate），content tools 是情報工具（不需要 tab）。每次出任務，Executor 會說「我這次只帶 repoToText + paste + click」。\n\n## Code Detail\n\n**這段在幹嘛**：L34-42 組裝三類 tools。15 = 9 + 3 + 3。每類有自己的 builder function，互不耦合。\n\n**好處**：\n- Content tools 無 tab 依賴——可在 Planner 階段使用（如果未來需要）\n- 新增 tool 只需改 builder function + registry，不影響其他類\n\n**壞處**：\n- 平鋪陣列 + string name matching（Executor filter）— typo 靜默失敗（T-HF10 tech debt）\n\n**思考**：\n1. 為什麼 content tools 不綁 TabHandle？它們做的事和瀏覽器完全無關嗎？\n2. 如果兩個 tool 同名（比如兩個 plugin 都叫 'screenshot'），會發生什麼？"
+    }
+  ]
+}
