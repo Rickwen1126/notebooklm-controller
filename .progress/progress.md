@@ -1,52 +1,18 @@
-## 2026-03-14 21:07 — Review Point 2 完成 + AUDIT v3 通過
+## 2026-03-14 21:25 — Bug fixes done, Phase 8-14 agents running
 
-**Goal**: Bug fix → Phase 6+7 → Review Point 2（tour + code review + audit）→ spike 回灌
+**Goal**: Fix all remaining bugs → Phase 8-14 → Final review
 
 **Done**:
+- **T-SB08~13**: File-based paste (`07d5855`) — repo-to-text 寫 temp file, paste tool 支援 filePath, add-source prompt 更新
+- **T-HF04**: systemMessage parameter (`6c96b80`) — Planner/Executor 用 SDK createSession({ systemMessage })
+- **T-HF12~14**: Circuit Breaker (`6c96b80`) — executeTask timeout + degraded state + resetHealth
+- **T-SB01~03**: rejectInput tool (`6c96b80`) — Planner Input Gate, 6 rejection categories, PlannerResult discriminated union
+- 585 tests passing
 
-### 本 session（接續前一 session 的 spike 實驗）
-
-1. **Spike 回灌 + speckit.analyze**（`a564347`）
-   - FR-185~188 Input Gate、download infra、CDP Ctrl+A、prompt 零留白 → spec/plan/tasks
-   - speckit.analyze 7 findings（F1~F7）全修：兩層架構→Two-Session、active 欄位移除、Model 確定 GPT-4.1、open/close 清理
-
-2. **Bug fixes T-HF01~03**（`0e104d0`）
-   - tabHandle.url → page.url()（pre-navigate hint 拿 live URL）
-   - waitForTask 取代 waitForIdle（per-task wait，不被其他 notebook 卡）
-   - Planner systemMessage 注入 notebookAlias
-
-3. **Phase 6+7**（`0eb71c3`）
-   - repo-to-text.ts（repomix CLI wrapper）+ content-tools.ts（3 defineTool）+ tool registry（15 tools）
-   - query integration tests
-   - 574 → 575 tests
-
-4. **Review Point 2**（`44d7397` + `105488d`）
-   - Code review: 🔴1（cancel + waitForTask hang）已修 + 1 test
-   - Sky Eye Tour 04: content pipeline 7 steps
-   - Tour review 討論產出：Circuit Breaker（FR-210~213, T-HF12~14）+ file-based paste 實驗需求
-
-5. **Circuit Breaker + spike 結論回灌**（`3fc6d8f` + `5125913`）
-   - FR-210~213: executeTask timeout + degraded state + restart 恢復
-   - FR-009.1: file-based paste（Tool boundary = context boundary）
-   - T-SB08~13: file-based paste 實作 tasks
-
-6. **AUDIT v3**（`6eb4dfa`）— 通過
-
-**Decisions**:
-- Circuit Breaker: 連續 3 次 timeout → degraded → reject 新 submit → 使用者重啟
-- File-based paste: content tools 寫 temp file → paste tool 讀檔 → LLM 0 token 消耗
-- tabHandle.url 保留作為 affinity 參考值，pre-navigate 用 page.url() 取 live state
-
-**State**: Branch `001-mvp` at `6eb4dfa`。575 tests, lint clean。AUDIT v3 通過。MVP core flow 完成。
+**State**: Branch `001-mvp` at `6c96b80`。585 tests, lint clean。兩個 background agent 執行中：Phase 8 (url/pdf-to-text) + Phase 9-13 (agent verification + light code)。
 
 **Next**:
-- [ ] T-SB08~13: file-based paste code 實作（Phase 6 blocker）
-- [ ] T-HF04~05: Architecture items（systemMessage 參數、acquireTab race）
-- [ ] T-HF12~14: Circuit Breaker 實作
-- [ ] Phase 8+: Post-MVP（URL+PDF, audio, screenshot）
-
-**Key references**:
-- `.audit/AUDIT-notebooklm-controller-v3@20260314.md` — Review Point 2 審計
-- `spike/FilePaste500KExperiment.md` — file-based paste 實驗結果 + 改動範圍
-- `.tours/04-sky-eye-phase6-7-content-pipeline.tour` — content pipeline 架構
-- `.tours/review-phase6-7-20260314.tour` — code review findings
+- [ ] 等 background agents 完成 → merge + test
+- [ ] Phase 14 (polish): T104-T107
+- [ ] Final Review Point 3: /reviewCode + /audit + /codetour
+- [ ] /save

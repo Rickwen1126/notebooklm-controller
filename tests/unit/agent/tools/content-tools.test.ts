@@ -1,7 +1,7 @@
 /**
- * T070 + T-SB10: Unit tests for content-tools (defineTool wrappers, file-based).
+ * T070 + T-SB10 + T084/T085: Unit tests for content-tools (defineTool wrappers, file-based).
  *
- * Tests repoToText tool returns filePath + metrics (NOT text content).
+ * Tests repoToText, urlToText, pdfToText tools return filePath + metrics (NOT text content).
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -14,9 +14,17 @@ vi.mock("@github/copilot-sdk", () => ({
   }),
 }));
 
-// Mock the underlying content module
+// Mock the underlying content modules
 vi.mock("../../../../src/content/repo-to-text.js", () => ({
   repoToText: vi.fn(),
+}));
+
+vi.mock("../../../../src/content/url-to-text.js", () => ({
+  urlToText: vi.fn(),
+}));
+
+vi.mock("../../../../src/content/pdf-to-text.js", () => ({
+  pdfToText: vi.fn(),
 }));
 
 import {
@@ -27,7 +35,12 @@ import {
 } from "../../../../src/agent/tools/content-tools.js";
 
 import { repoToText } from "../../../../src/content/repo-to-text.js";
+import { urlToText } from "../../../../src/content/url-to-text.js";
+import { pdfToText } from "../../../../src/content/pdf-to-text.js";
+
 const mockRepoToText = vi.mocked(repoToText);
+const mockUrlToText = vi.mocked(urlToText);
+const mockPdfToText = vi.mocked(pdfToText);
 
 // Helper to call a tool's handler
 async function callToolHandler(tool: { handler?: unknown }, args: unknown) {
@@ -74,23 +87,75 @@ describe("content-tools", () => {
     });
   });
 
-  describe("urlToText tool (Phase 8 stub)", () => {
-    it("returns not-yet-implemented error", async () => {
+  describe("urlToText tool (file-based)", () => {
+    it("returns filePath + metrics on success, NOT text content", async () => {
+      mockUrlToText.mockResolvedValue({
+        filePath: "/home/user/.nbctl/tmp/url-456.txt",
+        charCount: 5000,
+        wordCount: 800,
+      });
+
       const tool = buildUrlToTextTool();
-      const result = await callToolHandler(tool, { url: "https://example.com" }) as { textResultForLlm: string; resultType: string };
+      const result = await callToolHandler(tool, { url: "https://example.com/article" }) as { textResultForLlm: string; resultType: string };
+
+      expect(mockUrlToText).toHaveBeenCalledWith("https://example.com/article");
+      expect(result.resultType).toBe("success");
+      expect(result.textResultForLlm).toContain("File: /home/user/.nbctl/tmp/url-456.txt");
+      expect(result.textResultForLlm).toContain("Characters: 5,000");
+      expect(result.textResultForLlm).toContain("Words: 800");
+      expect(result.textResultForLlm).toContain('paste(filePath=');
+
+      // CRITICAL: text content must NOT be in the result
+      expect(result.textResultForLlm).not.toContain("CONTENT START");
+      expect(result.textResultForLlm).not.toContain("CONTENT END");
+    });
+
+    it("returns error result when URL conversion fails", async () => {
+      mockUrlToText.mockRejectedValue(new Error("Failed to fetch URL: ECONNREFUSED"));
+
+      const tool = buildUrlToTextTool();
+      const result = await callToolHandler(tool, { url: "https://down.example.com" }) as { textResultForLlm: string; resultType: string };
 
       expect(result.resultType).toBe("error");
-      expect(result.textResultForLlm).toContain("not yet implemented");
+      expect(result.textResultForLlm).toContain("Failed to convert web page");
+      expect(result.textResultForLlm).toContain("ECONNREFUSED");
     });
   });
 
-  describe("pdfToText tool (Phase 8 stub)", () => {
-    it("returns not-yet-implemented error", async () => {
+  describe("pdfToText tool (file-based)", () => {
+    it("returns filePath + metrics + pageCount on success, NOT text content", async () => {
+      mockPdfToText.mockResolvedValue({
+        filePath: "/home/user/.nbctl/tmp/pdf-789.txt",
+        charCount: 25000,
+        wordCount: 4000,
+        pageCount: 12,
+      });
+
       const tool = buildPdfToTextTool();
-      const result = await callToolHandler(tool, { path: "/doc.pdf" }) as { textResultForLlm: string; resultType: string };
+      const result = await callToolHandler(tool, { path: "/docs/report.pdf" }) as { textResultForLlm: string; resultType: string };
+
+      expect(mockPdfToText).toHaveBeenCalledWith("/docs/report.pdf");
+      expect(result.resultType).toBe("success");
+      expect(result.textResultForLlm).toContain("File: /home/user/.nbctl/tmp/pdf-789.txt");
+      expect(result.textResultForLlm).toContain("Characters: 25,000");
+      expect(result.textResultForLlm).toContain("Words: 4,000");
+      expect(result.textResultForLlm).toContain("Pages: 12");
+      expect(result.textResultForLlm).toContain('paste(filePath=');
+
+      // CRITICAL: text content must NOT be in the result
+      expect(result.textResultForLlm).not.toContain("CONTENT START");
+      expect(result.textResultForLlm).not.toContain("CONTENT END");
+    });
+
+    it("returns error result when PDF conversion fails", async () => {
+      mockPdfToText.mockRejectedValue(new Error("PDF file not found: /missing.pdf"));
+
+      const tool = buildPdfToTextTool();
+      const result = await callToolHandler(tool, { path: "/missing.pdf" }) as { textResultForLlm: string; resultType: string };
 
       expect(result.resultType).toBe("error");
-      expect(result.textResultForLlm).toContain("not yet implemented");
+      expect(result.textResultForLlm).toContain("Failed to convert PDF");
+      expect(result.textResultForLlm).toContain("PDF file not found");
     });
   });
 

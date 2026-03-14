@@ -16,7 +16,7 @@ import type { Scheduler } from "./scheduler.js";
 import type { StateManager } from "../state/state-manager.js";
 import type { NetworkGate } from "../network-gate/network-gate.js";
 import type { TaskStore } from "../state/task-store.js";
-import type { DaemonStatusResult } from "../shared/types.js";
+import type { DaemonStatusResult, AgentConfig } from "../shared/types.js";
 import { MAX_TABS } from "../shared/config.js";
 
 // ---------------------------------------------------------------------------
@@ -30,6 +30,7 @@ export interface ToolRegistrationDeps {
   networkGate: NetworkGate;
   taskStore: TaskStore;
   shutdownFn: () => Promise<void>;
+  agentConfigs?: AgentConfig[];
 }
 
 // ---------------------------------------------------------------------------
@@ -43,6 +44,7 @@ export function registerDaemonTools(
   registerGetStatus(server, deps);
   registerShutdown(server, deps);
   registerReauth(server, deps);
+  registerListAgents(server, deps);
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +256,54 @@ function registerReauth(
               mode: modeLabel,
               message: instruction,
             }),
+          },
+        ],
+      };
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// T100: list_agents
+// ---------------------------------------------------------------------------
+
+function registerListAgents(
+  server: NbctlMcpServer,
+  deps: ToolRegistrationDeps,
+): void {
+  server.registerTool(
+    "list_agents",
+    {
+      description:
+        "List all available agent configurations with their names, descriptions, " +
+        "available tools, and parameters. Useful for discovering what operations " +
+        "can be performed via the exec tool.",
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async () => {
+      const configs = deps.agentConfigs ?? [];
+
+      const agents = configs.map((config) => ({
+        name: config.name,
+        displayName: config.displayName,
+        description: config.description,
+        tools: config.tools,
+        startPage: config.startPage,
+        parameters: Object.fromEntries(
+          Object.entries(config.parameters).map(([key, param]) => [
+            key,
+            { type: param.type, description: param.description },
+          ]),
+        ),
+      }));
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(agents),
           },
         ],
       };

@@ -99,11 +99,12 @@ describe("registerDaemonTools", () => {
     registerDaemonTools(server as never, deps);
   });
 
-  it("registers get_status, shutdown, and reauth tools", () => {
-    expect(server.registerTool).toHaveBeenCalledTimes(3);
+  it("registers get_status, shutdown, reauth, and list_agents tools", () => {
+    expect(server.registerTool).toHaveBeenCalledTimes(4);
     expect(server.tools.has("get_status")).toBe(true);
     expect(server.tools.has("shutdown")).toBe(true);
     expect(server.tools.has("reauth")).toBe(true);
+    expect(server.tools.has("list_agents")).toBe(true);
   });
 
   // -----------------------------------------------------------------------
@@ -241,6 +242,74 @@ describe("registerDaemonTools", () => {
       const tool = server.tools.get("reauth")!;
       const options = tool.options as { annotations?: { destructiveHint?: boolean } };
       expect(options.annotations?.destructiveHint).toBe(true);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // list_agents (T100)
+  // -----------------------------------------------------------------------
+
+  describe("list_agents", () => {
+    it("returns empty array when no agent configs provided", async () => {
+      const handler = server.getHandler("list_agents");
+      const result = await handler({}) as { content: Array<{ text: string }> };
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed).toEqual([]);
+    });
+
+    it("returns agent configs with name, description, tools, and parameters", async () => {
+      // Re-create server with agent configs in deps
+      server = createMockServer();
+      deps = createMockDeps({
+        agentConfigs: [
+          {
+            name: "add-source",
+            displayName: "Add Source",
+            description: "Add content to a NotebookLM notebook as a source",
+            tools: ["find", "click", "paste", "type", "read", "wait", "screenshot"],
+            prompt: "test prompt",
+            infer: true,
+            startPage: "notebook",
+            parameters: {
+              sourceType: { type: "string", description: "Source type: text | url | repo | pdf", default: "text" },
+              sourceContent: { type: "string", description: "Content to add", default: "" },
+            },
+          },
+          {
+            name: "query",
+            displayName: "Query Notebook",
+            description: "Ask a question to NotebookLM",
+            tools: ["find", "click", "paste", "read", "wait", "screenshot"],
+            prompt: "test prompt",
+            infer: true,
+            startPage: "notebook",
+            parameters: {
+              question: { type: "string", description: "The question to ask", default: "" },
+            },
+          },
+        ] as unknown as ToolRegistrationDeps["agentConfigs"],
+      });
+      registerDaemonTools(server as never, deps);
+
+      const handler = server.getHandler("list_agents");
+      const result = await handler({}) as { content: Array<{ text: string }> };
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed).toHaveLength(2);
+      expect(parsed[0].name).toBe("add-source");
+      expect(parsed[0].displayName).toBe("Add Source");
+      expect(parsed[0].description).toContain("Add content");
+      expect(parsed[0].tools).toContain("find");
+      expect(parsed[0].startPage).toBe("notebook");
+      expect(parsed[0].parameters.sourceType.type).toBe("string");
+      expect(parsed[1].name).toBe("query");
+    });
+
+    it("has readOnlyHint annotation", () => {
+      const tool = server.tools.get("list_agents")!;
+      const options = tool.options as { annotations?: { readOnlyHint?: boolean } };
+      expect(options.annotations?.readOnlyHint).toBe(true);
     });
   });
 });

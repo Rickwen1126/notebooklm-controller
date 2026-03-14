@@ -25,8 +25,9 @@ import { buildToolsForTab } from "../agent/tools/index.js";
 import { createSessionHooks } from "../agent/hooks.js";
 import { MCP_PORT, AGENTS_DIR_USER, AGENTS_DIR_BUNDLED } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
+import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, unlinkSync } from "node:fs";
-import type { UIMap, AgentConfig, AsyncTask } from "../shared/types.js";
+import type { UIMap, AgentConfig, AsyncTask, OperationActionType, OperationLogEntry } from "../shared/types.js";
 import { TMP_DIR } from "../shared/config.js";
 
 // ---------------------------------------------------------------------------
@@ -62,6 +63,39 @@ interface RunTaskDeps {
   locale: string;
 }
 
+// ---------------------------------------------------------------------------
+// T096: inferActionType — map command text to OperationActionType
+// ---------------------------------------------------------------------------
+
+const ACTION_PATTERNS: Array<[RegExp, OperationActionType]> = [
+  [/加入來源|add.?source|加來源|新增來源|餵入|repo|pdf|url/i, "add-source"],
+  [/更新來源|update.?source/i, "update-source"],
+  [/移除來源|刪除來源|remove.?source|delete.?source/i, "remove-source"],
+  [/問|query|提問|查詢|ask|question/i, "query"],
+  [/產生語音|generate.?audio|audio.?overview/i, "generate-audio"],
+  [/下載語音|download.?audio/i, "download-audio"],
+  [/截圖|screenshot/i, "screenshot"],
+  [/改名來源|rename.?source|重新命名來源/i, "rename-source"],
+  [/改標題|rename.?notebook|重新命名/i, "rename-notebook"],
+  [/列出來源|list.?source|來源列表/i, "list-sources"],
+  [/建立筆記本|create.?notebook|新筆記本/i, "create-notebook"],
+  [/同步|sync/i, "sync"],
+];
+
+function inferActionType(command: string): OperationActionType {
+  for (const [pattern, actionType] of ACTION_PATTERNS) {
+    if (pattern.test(command)) {
+      return actionType;
+    }
+  }
+  return "other";
+}
+
+// ---------------------------------------------------------------------------
+// T068J: runTask factory — wires dual session to scheduler
+// (with T096: operation log recording)
+// ---------------------------------------------------------------------------
+
 function createRunTask(
   deps: RunTaskDeps,
 ): (task: AsyncTask) => Promise<SchedulerSessionResult> {
@@ -69,6 +103,7 @@ function createRunTask(
 
   return async (task: AsyncTask): Promise<SchedulerSessionResult> => {
     const { copilotClient, tabManager, stateManager, networkGate, cacheManager, agentConfigs, locale } = deps;
+    const startTime = Date.now();
 
     // 1. Resolve notebook URL from state.
     const notebook = await stateManager.getNotebook(task.notebookAlias);
@@ -119,6 +154,42 @@ function createRunTask(
         },
         task.command,
       );
+
+      const durationMs = Date.now() - startTime;
+
+      // T096: Record operation log entry after task completes.
+      try {
+        const now = new Date().toISOString();
+        const entry: OperationLogEntry = {
+          id: randomUUID(),
+          taskId: task.taskId,
+          notebookAlias: task.notebookAlias,
+          command: task.command,
+          actionType: inferActionType(task.command),
+          status: result.success ? "success" : "failed",
+          resultSummary: result.success
+            ? (typeof result.result === "object" && result.result !== null
+                ? JSON.stringify(result.result).slice(0, 200)
+                : "completed")
+            : (result.error ?? "unknown error"),
+          startedAt: new Date(startTime).toISOString(),
+          completedAt: now,
+          durationMs,
+        };
+        await cacheManager.addOperation(entry);
+        log.info("Operation log recorded", {
+          taskId: task.taskId,
+          actionType: entry.actionType,
+          status: entry.status,
+          durationMs,
+        });
+      } catch (logErr) {
+        // Non-critical — don't fail the task for a logging error.
+        log.warn("Failed to record operation log", {
+          taskId: task.taskId,
+          error: logErr instanceof Error ? logErr.message : String(logErr),
+        });
+      }
 
       return {
         success: result.success,
@@ -226,7 +297,7 @@ export async function startDaemon(options?: {
   };
   registerDaemonTools(mcpServer, {
     tabManager, scheduler, stateManager, networkGate, taskStore,
-    shutdownFn,
+    shutdownFn, agentConfigs,
   });
   registerNotebookTools(mcpServer, {
     stateManager, tabManager, cacheManager,

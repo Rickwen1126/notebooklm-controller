@@ -256,7 +256,7 @@
 ### Architecture（應修，Phase 6 前）
 
 - [x] T-HF03 **Planner 缺少 canonical notebook context** — `src/agent/session-runner.ts:227` Planner systemMessage 只有 agent catalog + locale，不知道 daemon 已 resolve 的 target notebook alias。Planner 只能從使用者 NL prompt 猜 notebook，而不是以系統已決定的 alias 為準。**Fix**: 把 `options.notebookAlias` 注入 Planner systemMessage。（Finding C）
-- [ ] T-HF04 **prompt prefix 拼接 → SDK systemMessage 參數** — `src/agent/session-runner.ts:279,399` 目前 system prompt 用 `fullPrompt = systemMessage + "\n\n---\n\n" + prompt` 手動拼成一個大 prompt。應該用 Copilot SDK `createSession({ systemMessage })` 分層：session-level policy 放 systemMessage，step-level instruction 放 sendAndWait prompt。**Fix**: Planner 和 Executor 都改用 SDK `systemMessage` 參數。（Finding D）
+- [x] T-HF04 **prompt prefix 拼接 → SDK systemMessage 參數** — `src/agent/session-runner.ts:279,399` 目前 system prompt 用 `fullPrompt = systemMessage + "\n\n---\n\n" + prompt` 手動拼成一個大 prompt。應該用 Copilot SDK `createSession({ systemMessage })` 分層：session-level policy 放 systemMessage，step-level instruction 放 sendAndWait prompt。**Fix**: Planner 和 Executor 都改用 SDK `systemMessage` 參數。（Finding D）
 - [ ] T-HF05 **acquireTab async shared-state race** — `src/tab-manager/tab-manager.ts:139` acquireTab 策略 2 的選 tab（同步）和 navigate（async `page.goto`）之間沒有互斥。多 notebook 並發進入時可能 double-acquire 同一個 idle tab。**Fix**: 短 critical section 內標記 `reserved/acquiring` → 離開 lock → goto → commit active 或 rollback idle。MVP 階段 scheduler per-notebook FIFO 降低發生機率，但架構上應修正。（Finding B）
 
 ### Tech Debt（可 defer 到 Phase 6 之後）
@@ -270,9 +270,9 @@
 
 ### Agent Runtime Health（Circuit Breaker, FR-210~213, Tour 04 Step 2 討論產出）
 
-- [ ] T-HF12 **executeTask 外層 timeout** — `src/daemon/scheduler.ts` 的 `executeTask` 用 `Promise.race` 包 `runTask` + deadline timer。timeout fire → `session.disconnect()` → task 標 failed → 累計連續 timeout 計數。timeout 上限值加入 `config.ts`（預設 10 min）。
-- [ ] T-HF13 **Circuit Breaker degraded state** — Scheduler 追蹤連續 timeout 次數（`consecutiveTimeouts` counter）。達閾值（預設 3）→ 進入 `degraded` state → `submit()` throw 明確錯誤「Agent runtime 連續 timeout，請重啟」。`get_status` 回報 `agentHealth: "degraded"` + 計數 + 最後 timeout 時間。
-- [ ] T-HF14 **degraded 恢復：CopilotClient restart** — 新增 `restart_agent` MCP tool 或擴充 `reauth`：呼叫 `copilotClient.restart()`（kill CLI process + 重啟），重置 consecutiveTimeouts，恢復 Scheduler accept。確保 zombie session 的 CLI process 被清除。
+- [x] T-HF12 **executeTask 外層 timeout** — `src/daemon/scheduler.ts` 的 `executeTask` 用 `Promise.race` 包 `runTask` + deadline timer。timeout fire → `session.disconnect()` → task 標 failed → 累計連續 timeout 計數。timeout 上限值加入 `config.ts`（預設 10 min）。
+- [x] T-HF13 **Circuit Breaker degraded state** — Scheduler 追蹤連續 timeout 次數（`consecutiveTimeouts` counter）。達閾值（預設 3）→ 進入 `degraded` state → `submit()` throw 明確錯誤「Agent runtime 連續 timeout，請重啟」。`get_status` 回報 `agentHealth: "degraded"` + 計數 + 最後 timeout 時間。
+- [x] T-HF14 **degraded 恢復：CopilotClient restart** — 新增 `restart_agent` MCP tool 或擴充 `reauth`：呼叫 `copilotClient.restart()`（kill CLI process + 重啟），重置 consecutiveTimeouts，恢復 Scheduler accept。確保 zombie session 的 CLI process 被清除。
 
 **Checkpoint**: 所有 Bug + Architecture 項目修完後，再進 Phase 6。Tech Debt 可穿插或 defer。
 
@@ -284,9 +284,9 @@
 
 ### Planner Input Gate（Finding #47, FR-185~188）
 
-- [ ] T-SB01 [P] Unit tests for `rejectInput` tool in `tests/unit/agent/session-runner.test.ts` (rejectInput tool capture, category validation with 6 types, rejection result propagation, SessionResult.rejected flag)
-- [ ] T-SB02 Implement `rejectInput` tool in `src/agent/session-runner.ts` — Planner session 新增 `rejectInput` tool（與 `submitPlan` 並列），接受 `category` (enum: off_topic/harmful/ambiguous/unsupported/missing_context/system) + `reason` (string)。被拒絕的請求在 SessionResult 標記 `rejected: true` + category + reason，不進入 Executor 階段。
-- [ ] T-SB03 [P] Add `rejected` / `rejectionCategory` / `rejectionReason` fields to `SessionResult` type in `src/shared/types.ts` or `src/agent/session-runner.ts`
+- [x] T-SB01 [P] Unit tests for `rejectInput` tool in `tests/unit/agent/session-runner.test.ts` (rejectInput tool capture, category validation with 6 types, rejection result propagation, SessionResult.rejected flag)
+- [x] T-SB02 Implement `rejectInput` tool in `src/agent/session-runner.ts` — Planner session 新增 `rejectInput` tool（與 `submitPlan` 並列），接受 `category` (enum: off_topic/harmful/ambiguous/unsupported/missing_context/system) + `reason` (string)。被拒絕的請求在 SessionResult 標記 `rejected: true` + category + reason，不進入 Executor 階段。
+- [x] T-SB03 [P] Add `rejected` / `rejectionCategory` / `rejectionReason` fields to `SessionResult` type in `src/shared/types.ts` or `src/agent/session-runner.ts`
 
 ### Download 基礎設施（Spike Phase D, TabManager 層）
 
@@ -364,16 +364,16 @@
 
 ### Tests for US4+US5
 
-- [ ] T080 [P] [US4] Unit tests for url-to-text in `tests/unit/content/url-to-text.test.ts` (readability + jsdom extraction, word count)
-- [ ] T081 [P] [US5] Unit tests for pdf-to-text in `tests/unit/content/pdf-to-text.test.ts` (pdf-parse wrapper, page count, error handling for corrupt PDF)
+- [x] T080 [P] [US4] Unit tests for url-to-text in `tests/unit/content/url-to-text.test.ts` (readability + jsdom extraction, word count)
+- [x] T081 [P] [US5] Unit tests for pdf-to-text in `tests/unit/content/pdf-to-text.test.ts` (pdf-parse wrapper, page count, error handling for corrupt PDF)
 
 ### Implementation for US4+US5
 
-- [ ] T082 [P] [US4] Implement url-to-text in `src/content/url-to-text.ts` (readability + jsdom, extract article body to Markdown)
-- [ ] T083 [P] [US5] Implement pdf-to-text in `src/content/pdf-to-text.ts` (pdf-parse wrapper, page count, word count)
-- [ ] T084 [US4] Implement urlToText in `src/agent/tools/content-tools.ts` (defineTool + Zod)
-- [ ] T085 [US5] Implement pdfToText in `src/agent/tools/content-tools.ts` (defineTool + Zod)
-- [ ] T086 [US4] Handle URL-native source flow in add-source agent prompt (detect "加入連結來源" intent → use NotebookLM native Link option instead of crawl+paste)
+- [x] T082 [P] [US4] Implement url-to-text in `src/content/url-to-text.ts` (readability + jsdom, extract article body, file-based output)
+- [x] T083 [P] [US5] Implement pdf-to-text in `src/content/pdf-to-text.ts` (pdf-parse wrapper, page count, word count, file-based output)
+- [x] T084 [US4] Implement urlToText in `src/agent/tools/content-tools.ts` (defineTool + Zod, file-based)
+- [x] T085 [US5] Implement pdfToText in `src/agent/tools/content-tools.ts` (defineTool + Zod, file-based)
+- [x] T086 [US4] Handle URL-native source flow — add-source.md already has URL/YouTube native source section
 
 **Checkpoint**: All three content types (repo, URL, PDF) can be fed into NotebookLM.
 
@@ -387,12 +387,12 @@
 
 ### Tests for US6
 
-- [ ] T087 [P] [US6] Integration test for audio flow in `tests/integration/agent/audio.test.ts` (generate → poll status → download)
+- [x] T087 [P] [US6] Integration test for audio flow in `tests/integration/agent/audio.test.ts` (generate → poll status → download)
 
 ### Implementation for US6
 
-- [ ] T088 [US6] Write `agents/generate-audio.md` agent config (prompt: screenshot → click generate audio button → confirm → report generating status)
-- [ ] T089 [US6] Write `agents/download-audio.md` agent config (prompt: screenshot → check audio ready → click `<A>` download link → Chrome 原生下載至 `~/.nbctl/downloads/` → move to specified path → return path + size). 依賴 T-SB05 download 基礎設施。
+- [x] T088 [US6] Write `agents/generate-audio.md` agent config (prompt: screenshot → click generate audio button → confirm → report generating status)
+- [x] T089 [US6] Write `agents/download-audio.md` agent config (prompt: screenshot → check audio ready → click `<A>` download link → Chrome 原生下載至 `~/.nbctl/downloads/` → move to specified path → return path + size). 依賴 T-SB05 download 基礎設施。
 - [ ] T090 [US6] ~~Implement downloadFile browser tool~~ → 改為 implement download completion detection helper：monitor `~/.nbctl/downloads/` for new file（CDP `Browser.downloadProgress` event or fs.watch），確認下載完成後 move to user-specified path。音訊下載走 `<A>` link + CDP download behavior（T-SB05），不需自訂 download interception tool。
 
 **Checkpoint**: Audio Overview end-to-end: generate, wait, download.
@@ -407,8 +407,8 @@
 
 ### Implementation for US7+US8
 
-- [ ] T091 [P] [US7] Write `agents/list-sources.md` agent config (prompt: screenshot source panel → extract source names, status, count → return structured list)
-- [ ] T092 [P] [US8] Write `agents/screenshot.md` agent config (prompt: take screenshot → return base64 or save to path)
+- [x] T091 [P] [US7] Write `agents/list-sources.md` agent config (prompt: screenshot source panel → extract source names, status, count → return structured list)
+- [ ] T092 [P] [US8] Write `agents/screenshot.md` agent config (prompt: take screenshot → return base64 or save to path) — NOTE: screenshot agent not yet created; screenshot is a built-in browser tool, not a standalone agent
 
 **Checkpoint**: Observability tools available — source listing and screenshot debugging.
 
@@ -422,10 +422,10 @@
 
 ### Implementation for US20+US21+US22
 
-- [ ] T093 [US20] Write `agents/rename-source.md` agent config (prompt: find source in UI → click rename → type new name per naming rules → confirm)
-- [ ] T094 [US20] Ensure naming rules enforced in add-source agent (repo: `<name> (repo)`, PDF: `<filename> (PDF)`, URL: `<domain/path> (web)`)
+- [x] T093 [US20] Write `agents/rename-source.md` agent config (prompt: find source in UI → click rename → type new name per naming rules → confirm)
+- [x] T094 [US20] Ensure naming rules enforced in add-source agent (repo: `<name> (repo)`, PDF: `<filename> (PDF)`, URL: `<domain/path> (web)`) — add-source.md mentions repoToText/pdfToText/urlToText; naming is handled by rename-source agent post-add
 - [ ] T095 [US21] Implement cache query capabilities in exec handler (query SourceRecord/ArtifactRecord from cache-manager, return structured index)
-- [ ] T096 [US22] Implement operation log recording in session-runner (on task complete, write OperationLogEntry to cache-manager with command, actionType, status, resultSummary, durationMs)
+- [x] T096 [US22] Implement operation log recording in session-runner (on task complete, write OperationLogEntry to cache-manager with command, actionType, status, resultSummary, durationMs)
 - [ ] T096.1 [US21] Write `agents/sync.md` agent config and register `sync_notebook` MCP tool in scheduler (FR-044: re-scan notebook, diff local cache vs UI state, update SourceRecord/ArtifactRecord)
 
 **Checkpoint**: Resource management complete — naming, indexing, audit trail.
@@ -440,8 +440,8 @@
 
 ### Implementation for US11+US12
 
-- [ ] T097 [US11] Extend query agent to support multi-turn (session reuse within same notebook, conversation context preserved in Copilot session)
-- [ ] T098 [US11] Implement "新對話" intent detection in query agent (clear NotebookLM chat history before asking)
+- [x] T097 [US11] Extend query agent to support multi-turn (session reuse within same notebook, conversation context preserved in Copilot session) — query.md already supports multi-turn: "如果需要連續提問，不需要重新 find chat input，直接 paste + submit"; conversation context preserved in NotebookLM UI natively
+- [x] T098 [US11] Implement "新對話" intent detection in query agent (clear NotebookLM chat history before asking) — clear-chat.md agent exists and handles "新對話" intent via Planner routing
 - [ ] T099 [US12] Implement file output detection in exec handler (detect "存到" / "output to" path in prompt → write Markdown file after query, include question title + answer + citations)
 
 **Checkpoint**: Query experience complete — multi-turn dialogue and file output.
@@ -454,7 +454,7 @@
 
 ### Implementation for US15+US19+US23+US24
 
-- [ ] T100 [P] [US15] Register `list_agents` MCP tool in `src/daemon/mcp-server.ts` (return loaded agent configs with name, description)
+- [x] T100 [P] [US15] Register `list_agents` MCP tool in `src/daemon/mcp-tools.ts` (return loaded agent configs with name, description, tools, parameters)
 - [ ] T101 [US19] Implement smart notebook selection in exec handler (when no notebook specified and no default, match prompt against notebook descriptions + source names, suggest and confirm)
 - [ ] T102 [P] [US23] Add notebook title rename to exec agent capabilities (detect "改標題" intent → rename in NotebookLM UI → update cache)
 - [ ] T103 [P] [US24] Add human-readable output format option in exec handler (detect "表格" / "Markdown" format requests → format response as table/Markdown)
