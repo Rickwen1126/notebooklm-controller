@@ -342,7 +342,7 @@ export async function startDaemon(options?: {
     shutdownFn, agentConfigs, googleSession,
   });
   registerNotebookTools(mcpServer, {
-    stateManager, tabManager, cacheManager,
+    stateManager, tabManager, cacheManager, scheduler, taskStore,
   });
   registerExecTools(mcpServer, {
     scheduler, stateManager, taskStore,

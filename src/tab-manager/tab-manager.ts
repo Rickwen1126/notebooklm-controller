@@ -65,6 +65,8 @@ export class TabManager extends EventEmitter {
           "--no-default-browser-check",
           "--disable-extensions",
           "--disable-blink-features=AutomationControlled",
+          "--disable-session-crashed-bubble",
+          "--noerrdialogs",
           "--window-size=1440,900",
         ],
       });

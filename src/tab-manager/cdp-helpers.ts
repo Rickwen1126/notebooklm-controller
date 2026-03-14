@@ -136,24 +136,52 @@ function parseShortcut(text: string): { modifiers: number; key: string; code: st
   // Single letter key (e.g. "A" in "Ctrl+A")
   if (keyName.length === 1) {
     const lower = keyName.toLowerCase();
+    const upper = keyName.toUpperCase();
     return {
       modifiers,
       key: lower,
-      code: `Key${keyName.toUpperCase()}`,
-      keyCode: lower.charCodeAt(0),
+      code: `Key${upper}`,
+      keyCode: upper.charCodeAt(0), // windowsVirtualKeyCode uses uppercase (65 for A, not 97)
     };
   }
 
   return null;
 }
 
+/** Map modifier bit to the key event properties for pressing that modifier. */
+const MODIFIER_KEY_EVENTS: Record<number, { key: string; code: string; keyCode: number }> = {
+  1: { key: "Alt",     code: "AltLeft",     keyCode: 18 },
+  2: { key: "Control", code: "ControlLeft", keyCode: 17 },
+  4: { key: "Meta",    code: "MetaLeft",    keyCode: 91 },
+  8: { key: "Shift",   code: "ShiftLeft",   keyCode: 16 },
+};
+
 /**
  * Dispatch a keyboard shortcut (e.g. Ctrl+A) via CDP.
+ *
+ * Sends explicit modifier keyDown → key press → modifier keyUp sequence,
+ * which is how real keyboards work and what Chrome expects.
  */
 async function dispatchKeyCombo(
   cdp: CDPSession,
   combo: { modifiers: number; key: string; code: string; keyCode: number },
 ): Promise<void> {
+  // 1. Press modifier keys down
+  const activeModifiers: number[] = [];
+  for (const [bit, evt] of Object.entries(MODIFIER_KEY_EVENTS)) {
+    const bitNum = Number(bit);
+    if (combo.modifiers & bitNum) {
+      activeModifiers.push(bitNum);
+      await cdp.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: evt.key,
+        code: evt.code,
+        windowsVirtualKeyCode: evt.keyCode,
+      });
+    }
+  }
+
+  // 2. Press the actual key
   await cdp.send("Input.dispatchKeyEvent", {
     type: "keyDown",
     modifiers: combo.modifiers,
@@ -168,6 +196,17 @@ async function dispatchKeyCombo(
     code: combo.code,
     windowsVirtualKeyCode: combo.keyCode,
   });
+
+  // 3. Release modifier keys (reverse order)
+  for (const bitNum of activeModifiers.reverse()) {
+    const evt = MODIFIER_KEY_EVENTS[bitNum];
+    await cdp.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: evt.key,
+      code: evt.code,
+      windowsVirtualKeyCode: evt.keyCode,
+    });
+  }
 }
 
 /**

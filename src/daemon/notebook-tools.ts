@@ -13,11 +13,14 @@
 
 import { z } from "zod";
 import type { NbctlMcpServer } from "./mcp-server.js";
+import type { Scheduler } from "./scheduler.js";
 import type { TabManager } from "../tab-manager/tab-manager.js";
 import type { StateManager } from "../state/state-manager.js";
+import type { TaskStore } from "../state/task-store.js";
 import type { CacheManager } from "../state/cache-manager.js";
 import type { NotebookEntry } from "../shared/types.js";
 import { NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
+import { logger } from "../shared/logger.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -40,6 +43,9 @@ export interface NotebookToolDeps {
   stateManager: StateManager;
   tabManager: TabManager;
   cacheManager: CacheManager;
+  /** Required for create_notebook (runs agent via scheduler). */
+  scheduler?: Scheduler;
+  taskStore?: TaskStore;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,12 +93,175 @@ export function registerNotebookTools(
   server: NbctlMcpServer,
   deps: NotebookToolDeps,
 ): void {
+  registerCreateNotebook(server, deps);
   registerAddNotebook(server, deps);
   registerAddAllNotebooks(server);
   registerListNotebooks(server, deps);
   registerSetDefault(server, deps);
   registerRenameNotebook(server, deps);
   registerRemoveNotebook(server, deps);
+}
+
+// ---------------------------------------------------------------------------
+// create_notebook — create a new notebook on NotebookLM and auto-register
+// ---------------------------------------------------------------------------
+
+function registerCreateNotebook(
+  server: NbctlMcpServer,
+  deps: NotebookToolDeps,
+): void {
+  const log = logger.child({ module: "create_notebook" });
+
+  server.registerTool(
+    "create_notebook",
+    {
+      description:
+        "Create a new notebook on NotebookLM with the given title. " +
+        "Automatically registers it so it can be used immediately. " +
+        "Returns the alias, URL, and title.",
+      inputSchema: {
+        title: z
+          .string()
+          .describe("Title for the new notebook"),
+        alias: z
+          .string()
+          .optional()
+          .describe(
+            "Alias for the notebook (auto-generated from title if omitted). " +
+            "1-50 chars, lowercase alphanumeric + hyphens.",
+          ),
+      },
+    },
+    async (args: { title?: string; alias?: string }) => {
+      try {
+        const title = args.title?.trim() ?? "";
+        if (!title) {
+          return errorResult("'title' parameter is required");
+        }
+
+        if (!deps.scheduler || !deps.taskStore) {
+          return errorResult("create_notebook requires scheduler (internal configuration error)");
+        }
+
+        // Generate alias from title if not provided
+        const generated =
+          title
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-|-$/g, "")
+            .slice(0, 50) || "notebook";
+        const alias = args.alias ?? generated;
+
+        const aliasError = validateAlias(alias);
+        if (aliasError) {
+          return errorResult(aliasError);
+        }
+
+        // Check alias not already taken
+        const state = await deps.stateManager.load();
+        if (state.notebooks[alias]) {
+          return errorResult(`Alias already exists: "${alias}"`);
+        }
+
+        // 1. Submit task to create + rename the notebook via agent
+        log.info("Creating notebook via agent", { title, alias });
+
+        const task = await deps.scheduler.submit({
+          notebookAlias: "__homepage__",
+          command: `建立一本新的筆記本，標題必須完全是「${title}」。建立後務必驗證首頁上的標題完全正確，不能有多餘文字。`,
+        });
+
+        await deps.scheduler.waitForTask(task.taskId);
+
+        const completed = await deps.taskStore.get(task.taskId);
+        if (!completed || completed.status !== "completed") {
+          const err = completed?.error ?? "Task failed";
+          return errorResult(`Failed to create notebook: ${err}`);
+        }
+
+        // 2. Open homepage tab to find the notebook URL from DOM
+        log.info("Extracting notebook URL from homepage");
+
+        const tab = await deps.tabManager.openTab("__create-extract__", NOTEBOOKLM_HOMEPAGE);
+        await new Promise((resolve) => setTimeout(resolve, 4_000));
+
+        const notebookUrl = await tab.page.evaluate((searchTitle: string) => {
+          // Strategy 1: <a> with /notebook/ in href whose subtree contains the title
+          const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/notebook/"]'));
+          for (const link of links) {
+            const text = link.textContent?.trim() ?? "";
+            if (text.includes(searchTitle)) {
+              return link.href;
+            }
+          }
+
+          // Strategy 2: find any element with the title text, walk up to find
+          // the nearest <a> ancestor with /notebook/ href
+          const walker = document.createTreeWalker(
+            document.body,
+            NodeFilter.SHOW_TEXT,
+          );
+          let node: Node | null;
+          while ((node = walker.nextNode())) {
+            if (node.textContent?.includes(searchTitle)) {
+              let el = node.parentElement;
+              while (el) {
+                if (el.tagName === "A") {
+                  const href = (el as HTMLAnchorElement).href;
+                  if (href.includes("/notebook/")) return href;
+                }
+                el = el.parentElement;
+              }
+            }
+          }
+
+          // Strategy 3: just grab the most recently added notebook link
+          // (first /notebook/ link on the page, as NotebookLM sorts by recent)
+          if (links.length > 0) {
+            return (links[0] as HTMLAnchorElement).href;
+          }
+
+          return null;
+        }, title);
+
+        await deps.tabManager.closeTab(tab.tabId);
+
+        if (!notebookUrl) {
+          return errorResult(
+            `Notebook "${title}" was created but could not find its URL on the homepage. ` +
+            `Use register_notebook to manually register it.`,
+          );
+        }
+
+        // 3. Auto-register
+        const now = new Date().toISOString();
+        const entry: NotebookEntry = {
+          alias,
+          url: notebookUrl,
+          title,
+          description: "",
+          status: "ready",
+          registeredAt: now,
+          lastAccessedAt: now,
+          sourceCount: 0,
+        };
+
+        await deps.stateManager.addNotebook(entry);
+
+        log.info("Notebook created and registered", { alias, url: notebookUrl, title });
+
+        return jsonResult({
+          success: true,
+          alias,
+          url: notebookUrl,
+          title,
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return errorResult(message);
+      }
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------

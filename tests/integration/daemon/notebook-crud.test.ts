@@ -161,8 +161,9 @@ describe("T048: Notebook CRUD integration", () => {
   // 1. All 7 notebook management tools are registered
   // -----------------------------------------------------------------------
 
-  it("registers all 6 notebook management tools", () => {
+  it("registers all 7 notebook management tools", () => {
     const expectedTools = [
+      "create_notebook",
       "register_notebook",
       "register_all_notebooks",
       "list_notebooks",
@@ -177,7 +178,7 @@ describe("T048: Notebook CRUD integration", () => {
 
     expect(server.tools.has("open_notebook")).toBe(false);
     expect(server.tools.has("close_notebook")).toBe(false);
-    expect(server.registerTool).toHaveBeenCalledTimes(6);
+    expect(server.registerTool).toHaveBeenCalledTimes(7);
   });
 
   // -----------------------------------------------------------------------
