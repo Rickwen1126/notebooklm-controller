@@ -87,9 +87,9 @@ src/
 │   ├── hooks.ts         # SessionHooks（onPreToolUse→NetworkGate, onErrorOccurred, onSessionEnd）
 │   ├── agent-loader.ts  # Load YAML → CustomAgentConfig[]（SDK 原生型別）
 │   └── tools/           # Agent tool definitions（defineTool + Zod）
-│       ├── browser-tools.ts  # 9 tools: screenshot, click, type, scroll, paste, find, read, navigate, wait
-│       │                      # 接收 TabHandle，從 spike 複製並適配
-│       ├── content-tools.ts  # repoToText, urlToText, pdfToText
+│       ├── browser-tools.ts  # 9 tools: screenshot, click, type, scroll, paste(+filePath), find, read, navigate, wait
+│       │                      # 接收 TabHandle，從 spike 複製並適配。paste 支援 filePath 讀檔貼入
+│       ├── content-tools.ts  # repoToText, urlToText, pdfToText（file-based pass-through: temp file → filePath）
 │       ├── state-tools.ts    # reportRateLimit, updateCache, writeFile
 │       └── index.ts          # Tool registry: buildToolsForTab(tabHandle) → Tool[]
 ├── content/             # Content pipeline（pure functions, no SDK dependency）— utils layer
@@ -175,6 +175,9 @@ tests/
 4. Agent config 載入併入 `agent/` 模組（`agent-loader.ts`），不再獨立 `skill/` 模組。
    YAML agent config → `agent-loader.ts` → `CustomAgentConfig { name, prompt, tools }`。
 5. `content/` 維持純函數，不直接依賴 SDK——透過 `agent/tools/content-tools.ts` 包裝為 `defineTool()`。
+   **File-based pass-through**（Finding #51）：content tools 寫 temp file → 返回 filePath + metrics →
+   paste tool 讀檔貼入。**Tool boundary = context boundary**——LLM 根本拿不到文字內容（0 token 消耗），
+   是架構層面保證，不是 prompt-level instruction。所有 content tools（repo/URL/PDF）同一模式。
 
 **Per-task execution flow (Two-Session Planner+Executor)**:
 ```

@@ -1138,10 +1138,18 @@ notebook 包含哪些來源是一種認知負擔。
   - repoToText：將 git repo 轉換為單一文字
   - urlToText：將網頁轉換為 Markdown
   - pdfToText：將 PDF 轉換為 Markdown
+- **FR-009.1**（Spike Finding #51, file-based paste）: Content tools 的轉換結果 MUST 走 temp file
+  pass-through，不進 LLM context。repoToText handler 寫 temp file（`~/.nbctl/tmp/`），
+  返回 `{ filePath, charCount, wordCount }` → paste tool 接受 `filePath` 參數，handler 讀檔貼入。
+  **Tool boundary = context boundary**：LLM 根本拿不到文字內容（0 token 消耗），
+  這是架構層面的保證，不是 prompt-level instruction。
+  urlToText / pdfToText 同理。NotebookLM 無前端字數限制（Spike 驗證 500K / 83ms）。
 - **FR-010**: Agent MUST 能解讀自然語言指令，判斷使用者意圖，並自主呼叫對應 tools。
 
 **NotebookLM 互動**:
 - **FR-011**: 系統 MUST 支援透過「Copied text」方式新增文字來源。
+  paste tool MUST 支援 `filePath` 參數——有 filePath 時讀檔貼入，
+  text 不經 LLM context（FR-009.1 file-based pass-through）。
 - **FR-012**: 系統 MUST 支援透過「Link」方式新增 URL 來源。
 - **FR-013**: 系統 MUST 支援觸發 Audio Overview 產生。
 - **FR-014**: 系統 MUST 支援下載已產生的 Audio Overview 到本機檔案。
