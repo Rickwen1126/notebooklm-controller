@@ -22,7 +22,7 @@ import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import type { CopilotClientSingleton } from "./client.js";
 import { buildPlannerCatalog } from "./agent-loader.js";
-import { DEFAULT_SESSION_TIMEOUT_MS, DEFAULT_AGENT_MODEL } from "../shared/config.js";
+import { DEFAULT_SESSION_TIMEOUT_MS, DEFAULT_AGENT_MODEL, NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
 import type { AgentConfig, ExecutionPlan, ExecutionStep } from "../shared/types.js";
 
@@ -49,7 +49,10 @@ export interface SessionResult {
   success: boolean;
   result?: unknown;
   error?: string;
-  durationMs: number;
+  /** Base64-encoded screenshot captured on error (if available). */
+  errorScreenshot?: string;
+  /** Duration of the session in milliseconds. Present when returned by session-runner. */
+  durationMs?: number;
   /** Set to true when the Planner rejects the input instead of producing a plan. */
   rejected?: boolean;
   /** Rejection category. Present only when rejected is true. */
@@ -263,32 +266,33 @@ export async function runPlannerSession(
   // Canonical notebook context for Planner (T-HF03)
   const notebookAlias = options.notebookAlias;
 
-  const plannerSystemMessage = `你是 NotebookLM 控制器的 Planner。你的任務是分析使用者的自然語言指令，選擇正確的 agent config，組裝結構化 prompt 給 Executor 執行。
+  const plannerSystemMessage = `You are the Planner for a NotebookLM controller. Your task is to analyze the user's natural-language instruction, select the correct agent config, and assemble a structured prompt for the Executor to carry out.
 
-## 目標 Notebook
+## Target Notebook
 
-操作目標：${notebookAlias}
-（系統已 resolve 的 notebook alias，不需要從使用者指令中猜測）
+Target: ${notebookAlias}
+(This notebook alias has already been resolved by the system — do not guess it from the user's instruction.)
 
-## 可用的 Agent Configs
+## Available Agent Configs
 
 ${agentCatalog}
 
-## 你的輸出
+## Your Output
 
-呼叫 submitPlan tool，提交執行計畫。每個 step 包含：
-- agentName: 選擇的 agent config 名稱
-- executorPrompt: 給 Executor 的明確操作指令（中文，包含具體參數值）
-- tools: 該操作需要的 tool 名稱列表（從 agent config 的 tools 欄位取）
+Call the submitPlan tool to submit an execution plan. Each step contains:
+- agentName: the name of the agent config to use
+- executorPrompt: a clear, specific instruction for the Executor (include concrete parameter values)
+- tools: the list of tool names needed for this step (taken from the agent config's tools field)
 
-## 規則
+## Rules
 
-1. 單一操作 → 1 個 step
-2. 複合操作（如「加來源然後問問題」）→ 多個 steps，按順序排列
-3. executorPrompt 必須明確，不能含糊。例如不是「問一個問題」而是「向 NotebookLM 提問：TypeScript 的優勢是什麼？」
-4. 不要自己執行操作，只做規劃
-5. 如果使用者的請求與 NotebookLM 操作無關、有害、語意不清、缺少必要資訊、或不支援，呼叫 rejectInput tool 並提供分類和原因，不要呼叫 submitPlan
-6. 當前 locale: ${locale}`;
+1. A single operation produces exactly 1 step.
+2. A compound operation (e.g. "add a source then ask a question") produces multiple steps in order.
+3. executorPrompt must be specific, never vague. For example, not "ask a question" but "Ask NotebookLM: What are the advantages of TypeScript?"
+4. Do not execute operations yourself — only plan.
+5. If the user's request is unrelated to NotebookLM operations, harmful, ambiguous, missing required context, or unsupported, call the rejectInput tool with a category and reason. Do not call submitPlan.
+6. The user's input may be in any language. Always understand their intent regardless of language.
+7. Current locale: ${locale}`;
 
   // Capture plan or rejection via closure.
   let capturedPlan: ExecutionPlan | null = null;
@@ -433,6 +437,22 @@ export async function runExecutorSession(
     if (screenshotTool) filteredTools.push(screenshotTool);
   }
 
+  // Warn if any requested tools (excluding auto-included "screenshot") were not found.
+  const matchedNames = new Set(
+    filteredTools.map((t) => (t as { name?: string }).name ?? ""),
+  );
+  const expectedCount = Array.from(toolNameSet).filter((n) => n !== "screenshot").length;
+  const foundCount = Array.from(toolNameSet).filter((n) => n !== "screenshot" && matchedNames.has(n)).length;
+  if (foundCount < expectedCount) {
+    const unmatched = Array.from(toolNameSet).filter(
+      (n) => n !== "screenshot" && !matchedNames.has(n),
+    );
+    log.warn("Executor tool filtering: unmatched tool names (possible typo in plan)", {
+      agentName: step.agentName,
+      unmatched,
+    });
+  }
+
   // 3. Build Executor systemMessage: tool constraint + canonical context + agent prompt.
   const toolList = [...step.tools, "screenshot"].join(", ");
   const constraint = TOOL_CONSTRAINT_PREAMBLE.replace("{TOOL_LIST}", toolList);
@@ -443,13 +463,12 @@ export async function runExecutorSession(
   // FR-179: Pre-navigate hint (O(1) URL exact match, hint not assertion)
   let navigateHint = "";
   if (options.tabUrl && agentConfig.startPage) {
-    const HOMEPAGE_URL = "https://notebooklm.google.com";
     const expectHomepage = agentConfig.startPage === "homepage";
-    const isOnHomepage = options.tabUrl === HOMEPAGE_URL || options.tabUrl === HOMEPAGE_URL + "/";
-    const isOnNotebook = options.tabUrl.startsWith(HOMEPAGE_URL + "/notebook/");
+    const isOnHomepage = options.tabUrl === NOTEBOOKLM_HOMEPAGE || options.tabUrl === NOTEBOOKLM_HOMEPAGE + "/";
+    const isOnNotebook = options.tabUrl.startsWith(NOTEBOOKLM_HOMEPAGE + "/notebook/");
 
     if (expectHomepage && !isOnHomepage) {
-      navigateHint = `[系統提示: 此 agent 預期在 homepage 操作，但目前頁面為 ${options.tabUrl}。建議先 navigate 至 ${HOMEPAGE_URL}]\n\n`;
+      navigateHint = `[系統提示: 此 agent 預期在 homepage 操作，但目前頁面為 ${options.tabUrl}。建議先 navigate 至 ${NOTEBOOKLM_HOMEPAGE}]\n\n`;
     } else if (!expectHomepage && !isOnNotebook) {
       navigateHint = `[系統提示: 此 agent 預期在 notebook 頁面操作，但目前頁面為 ${options.tabUrl}]\n\n`;
     }

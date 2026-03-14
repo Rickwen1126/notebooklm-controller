@@ -156,16 +156,31 @@ export class TabManager extends EventEmitter {
       }
     }
 
-    // 2. Any idle tab
+    // 2. Any idle tab — mark active before async navigate to prevent race condition
     for (const tab of this.tabs.values()) {
       if (tab.state === "idle") {
-        await tab.page.goto(params.url);
+        // Mark as active immediately so concurrent callers skip this tab.
         tab.state = "active";
         tab.notebookAlias = params.notebookAlias;
         tab.url = params.url;
         tab.acquiredAt = new Date().toISOString();
         tab.timeoutAt = new Date(Date.now() + DEFAULT_SESSION_TIMEOUT_MS).toISOString();
         tab.releasedAt = null;
+
+        try {
+          await tab.page.goto(params.url);
+        } catch (err) {
+          // Navigate failed — rollback state so the tab can be reused.
+          tab.state = "idle";
+          tab.releasedAt = new Date().toISOString();
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn("Tab navigate failed during acquire, rolling back to idle", {
+            tabId: tab.tabId,
+            error: msg,
+          });
+          throw err;
+        }
+
         log.info("Tab acquired (reuse)", { tabId: tab.tabId, notebookAlias: params.notebookAlias });
         return tab;
       }
@@ -271,9 +286,12 @@ export class TabManager extends EventEmitter {
       throw new ChromeError("Browser is not launched");
     }
 
-    if (this.tabs.size > 0) {
+    const activeCount = Array.from(this.tabs.values()).filter(
+      (t) => t.state === "active",
+    ).length;
+    if (activeCount > 0) {
       throw new ChromeError(
-        `Cannot switch mode: ${this.tabs.size} active tab(s). Close them first.`,
+        `Cannot switch mode: ${activeCount} active tab(s). Close them first.`,
       );
     }
 

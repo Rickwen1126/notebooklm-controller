@@ -17,12 +17,13 @@ import type { TabManager } from "../tab-manager/tab-manager.js";
 import type { StateManager } from "../state/state-manager.js";
 import type { CacheManager } from "../state/cache-manager.js";
 import type { NotebookEntry } from "../shared/types.js";
+import { NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const NOTEBOOK_URL_PREFIX = "https://notebooklm.google.com/notebook/";
+const NOTEBOOK_URL_PREFIX = `${NOTEBOOKLM_HOMEPAGE}/notebook/`;
 
 /**
  * Alias validation regex:

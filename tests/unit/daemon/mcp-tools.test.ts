@@ -49,6 +49,7 @@ function createMockDeps(overrides?: Partial<ToolRegistrationDeps>): ToolRegistra
     } as unknown as ToolRegistrationDeps["tabManager"],
     scheduler: {
       getQueueSize: vi.fn().mockReturnValue(0),
+      getRunningCount: vi.fn().mockReturnValue(0),
       getHealth: vi.fn().mockReturnValue({
         healthy: true,
         consecutiveTimeouts: 0,

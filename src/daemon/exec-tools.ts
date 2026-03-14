@@ -111,8 +111,30 @@ function registerExec(
         }
 
         if (!notebookAlias) {
+          // T101: Smart notebook selection hint — load all notebooks and
+          // include their descriptions so the caller can pick the right one.
+          const allState = await deps.stateManager.load();
+          const notebooks = Object.values(allState.notebooks);
+          if (notebooks.length === 0) {
+            return errorResult(
+              "No target notebook. No notebooks registered. Use add_notebook tool first.",
+            );
+          }
+
+          const notebookHints = notebooks.map((nb) => {
+            const desc = nb.description
+              ? ` — ${nb.description}`
+              : nb.title
+                ? ` — ${nb.title}`
+                : "";
+            return `  - ${nb.alias}${desc} (${nb.sourceCount} sources)`;
+          });
+
           return errorResult(
-            "No target notebook. Specify 'notebook' parameter or call set_default tool.",
+            "No target notebook specified and no default set. " +
+            "Available notebooks:\n" +
+            notebookHints.join("\n") +
+            "\n\nSpecify 'notebook' parameter or call set_default tool.",
           );
         }
 

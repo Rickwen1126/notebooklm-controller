@@ -11,18 +11,13 @@ import { logger } from "../shared/logger.js";
 import { MAX_TASK_TIMEOUT_MS, CIRCUIT_BREAKER_THRESHOLD } from "../shared/config.js";
 import type { TaskStore } from "../state/task-store.js";
 import type { AsyncTask } from "../shared/types.js";
+import type { SessionResult } from "../agent/session-runner.js";
+
+export type { SessionResult };
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-/** Result returned by the injected runTask function. */
-export interface SessionResult {
-  success: boolean;
-  result?: object;
-  error?: string;
-  errorScreenshot?: string;
-}
 
 /** Health snapshot returned by getHealth(). */
 export interface AgentHealth {
@@ -197,6 +192,14 @@ export class Scheduler {
       total += queue.length;
     }
     return total;
+  }
+
+  // -------------------------------------------------------------------------
+  // getRunningCount — number of currently executing tasks (T-HF08)
+  // -------------------------------------------------------------------------
+
+  getRunningCount(): number {
+    return this.cancellationFlags.size;
   }
 
   // -------------------------------------------------------------------------
@@ -427,7 +430,7 @@ export class Scheduler {
         );
         if (result.result) {
           finalTask = await this.taskStore.update(task.taskId, {
-            result: result.result,
+            result: result.result as object,
           });
         }
       } else {

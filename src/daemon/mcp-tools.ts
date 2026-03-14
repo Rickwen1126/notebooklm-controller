@@ -151,7 +151,7 @@ function registerGetStatus(
         activeNotebooks: Object.keys(state.notebooks),
         defaultNotebook: state.defaultNotebook,
         pendingTasks: deps.scheduler.getQueueSize(),
-        runningTasks: 0, // TODO: expose from scheduler when available
+        runningTasks: deps.scheduler.getRunningCount(),
         agentHealth: deps.scheduler.getHealth(),
       };
 

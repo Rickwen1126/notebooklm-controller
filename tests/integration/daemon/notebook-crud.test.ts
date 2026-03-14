@@ -29,9 +29,10 @@ vi.mock("../../../src/shared/logger.js", () => {
 // Mock: config
 // ---------------------------------------------------------------------------
 
-vi.mock("../../../src/shared/config.js", () => ({
-  MAX_TABS: 10,
-}));
+vi.mock("../../../src/shared/config.js", async (importOriginal) => {
+  const actual = await importOriginal() as Record<string, unknown>;
+  return { ...actual, MAX_TABS: 10 };
+});
 
 // ---------------------------------------------------------------------------
 // Import SUT
