@@ -263,11 +263,34 @@ export async function dispatchScroll(
 /**
  * Paste text directly using the Input.insertText CDP command.
  * This bypasses keyboard events and inserts text at the current cursor position.
+ *
+ * When `clear` is true, selects all text in the focused element first via
+ * JavaScript (`document.activeElement.select()`), so the paste replaces
+ * existing content. This is reliable across all platforms — no keyboard
+ * shortcuts needed.
  */
 export async function dispatchPaste(
   cdp: CDPSession,
   text: string,
+  options?: { clear?: boolean },
 ): Promise<void> {
+  if (options?.clear) {
+    // Select all text in the currently focused element via JS.
+    // This works for <input>, <textarea>, and contentEditable elements.
+    await cdp.send("Runtime.evaluate", {
+      expression: `
+        (() => {
+          const el = document.activeElement;
+          if (!el) return;
+          if (el.select) { el.select(); return; }
+          if (el.isContentEditable) {
+            document.execCommand('selectAll', false, null);
+          }
+        })()
+      `,
+    });
+  }
+
   await cdp.send("Input.insertText", {
     text,
   });

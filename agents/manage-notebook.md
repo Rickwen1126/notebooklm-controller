@@ -69,8 +69,7 @@ find("more_vert")  → 選同一 row 的（x > 1200, y 最接近）→ click
 find("{{edit_title}}")  → click
   → dialog 出現，輸入框有舊標題
 find("input")  → 找到 dialog 內的 input 欄位 → click（確保 focus）
-type("SelectAll")
-paste("{{newTitle}}")
+paste("{{newTitle}}", clear=true)   ← clear=true 會自動全選並取代舊標題
 find("{{save_button}}")  → click
 wait(2)
 ```

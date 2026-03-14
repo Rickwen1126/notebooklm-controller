@@ -43,7 +43,6 @@ export interface NotebookToolDeps {
   stateManager: StateManager;
   tabManager: TabManager;
   cacheManager: CacheManager;
-  /** Required for create_notebook (runs agent via scheduler). */
   scheduler?: Scheduler;
   taskStore?: TaskStore;
 }
@@ -163,12 +162,16 @@ function registerCreateNotebook(
           return errorResult(`Alias already exists: "${alias}"`);
         }
 
-        // 1. Submit task to create + rename the notebook via agent
+        // 1. Agent creates + renames the notebook on NotebookLM
         log.info("Creating notebook via agent", { title, alias });
 
         const task = await deps.scheduler.submit({
           notebookAlias: "__homepage__",
-          command: `建立一本新的筆記本，標題必須完全是「${title}」。建立後務必驗證首頁上的標題完全正確，不能有多餘文字。`,
+          command:
+            `建立一本新的筆記本，標題設定為「${title}」。` +
+            `步驟：先點「新建」建立筆記本，然後回首頁用「編輯標題」改名為「${title}」。` +
+            `改名時用 paste(text="${title}", clear=true) 取代舊標題。` +
+            `最後驗證首頁上的標題完全正確。`,
         });
 
         await deps.scheduler.waitForTask(task.taskId);
@@ -179,52 +182,57 @@ function registerCreateNotebook(
           return errorResult(`Failed to create notebook: ${err}`);
         }
 
-        // 2. Open homepage tab to find the notebook URL from DOM
-        log.info("Extracting notebook URL from homepage");
+        // 2. Extract notebook URL by clicking into it from the homepage.
+        //    The click may open a new tab (target=_blank) — handle both cases.
+        log.info("Extracting notebook URL: navigate into notebook from homepage");
 
         const tab = await deps.tabManager.openTab("__create-extract__", NOTEBOOKLM_HOMEPAGE);
         await new Promise((resolve) => setTimeout(resolve, 4_000));
 
-        const notebookUrl = await tab.page.evaluate((searchTitle: string) => {
-          // Strategy 1: <a> with /notebook/ in href whose subtree contains the title
-          const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/notebook/"]'));
-          for (const link of links) {
-            const text = link.textContent?.trim() ?? "";
-            if (text.includes(searchTitle)) {
-              return link.href;
+        // Track pages before click so we can detect new tabs
+        const browser = tab.page.browser();
+        const pagesBefore = await browser.pages();
+
+        // Click on the notebook row matching the title (or first row if title not found)
+        const clicked = await tab.page.evaluate((searchTitle: string) => {
+          const rows = document.querySelectorAll("tr[tabindex], [role='row'], a[href*='/notebook/']");
+          for (const row of rows) {
+            if (row.textContent?.includes(searchTitle)) {
+              (row as HTMLElement).click();
+              return "title-match";
             }
           }
-
-          // Strategy 2: find any element with the title text, walk up to find
-          // the nearest <a> ancestor with /notebook/ href
-          const walker = document.createTreeWalker(
-            document.body,
-            NodeFilter.SHOW_TEXT,
-          );
-          let node: Node | null;
-          while ((node = walker.nextNode())) {
-            if (node.textContent?.includes(searchTitle)) {
-              let el = node.parentElement;
-              while (el) {
-                if (el.tagName === "A") {
-                  const href = (el as HTMLAnchorElement).href;
-                  if (href.includes("/notebook/")) return href;
-                }
-                el = el.parentElement;
-              }
-            }
+          if (rows.length > 0) {
+            (rows[0] as HTMLElement).click();
+            return "first-row";
           }
-
-          // Strategy 3: just grab the most recently added notebook link
-          // (first /notebook/ link on the page, as NotebookLM sorts by recent)
-          if (links.length > 0) {
-            return (links[0] as HTMLAnchorElement).href;
-          }
-
           return null;
         }, title);
 
+        if (!clicked) {
+          await deps.tabManager.closeTab(tab.tabId);
+          return errorResult("Could not find any notebook on the homepage to extract URL");
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
+
+        // Check if a new tab was opened
+        const pagesAfter = await browser.pages();
+        const newPage = pagesAfter.find((p) => !pagesBefore.includes(p));
+
+        let notebookUrl: string;
+        if (newPage && newPage.url().includes("/notebook/")) {
+          // New tab opened — get URL from it, close it
+          notebookUrl = newPage.url();
+          await newPage.close();
+        } else {
+          // Same-tab navigation
+          notebookUrl = tab.page.url();
+        }
+
         await deps.tabManager.closeTab(tab.tabId);
+
+        log.info("URL extracted", { url: notebookUrl, method: clicked });
 
         if (!notebookUrl) {
           return errorResult(

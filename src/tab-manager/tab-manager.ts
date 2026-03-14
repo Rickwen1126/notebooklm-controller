@@ -8,6 +8,7 @@
 import puppeteer from "puppeteer-core";
 import type { Browser } from "puppeteer-core";
 import { EventEmitter } from "node:events";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { TabHandle } from "../shared/types.js";
@@ -50,6 +51,21 @@ export class TabManager extends EventEmitter {
 
     const userDataDir =
       options?.userDataDir ?? join(homedir(), ".nbctl", "chrome-profile");
+
+    // Mark previous session as clean exit so Chrome won't show "Restore" dialog.
+    const prefsPath = join(userDataDir, "Default", "Preferences");
+    try {
+      if (existsSync(prefsPath)) {
+        const prefs = JSON.parse(readFileSync(prefsPath, "utf-8"));
+        if (prefs.profile) {
+          prefs.profile.exit_type = "Normal";
+          prefs.profile.exited_cleanly = true;
+          writeFileSync(prefsPath, JSON.stringify(prefs));
+        }
+      }
+    } catch {
+      // Non-critical — Chrome will just show the restore dialog.
+    }
 
     try {
       this.browser = await puppeteer.launch({

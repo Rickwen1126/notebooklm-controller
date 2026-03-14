@@ -111,13 +111,13 @@ export function createBrowserTools(tabHandle: TabHandle): Tool[] {
 
   const typeTool = defineTool("type", {
     description:
-      "Type text or keyboard shortcut. " +
-      "Actions: type('SelectAll'), type('Copy'), type('Cut'), type('Undo'). " +
-      "Keys: type('Enter'), type('Backspace'), type('Tab'), type('Escape'). " +
-      "Combos: type('Ctrl+A'), type('Shift+Enter'). " +
-      "Plain text is typed character-by-character.",
+      "Type text or press a special key. " +
+      "Special keys: type('Enter'), type('Backspace'), type('Tab'), type('Escape'), " +
+      "type('ArrowUp'), type('ArrowDown'). " +
+      "Plain text is typed character-by-character. " +
+      "Do NOT use for select-all or copy/paste — use the paste tool instead.",
     parameters: z.object({
-      text: z.string().describe("Text to type, or a shortcut like 'SelectAll', 'Enter', 'Ctrl+A'"),
+      text: z.string().describe("Text to type, or a special key like 'Enter', 'Backspace', 'Tab'"),
     }),
     handler: async (args) => {
       await dispatchType(cdp, args.text);
@@ -155,13 +155,15 @@ export function createBrowserTools(tabHandle: TabHandle): Tool[] {
   const pasteTool = defineTool("paste", {
     description:
       "Paste text at the current cursor position using Input.insertText. " +
-      "Two modes: (1) filePath — read from file and paste (for large content from repoToText/urlToText/pdfToText, " +
+      "Set clear=true to replace all existing text in the focused input (select-all + paste). " +
+      "Two content modes: (1) filePath — read from file and paste (for large content from repoToText/urlToText/pdfToText, " +
       "text never enters LLM context); (2) text — paste short text directly.",
     parameters: z.object({
       filePath: z.string().optional().describe("File path to read and paste (for large content from repoToText)"),
       text: z.string().optional().describe("Short text to paste directly"),
+      clear: z.boolean().optional().describe("If true, select all existing text first so paste replaces it"),
     }),
-    handler: async (args: { filePath?: string; text?: string }) => {
+    handler: async (args: { filePath?: string; text?: string; clear?: boolean }) => {
       let content: string;
       if (args.filePath) {
         // Security: filePath must resolve within TMP_DIR to prevent
@@ -179,9 +181,9 @@ export function createBrowserTools(tabHandle: TabHandle): Tool[] {
       } else {
         return textResult("Error: provide either filePath or text parameter.");
       }
-      await dispatchPaste(cdp, content);
+      await dispatchPaste(cdp, content, { clear: args.clear });
       return textResult(
-        `Pasted ${content.length.toLocaleString()} character(s).`,
+        `Pasted ${content.length.toLocaleString()} character(s)${args.clear ? " (replaced existing)" : ""}.`,
       );
     },
   });

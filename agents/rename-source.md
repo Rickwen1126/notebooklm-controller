@@ -34,8 +34,7 @@ parameters:
 find("more_vert")  → 選來源面板的（x < 300, aria="更多"）→ click
 find("{{rename_source}}")  → click
   → dialog 出現，輸入框已有舊名稱
-type("SelectAll")
-paste("{{newName}}")
+paste("{{newName}}", clear=true)   ← clear=true 自動全選並取代舊名稱
 find("{{save_button}}")  → click
 ```
 
