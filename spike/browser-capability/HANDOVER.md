@@ -812,6 +812,23 @@ Spike 腳本 `--model` flag 為可選，未帶時跑 Copilot SDK 預設模型（
 
 **修正**：所有 spike 腳本 default model 改為 `"gpt-4.1"`。Production code 也必須 hardcode model，不依賴 SDK default。
 
+### Finding #51 — File-based Paste: 0 Token 消耗的大內容注入
+
+NotebookLM 無前端 paste 字數限制（10K~500K 全通過），但 500K chars ≈ 125K tokens 會爆 GPT-4.1 context。
+
+**解法**：`repoToText` 寫 temp file，只回傳 `{ filePath, charCount, summary }`。`paste(filePath=...)` handler 讀檔貼入。LLM 全程只看 metadata。
+
+| | filePath 模式 | Baseline 模式 |
+|---|---|---|
+| 100K | ✅ (42.8s) | ✅ (34.2s) |
+| 500K | ✅ (0 token) | ❌ (爆 context) |
+| Content token 消耗 | **0** | ~25K tokens/100K |
+
+**架構洞見**：Tool 定義 = context boundary。`defineTool` handler 控制回傳值，LLM 根本拿不到文字內容 — 這是 architectural enforcement，不是 prompt-level instruction。大部分 agent 框架做不到（tool result 直接回 context）。Tab 是 daemon 的資源，LLM 只需指定「貼在哪」，daemon 處理 paste。
+
+詳見：`spike/FilePaste500KExperiment.md`
+腳本：`spike/browser-capability/paste-limit-experiment.ts`、`spike/browser-capability/paste-filepath-experiment.ts`
+
 ### 總結
 
 **Spike 完成。** 所有核心驗證通過：
@@ -822,6 +839,7 @@ Spike 腳本 `--model` flag 為可選，未帶時跑 Copilot SDK 預設模型（
 4. ✅ Composite 操作拆解 + 依序執行（Phase F）
 5. ✅ 13/13 全操作 batch test 通過（Phase F batch）
 6. ✅ Planner input gate 23/23 通過（Phase F guard）
+7. ✅ File-based paste: 500K chars, 0 token 消耗（Paste experiment）
 
 **可以回到主線開發。** 架構確定：
 - `customAgents` sub-agent → 不用（SDK 限制）
@@ -832,3 +850,4 @@ Spike 腳本 `--model` flag 為可選，未帶時跑 Copilot SDK 預設模型（
 - Planner 雙職責：submitPlan（路由）+ rejectInput（防護）
 - Executor pre-navigate：系統層錨點判斷，agent 不自己判斷頁面狀態
 - Tab pool weak affinity：連續操作同 notebook 免 navigate
+- File-based paste：Tool boundary = context boundary，大內容 0 token
