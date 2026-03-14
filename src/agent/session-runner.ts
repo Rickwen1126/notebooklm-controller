@@ -39,6 +39,8 @@ export interface SessionRunnerOptions {
   onPermissionRequest?: PermissionHandler;
   /** Model to use for the session. Defaults to DEFAULT_AGENT_MODEL. */
   model?: string;
+  /** Session-level system message forwarded to createSession({ systemMessage }). */
+  systemMessage?: string;
   /** Timeout in ms for sendAndWait. Defaults to DEFAULT_SESSION_TIMEOUT_MS (5 min). */
   timeoutMs?: number;
 }
@@ -48,6 +50,12 @@ export interface SessionResult {
   result?: unknown;
   error?: string;
   durationMs: number;
+  /** Set to true when the Planner rejects the input instead of producing a plan. */
+  rejected?: boolean;
+  /** Rejection category. Present only when rejected is true. */
+  rejectionCategory?: string;
+  /** Human-readable explanation of why the input was rejected. */
+  rejectionReason?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +86,7 @@ export async function runSession(
     hooks,
     onPermissionRequest = autoApprove,
     model = DEFAULT_AGENT_MODEL,
+    systemMessage,
     timeoutMs = DEFAULT_SESSION_TIMEOUT_MS,
   } = options;
 
@@ -103,6 +112,7 @@ export async function runSession(
       customAgents,
       hooks,
       onPermissionRequest,
+      ...(systemMessage ? { systemMessage } : {}),
     });
 
     log.info("Session created, sending prompt", {
@@ -205,16 +215,38 @@ export interface DualSessionOptions {
 
 const PLANNER_TIMEOUT_MS = 60_000;
 
+/** Valid rejection categories for the rejectInput tool. */
+export const REJECTION_CATEGORIES = [
+  "off_topic",
+  "harmful",
+  "ambiguous",
+  "unsupported",
+  "missing_context",
+  "system",
+] as const;
+
+export type RejectionCategory = (typeof REJECTION_CATEGORIES)[number];
+
+/** Discriminated union: Planner either produces a plan or rejects the input. */
+export type PlannerResult =
+  | { kind: "plan"; plan: ExecutionPlan }
+  | { kind: "rejected"; category: RejectionCategory; reason: string };
+
 /**
- * Run the Planner session: parse NL intent → select agent → output ExecutionPlan.
+ * Run the Planner session: parse NL intent → select agent → output ExecutionPlan,
+ * or reject the input if it falls outside NotebookLM scope.
  *
- * The Planner has a single tool (`submitPlan`) that captures the structured plan
- * via a closure. No browser tools are provided.
+ * The Planner has two tools:
+ *   - `submitPlan` — captures the structured plan via a closure
+ *   - `rejectInput` — captures a rejection with category + reason
+ *
+ * Returns a discriminated PlannerResult so the caller can distinguish plans
+ * from rejections without exceptions.
  */
 export async function runPlannerSession(
   options: DualSessionOptions,
   prompt: string,
-): Promise<ExecutionPlan> {
+): Promise<PlannerResult> {
   const {
     client,
     agentConfigs,
@@ -255,11 +287,12 @@ ${agentCatalog}
 2. 複合操作（如「加來源然後問問題」）→ 多個 steps，按順序排列
 3. executorPrompt 必須明確，不能含糊。例如不是「問一個問題」而是「向 NotebookLM 提問：TypeScript 的優勢是什麼？」
 4. 不要自己執行操作，只做規劃
-5. 如果使用者的請求與 NotebookLM 操作無關，回覆說明你只能處理 NotebookLM 相關操作，不要呼叫 submitPlan
+5. 如果使用者的請求與 NotebookLM 操作無關、有害、語意不清、缺少必要資訊、或不支援，呼叫 rejectInput tool 並提供分類和原因，不要呼叫 submitPlan
 6. 當前 locale: ${locale}`;
 
-  // Capture plan via closure.
+  // Capture plan or rejection via closure.
   let capturedPlan: ExecutionPlan | null = null;
+  let capturedRejection: { category: RejectionCategory; reason: string } | null = null;
 
   const submitPlanTool = defineTool("submitPlan", {
     description: "Submit the execution plan for the Executor to carry out.",
@@ -280,27 +313,55 @@ ${agentCatalog}
     },
   });
 
+  const rejectInputTool = defineTool("rejectInput", {
+    description: "Reject the user's input when it cannot be handled by NotebookLM operations.",
+    parameters: z.object({
+      category: z.enum(REJECTION_CATEGORIES).describe("Rejection category"),
+      reason: z.string().describe("Human-readable explanation of why the input was rejected"),
+    }),
+    handler: async (args: { category: RejectionCategory; reason: string }) => {
+      capturedRejection = { category: args.category, reason: args.reason };
+      return {
+        textResultForLlm: `Input rejected (${args.category}): ${args.reason}`,
+        resultType: "success" as const,
+      };
+    },
+  });
+
   log.info("Starting Planner session", {
     promptLength: prompt.length,
     agentCount: agentConfigs.length,
     locale,
   });
 
-  // Run Planner as a single session with only submitPlan tool.
-  // Planner system message + user prompt are concatenated as the full prompt.
-  const fullPlannerPrompt = plannerSystemMessage + "\n\n---\n\n" + prompt;
-
+  // Run Planner as a single session with submitPlan + rejectInput tools.
+  // System message is passed via createSession({ systemMessage }) to separate
+  // session-level policy from step-level instruction (T-HF04).
   await runSession(
     {
       client,
-      tools: [submitPlanTool] as Tool[],
+      tools: [submitPlanTool, rejectInputTool] as Tool[],
       customAgents: [],
       hooks: {},
       model: plannerModel,
+      systemMessage: plannerSystemMessage,
       timeoutMs: plannerTimeoutMs,
     },
-    fullPlannerPrompt,
+    prompt,
   );
+
+  // Check rejection first — if the Planner rejected, return early.
+  if (capturedRejection) {
+    log.info("Planner rejected input", {
+      category: capturedRejection.category,
+      reason: capturedRejection.reason,
+    });
+    return {
+      kind: "rejected",
+      category: capturedRejection.category,
+      reason: capturedRejection.reason,
+    };
+  }
 
   if (!capturedPlan) {
     throw new Error("Planner did not submit a plan — request may be outside NotebookLM scope");
@@ -312,7 +373,7 @@ ${agentCatalog}
     steps: capturedPlan.steps.map((s) => s.agentName),
   });
 
-  return capturedPlan;
+  return { kind: "plan", plan: capturedPlan };
 }
 
 // ---------------------------------------------------------------------------
@@ -403,10 +464,9 @@ export async function runExecutorSession(
   });
 
   // 4. Run via the low-level runSession primitive.
-  //    The systemMessage is sent as the prompt prefix — the Copilot SDK
-  //    appends it to the session context.
-  const fullPrompt = systemMessage + "\n\n---\n\n" + step.executorPrompt;
-
+  //    Session-level policy (tool constraints, notebook context, agent prompt) is
+  //    passed via createSession({ systemMessage }); step-level instruction goes
+  //    as the sendAndWait prompt (T-HF04).
   return runSession(
     {
       client,
@@ -414,9 +474,10 @@ export async function runExecutorSession(
       customAgents: [],
       hooks,
       model: executorModel,
+      systemMessage,
       timeoutMs: executorTimeoutMs,
     },
-    fullPrompt,
+    step.executorPrompt,
   );
 }
 
@@ -437,8 +498,27 @@ export async function runDualSession(
   const startTime = Date.now();
 
   try {
-    // 1. Planner: parse intent → ExecutionPlan.
-    const plan = await runPlannerSession(options, prompt);
+    // 1. Planner: parse intent → ExecutionPlan or rejection.
+    const plannerResult = await runPlannerSession(options, prompt);
+
+    // 1a. If Planner rejected the input, return early with rejection metadata.
+    if (plannerResult.kind === "rejected") {
+      const durationMs = Date.now() - startTime;
+      log.info("Planner rejected input", {
+        category: plannerResult.category,
+        reason: plannerResult.reason,
+        durationMs,
+      });
+      return {
+        success: false,
+        rejected: true,
+        rejectionCategory: plannerResult.category,
+        rejectionReason: plannerResult.reason,
+        durationMs,
+      };
+    }
+
+    const plan = plannerResult.plan;
 
     // 2. Executor: run each step sequentially.
     const stepResults: SessionResult[] = [];

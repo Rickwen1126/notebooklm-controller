@@ -217,6 +217,11 @@ export interface DaemonStatusResult {
   defaultNotebook: string | null;
   pendingTasks: number;
   runningTasks: number;
+  agentHealth: {
+    healthy: boolean;
+    consecutiveTimeouts: number;
+    degraded: boolean;
+  };
 }
 
 // ---------------------------------------------------------------------------

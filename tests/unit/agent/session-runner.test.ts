@@ -27,6 +27,7 @@ import {
   runPlannerSession,
   runExecutorSession,
   runDualSession,
+  REJECTION_CATEGORIES,
 } from "../../../src/agent/session-runner.js";
 import type {
   SessionRunnerOptions,
@@ -397,6 +398,24 @@ function mockPlannerResponse(plan: {
   });
 }
 
+/**
+ * Simulate the Planner calling rejectInput by intercepting createSession
+ * and invoking the rejectInput tool handler directly.
+ */
+function mockPlannerRejection(rejection: { category: string; reason: string }) {
+  mockCreateSession.mockImplementation(async (opts: { tools?: Array<{ name: string; handler: (args: unknown) => Promise<unknown> }> }) => {
+    const rejectInput = opts.tools?.find((t) => t.name === "rejectInput");
+    if (rejectInput) {
+      await rejectInput.handler(rejection);
+    }
+    return {
+      sessionId: "planner-session",
+      sendAndWait: mockSendAndWait,
+      disconnect: mockDisconnect,
+    };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // T068D: runPlannerSession
 // ---------------------------------------------------------------------------
@@ -410,7 +429,7 @@ describe("runPlannerSession", () => {
     mockDisconnect.mockResolvedValue(undefined);
   });
 
-  it("captures plan via submitPlan tool and returns ExecutionPlan", async () => {
+  it("captures plan via submitPlan tool and returns PlannerResult with kind=plan", async () => {
     const expectedPlan = {
       reasoning: "User wants to list sources",
       steps: [
@@ -419,15 +438,17 @@ describe("runPlannerSession", () => {
     };
     mockPlannerResponse(expectedPlan);
 
-    const plan = await runPlannerSession(makeDualOptions(), "列出來源");
+    const result = await runPlannerSession(makeDualOptions(), "列出來源");
 
-    expect(plan.reasoning).toBe("User wants to list sources");
-    expect(plan.steps).toHaveLength(1);
-    expect(plan.steps[0].agentName).toBe("list-sources");
+    expect(result.kind).toBe("plan");
+    if (result.kind !== "plan") throw new Error("unexpected");
+    expect(result.plan.reasoning).toBe("User wants to list sources");
+    expect(result.plan.steps).toHaveLength(1);
+    expect(result.plan.steps[0].agentName).toBe("list-sources");
   });
 
-  it("throws when Planner does not call submitPlan", async () => {
-    // Default mock: createSession returns session without calling submitPlan.
+  it("throws when Planner calls neither submitPlan nor rejectInput", async () => {
+    // Default mock: createSession returns session without calling either tool.
     mockCreateSession.mockResolvedValue({
       sessionId: "planner-session",
       sendAndWait: mockSendAndWait,
@@ -462,11 +483,154 @@ describe("runPlannerSession", () => {
     };
     mockPlannerResponse(multiStepPlan);
 
-    const plan = await runPlannerSession(makeDualOptions(), "列出來源然後問問題");
+    const result = await runPlannerSession(makeDualOptions(), "列出來源然後問問題");
 
-    expect(plan.steps).toHaveLength(2);
-    expect(plan.steps[0].agentName).toBe("list-sources");
-    expect(plan.steps[1].agentName).toBe("query");
+    expect(result.kind).toBe("plan");
+    if (result.kind !== "plan") throw new Error("unexpected");
+    expect(result.plan.steps).toHaveLength(2);
+    expect(result.plan.steps[0].agentName).toBe("list-sources");
+    expect(result.plan.steps[1].agentName).toBe("query");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-SB01: Planner Input Gate (rejectInput tool)
+// ---------------------------------------------------------------------------
+
+describe("runPlannerSession — rejectInput (T-SB01)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSendAndWait.mockResolvedValue(
+      fakeAssistantMessage("Rejected."),
+    );
+    mockDisconnect.mockResolvedValue(undefined);
+  });
+
+  it("returns rejected PlannerResult when Planner calls rejectInput", async () => {
+    mockPlannerRejection({
+      category: "off_topic",
+      reason: "This request is about weather, not NotebookLM.",
+    });
+
+    const result = await runPlannerSession(makeDualOptions(), "天氣如何？");
+
+    expect(result.kind).toBe("rejected");
+    if (result.kind !== "rejected") throw new Error("unexpected");
+    expect(result.category).toBe("off_topic");
+    expect(result.reason).toBe("This request is about weather, not NotebookLM.");
+  });
+
+  it("all 6 rejection categories are accepted", async () => {
+    for (const category of REJECTION_CATEGORIES) {
+      vi.clearAllMocks();
+      mockSendAndWait.mockResolvedValue(fakeAssistantMessage("Rejected."));
+      mockDisconnect.mockResolvedValue(undefined);
+
+      mockPlannerRejection({
+        category,
+        reason: `Rejected with category: ${category}`,
+      });
+
+      const result = await runPlannerSession(makeDualOptions(), "test input");
+
+      expect(result.kind).toBe("rejected");
+      if (result.kind !== "rejected") throw new Error("unexpected");
+      expect(result.category).toBe(category);
+    }
+  });
+
+  it("provides rejectInput tool alongside submitPlan to the session", async () => {
+    mockPlannerRejection({ category: "harmful", reason: "test" });
+
+    await runPlannerSession(makeDualOptions(), "test");
+
+    expect(mockCreateSession).toHaveBeenCalledOnce();
+    const createArg = mockCreateSession.mock.calls[0][0];
+    const toolNames = createArg.tools.map((t: { name: string }) => t.name);
+    expect(toolNames).toContain("submitPlan");
+    expect(toolNames).toContain("rejectInput");
+  });
+});
+
+describe("runDualSession — rejection early return (T-SB01)", () => {
+  let callCount: number;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    callCount = 0;
+    mockSendAndWait.mockResolvedValue(fakeAssistantMessage("Rejected."));
+    mockDisconnect.mockResolvedValue(undefined);
+  });
+
+  it("returns rejected SessionResult and skips Executor when Planner rejects", async () => {
+    // Only planner session — calls rejectInput, never reaches executor.
+    mockCreateSession.mockImplementation(async (opts: { tools?: Array<{ name: string; handler: (args: unknown) => Promise<unknown> }> }) => {
+      callCount++;
+      if (callCount === 1) {
+        const rejectInput = opts.tools?.find((t) => t.name === "rejectInput");
+        if (rejectInput) {
+          await rejectInput.handler({ category: "off_topic", reason: "Not a NotebookLM operation" });
+        }
+      }
+      return {
+        sessionId: `session-${callCount}`,
+        sendAndWait: mockSendAndWait,
+        disconnect: mockDisconnect,
+      };
+    });
+
+    const result = await runDualSession(makeDualOptions(), "天氣如何？");
+
+    expect(result.success).toBe(false);
+    expect(result.rejected).toBe(true);
+    expect(result.rejectionCategory).toBe("off_topic");
+    expect(result.rejectionReason).toBe("Not a NotebookLM operation");
+    // Only 1 session (planner) — executor should never be called.
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("submitPlan still works as before (no regression)", async () => {
+    const plan = {
+      reasoning: "User wants to list sources",
+      steps: [{ agentName: "list-sources", executorPrompt: "列出來源", tools: ["find", "screenshot"] }],
+    };
+
+    mockCreateSession.mockImplementation(async (opts: { tools?: Array<{ name: string; handler: (args: unknown) => Promise<unknown> }> }) => {
+      callCount++;
+      if (callCount === 1) {
+        const submitPlan = opts.tools?.find((t) => t.name === "submitPlan");
+        if (submitPlan) await submitPlan.handler(plan);
+      }
+      return {
+        sessionId: `session-${callCount}`,
+        sendAndWait: mockSendAndWait.mockResolvedValue(
+          fakeAssistantMessage(callCount === 1 ? "Plan done." : "Found 3 sources."),
+        ),
+        disconnect: mockDisconnect,
+      };
+    });
+
+    const result = await runDualSession(makeDualOptions(), "列出來源");
+
+    expect(result.success).toBe(true);
+    expect(result.rejected).toBeUndefined();
+    expect(result.rejectionCategory).toBeUndefined();
+    // Two sessions: planner + executor.
+    expect(mockCreateSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("neither tool called → throws error (current behavior preserved)", async () => {
+    mockCreateSession.mockResolvedValue({
+      sessionId: "planner-session",
+      sendAndWait: mockSendAndWait.mockResolvedValue(fakeAssistantMessage("I can't help with that.")),
+      disconnect: mockDisconnect,
+    });
+
+    const result = await runDualSession(makeDualOptions(), "天氣如何？");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Planner did not submit a plan");
+    expect(result.rejected).toBeUndefined();
   });
 });
 
@@ -521,7 +685,7 @@ describe("runExecutorSession", () => {
     expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
-  it("injects tool constraint preamble in the prompt", async () => {
+  it("passes tool constraint as systemMessage and step prompt as sendAndWait prompt (T-HF04)", async () => {
     const step: ExecutionStep = {
       agentName: "query",
       executorPrompt: "向 NotebookLM 提問",
@@ -530,11 +694,16 @@ describe("runExecutorSession", () => {
 
     await runExecutorSession(makeDualOptions(), step);
 
-    // The prompt sent should contain the tool constraint.
+    // systemMessage (tool constraint + context + agent prompt) goes to createSession.
+    expect(mockCreateSession).toHaveBeenCalledOnce();
+    const createArg = mockCreateSession.mock.calls[0][0];
+    expect(createArg.systemMessage).toContain("禁止使用");
+    expect(createArg.systemMessage).toContain("目標 Notebook:");
+
+    // Only the step-level instruction goes to sendAndWait.
     expect(mockSendAndWait).toHaveBeenCalledOnce();
     const sentPrompt = mockSendAndWait.mock.calls[0][0].prompt;
-    expect(sentPrompt).toContain("禁止使用");
-    expect(sentPrompt).toContain("向 NotebookLM 提問");
+    expect(sentPrompt).toBe("向 NotebookLM 提問");
   });
 });
 

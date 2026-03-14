@@ -109,6 +109,13 @@ export function isValidNotebookUrl(url: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Scheduler / Circuit Breaker
+// ---------------------------------------------------------------------------
+
+export const MAX_TASK_TIMEOUT_MS = 600_000 as const; // 10 min
+export const CIRCUIT_BREAKER_THRESHOLD = 3 as const;
+
+// ---------------------------------------------------------------------------
 // Agent model
 // ---------------------------------------------------------------------------
 

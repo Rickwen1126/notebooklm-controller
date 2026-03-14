@@ -2,6 +2,30 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+
+// ---------------------------------------------------------------------------
+// Suppress logger output during tests
+// ---------------------------------------------------------------------------
+
+vi.mock("../../../src/shared/logger.js", () => {
+  const noop = () => {};
+  const childLogger = { info: noop, warn: noop, error: noop, child: () => childLogger };
+  return { logger: childLogger };
+});
+
+// ---------------------------------------------------------------------------
+// Mock config — short timeout for circuit breaker tests
+// ---------------------------------------------------------------------------
+
+vi.mock("../../../src/shared/config.js", async (importOriginal) => {
+  const actual = await importOriginal() as Record<string, unknown>;
+  return {
+    ...actual,
+    MAX_TASK_TIMEOUT_MS: 100,
+    CIRCUIT_BREAKER_THRESHOLD: 3,
+  };
+});
+
 import { TaskStore } from "../../../src/state/task-store.js";
 import { Scheduler } from "../../../src/daemon/scheduler.js";
 import type { SessionResult } from "../../../src/daemon/scheduler.js";
@@ -622,6 +646,136 @@ describe("Scheduler", () => {
       await expect(
         scheduler.submit({ notebookAlias: "nb", command: "late" }),
       ).rejects.toThrowError(/shutting down/);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Circuit Breaker (T-HF12 / T-HF13 / T-HF14)
+  // -----------------------------------------------------------------------
+
+  describe("circuit breaker", () => {
+    it("increments consecutiveTimeouts when a task times out", async () => {
+      // runTask that never resolves — will be beaten by the 100ms timeout mock.
+      const runTask = vi.fn(
+        () => new Promise<SessionResult>(() => {}), // never settles
+      );
+
+      const scheduler = new Scheduler({ taskStore, runTask });
+
+      const task = await scheduler.submit({
+        notebookAlias: "nb",
+        command: "slow-cmd",
+      });
+
+      await scheduler.waitForTask(task.taskId);
+
+      const health = scheduler.getHealth();
+      expect(health.consecutiveTimeouts).toBe(1);
+      expect(health.degraded).toBe(false);
+
+      // Task should be failed with timeout reason.
+      const stored = await taskStore.get(task.taskId);
+      expect(stored!.status).toBe("failed");
+      expect(stored!.error).toBe("execution timeout");
+
+      await scheduler.shutdown();
+    });
+
+    it("resets consecutiveTimeouts on successful task completion", async () => {
+      let callCount = 0;
+      const runTask = vi.fn(async (): Promise<SessionResult> => {
+        callCount++;
+        if (callCount === 1) {
+          // First call: never settles → timeout.
+          return new Promise(() => {});
+        }
+        // Second call: succeeds immediately.
+        return { success: true };
+      });
+
+      const scheduler = new Scheduler({ taskStore, runTask });
+
+      // First task will timeout.
+      const t1 = await scheduler.submit({ notebookAlias: "nb", command: "timeout-cmd" });
+      await scheduler.waitForTask(t1.taskId);
+      expect(scheduler.getHealth().consecutiveTimeouts).toBe(1);
+
+      // Second task succeeds — counter should reset.
+      const t2 = await scheduler.submit({ notebookAlias: "nb", command: "ok-cmd" });
+      await scheduler.waitForTask(t2.taskId);
+      expect(scheduler.getHealth().consecutiveTimeouts).toBe(0);
+
+      const storedT2 = await taskStore.get(t2.taskId);
+      expect(storedT2!.status).toBe("completed");
+
+      await scheduler.shutdown();
+    });
+
+    it("enters degraded state after 3 consecutive timeouts and rejects submit", async () => {
+      const runTask = vi.fn(
+        () => new Promise<SessionResult>(() => {}), // never settles
+      );
+
+      const scheduler = new Scheduler({ taskStore, runTask });
+
+      // Submit 3 tasks sequentially (same notebook → serial queue).
+      for (let i = 0; i < 3; i++) {
+        const task = await scheduler.submit({
+          notebookAlias: "nb",
+          command: `timeout-${i}`,
+        });
+        await scheduler.waitForTask(task.taskId);
+      }
+
+      const health = scheduler.getHealth();
+      expect(health.consecutiveTimeouts).toBe(3);
+      expect(health.degraded).toBe(true);
+      expect(health.healthy).toBe(false);
+
+      // New submissions should be rejected.
+      await expect(
+        scheduler.submit({ notebookAlias: "nb", command: "rejected" }),
+      ).rejects.toThrowError(/degraded/);
+
+      await scheduler.shutdown();
+    });
+
+    it("resetHealth clears degraded state and allows new submissions", async () => {
+      const runTask = vi.fn(
+        () => new Promise<SessionResult>(() => {}), // never settles
+      );
+
+      const scheduler = new Scheduler({ taskStore, runTask });
+
+      // Trip the circuit breaker.
+      for (let i = 0; i < 3; i++) {
+        const task = await scheduler.submit({
+          notebookAlias: "nb",
+          command: `timeout-${i}`,
+        });
+        await scheduler.waitForTask(task.taskId);
+      }
+
+      expect(scheduler.getHealth().degraded).toBe(true);
+
+      // Reset should restore normal operation.
+      scheduler.resetHealth();
+
+      const health = scheduler.getHealth();
+      expect(health.consecutiveTimeouts).toBe(0);
+      expect(health.degraded).toBe(false);
+      expect(health.healthy).toBe(true);
+
+      // Verify submit does not throw after reset.
+      // (The task will timeout again since runTask still never settles, but submit itself works.)
+      const task = await scheduler.submit({
+        notebookAlias: "nb",
+        command: "after-reset",
+      });
+      expect(task.status).toBe("queued");
+
+      await scheduler.waitForTask(task.taskId);
+      await scheduler.shutdown();
     });
   });
 });

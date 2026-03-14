@@ -8,6 +8,7 @@
  */
 
 import { logger } from "../shared/logger.js";
+import { MAX_TASK_TIMEOUT_MS, CIRCUIT_BREAKER_THRESHOLD } from "../shared/config.js";
 import type { TaskStore } from "../state/task-store.js";
 import type { AsyncTask } from "../shared/types.js";
 
@@ -21,6 +22,13 @@ export interface SessionResult {
   result?: object;
   error?: string;
   errorScreenshot?: string;
+}
+
+/** Health snapshot returned by getHealth(). */
+export interface AgentHealth {
+  healthy: boolean;
+  consecutiveTimeouts: number;
+  degraded: boolean;
 }
 
 /** Dependencies injected into the Scheduler. */
@@ -58,6 +66,12 @@ export class Scheduler {
 
   private shuttingDown = false;
 
+  /** Circuit breaker: consecutive task execution timeouts. */
+  private consecutiveTimeouts = 0;
+
+  /** Circuit breaker: when true, submit() rejects new tasks. */
+  private degraded = false;
+
   constructor(deps: SchedulerDeps) {
     this.taskStore = deps.taskStore;
     this.runTask = deps.runTask;
@@ -75,6 +89,12 @@ export class Scheduler {
   }): Promise<AsyncTask> {
     if (this.shuttingDown) {
       throw new Error("Scheduler is shutting down; cannot accept new tasks");
+    }
+
+    if (this.degraded) {
+      throw new Error(
+        "Agent runtime degraded: consecutive timeouts exceeded threshold. Call restart_agent tool.",
+      );
     }
 
     const task = await this.taskStore.create({
@@ -177,6 +197,28 @@ export class Scheduler {
       total += queue.length;
     }
     return total;
+  }
+
+  // -------------------------------------------------------------------------
+  // getHealth — circuit breaker health snapshot (T-HF13)
+  // -------------------------------------------------------------------------
+
+  getHealth(): AgentHealth {
+    return {
+      healthy: !this.degraded,
+      consecutiveTimeouts: this.consecutiveTimeouts,
+      degraded: this.degraded,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // resetHealth — recovery entry point (T-HF14)
+  // -------------------------------------------------------------------------
+
+  resetHealth(): void {
+    this.consecutiveTimeouts = 0;
+    this.degraded = false;
+    log.info("circuit breaker reset");
   }
 
   // -------------------------------------------------------------------------
@@ -315,8 +357,52 @@ export class Scheduler {
         return;
       }
 
-      // Run the task.
-      const result = await this.runTask(runningTask);
+      // Run the task with an outer timeout (T-HF12).
+      let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+
+      const raceResult = await Promise.race([
+        this.runTask(runningTask).then((r) => ({ kind: "result" as const, value: r })),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          timeoutTimer = setTimeout(() => resolve({ kind: "timeout" }), MAX_TASK_TIMEOUT_MS);
+        }),
+      ]);
+
+      // Clean up the timeout timer if the task completed before it fired.
+      if (timeoutTimer !== undefined) {
+        clearTimeout(timeoutTimer);
+      }
+
+      // Handle timeout (T-HF12 + T-HF13).
+      if (raceResult.kind === "timeout") {
+        this.consecutiveTimeouts++;
+        log.error("task execution timeout", {
+          taskId: task.taskId,
+          consecutiveTimeouts: this.consecutiveTimeouts,
+        });
+
+        if (this.consecutiveTimeouts >= CIRCUIT_BREAKER_THRESHOLD) {
+          this.degraded = true;
+          log.error("circuit breaker tripped: agent runtime degraded", {
+            consecutiveTimeouts: this.consecutiveTimeouts,
+          });
+        }
+
+        try {
+          await this.taskStore.transition(task.taskId, "failed", "execution timeout");
+          const failedTask = await this.taskStore.update(task.taskId, {
+            error: "execution timeout",
+          });
+
+          if (this.onTaskComplete) {
+            this.onTaskComplete(failedTask);
+          }
+        } catch {
+          // Task may have been cancelled concurrently; ignore.
+        }
+        return;
+      }
+
+      const result = raceResult.value;
 
       // After runTask completes, check if it was cancelled while running.
       if (cancellationFlag.cancelled) {
@@ -332,6 +418,9 @@ export class Scheduler {
       // Transition based on result and persist outcome fields.
       let finalTask: AsyncTask;
       if (result.success) {
+        // Successful completion resets the circuit breaker counter.
+        this.consecutiveTimeouts = 0;
+
         finalTask = await this.taskStore.transition(
           task.taskId,
           "completed",
