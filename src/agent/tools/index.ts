@@ -12,6 +12,7 @@ import type { NetworkGate } from "../../network-gate/network-gate.js";
 import type { CacheManager } from "../../state/cache-manager.js";
 import { createBrowserTools } from "./browser-tools.js";
 import { createStateTools } from "./state-tools.js";
+import { buildContentTools } from "./content-tools.js";
 
 export interface ToolRegistryDeps {
   networkGate: NetworkGate;
@@ -37,5 +38,6 @@ export function buildToolsForTab(
     cacheManager: deps.cacheManager,
     notebookAlias,
   });
-  return [...browserTools, ...stateTools];
+  const contentTools = buildContentTools();
+  return [...browserTools, ...stateTools, ...contentTools];
 }

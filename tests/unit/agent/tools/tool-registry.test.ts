@@ -83,8 +83,9 @@ const BROWSER_TOOL_NAMES = ["screenshot", "click", "type", "scroll", "paste", "f
 
 /** State tools: reportRateLimit, updateCache, writeFile */
 const STATE_TOOL_NAMES = ["reportRateLimit", "updateCache", "writeFile"];
+const CONTENT_TOOL_NAMES = ["repoToText", "urlToText", "pdfToText"];
 
-const ALL_TOOL_NAMES = [...BROWSER_TOOL_NAMES, ...STATE_TOOL_NAMES].sort();
+const ALL_TOOL_NAMES = [...BROWSER_TOOL_NAMES, ...STATE_TOOL_NAMES, ...CONTENT_TOOL_NAMES].sort();
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -152,8 +153,8 @@ describe("tool-registry (buildToolsForTab)", () => {
       cacheManager: createMockCacheManager() as any,
     });
 
-    expect(tools).toHaveLength(BROWSER_TOOL_NAMES.length + STATE_TOOL_NAMES.length);
-    expect(tools).toHaveLength(12);
+    expect(tools).toHaveLength(BROWSER_TOOL_NAMES.length + STATE_TOOL_NAMES.length + CONTENT_TOOL_NAMES.length);
+    expect(tools).toHaveLength(15);
   });
 
   it("browser tools appear before state tools in the returned array", () => {
@@ -165,9 +166,10 @@ describe("tool-registry (buildToolsForTab)", () => {
 
     const names = tools.map((t) => t.name);
 
-    // First 9 should be browser tools, last 3 should be state tools
+    // First 9 should be browser tools, next 3 state tools, last 3 content tools
     expect(names.slice(0, 9)).toEqual(BROWSER_TOOL_NAMES);
-    expect(names.slice(9)).toEqual(STATE_TOOL_NAMES);
+    expect(names.slice(9, 12)).toEqual(STATE_TOOL_NAMES);
+    expect(names.slice(12)).toEqual(CONTENT_TOOL_NAMES);
   });
 
   it("each tool has name, description, parameters, and handler", () => {
