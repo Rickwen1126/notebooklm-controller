@@ -199,7 +199,7 @@
 - [x] T066 [US14] Integrate notifier with scheduler — on task complete/fail, push MCP notification to connected clients (fire-and-forget, no priority — client uses `status` field) — already wired in Phase 2
 - [x] T067 [US14] Handle client disconnection gracefully (notification not sent, result preserved in task store for get_status pull) — already implemented in Notifier
 
-- [ ] T067.1 [US13] **Review 1.5 backfill (FR-177, CRITICAL)**: Replace `scheduler.waitForIdle()` with `scheduler.waitForTask(taskId)` in `src/daemon/exec-tools.ts` sync mode. Current `waitForIdle()` waits for ALL queues to clear — sync caller hangs if other notebooks have queued tasks. Scheduler needs new `waitForTask(taskId): Promise<void>` method using per-task Promise resolution.
+- [x] T067.1 [US13] **Review 1.5 backfill (FR-177, CRITICAL)**: Replace `scheduler.waitForIdle()` with `scheduler.waitForTask(taskId)` in `src/daemon/exec-tools.ts` sync mode. Current `waitForIdle()` waits for ALL queues to clear — sync caller hangs if other notebooks have queued tasks. Scheduler needs new `waitForTask(taskId): Promise<void>` method using per-task Promise resolution.
 
 **Checkpoint**: Async operations work end-to-end. Can submit, track, cancel tasks, and receive notifications.
 
@@ -250,12 +250,12 @@
 
 ### Bug（必修，Phase 6 前）
 
-- [ ] T-HF01 **BUG: `tabHandle.url` 是 assignment metadata 不是 live page fact** — `src/daemon/index.ts:117` 傳 `tabUrl: tabHandle.url` 給 `runDualSession`，但 affinity reuse 時 `tabHandle.url` 不會更新為真實頁面 URL。pre-navigate hint 的判斷依據拿錯了。**Fix**: 改為 `tabUrl: tabHandle.page.url()`。（Finding A, Code Review 🟡1）
-- [ ] T-HF02 **BUG (CRITICAL): `waitForIdle()` 等全部 queue 而非單一 task** — `src/daemon/exec-tools.ts:151` sync mode 用 `scheduler.waitForIdle()` 等所有 notebook queue 清空，如果其他 notebook 有排隊 task，sync caller 會被卡住。**Fix**: Scheduler 加 `waitForTask(taskId): Promise<void>` 方法，exec-tools 改用 `waitForTask(task.taskId)`。（FR-177, T067.1 已追蹤）
+- [x] T-HF01 **BUG: `tabHandle.url` 是 assignment metadata 不是 live page fact** — `src/daemon/index.ts:117` 傳 `tabUrl: tabHandle.url` 給 `runDualSession`，但 affinity reuse 時 `tabHandle.url` 不會更新為真實頁面 URL。pre-navigate hint 的判斷依據拿錯了。**Fix**: 改為 `tabUrl: tabHandle.page.url()`。（Finding A, Code Review 🟡1）
+- [x] T-HF02 **BUG (CRITICAL): `waitForIdle()` 等全部 queue 而非單一 task** — `src/daemon/exec-tools.ts:151` sync mode 用 `scheduler.waitForIdle()` 等所有 notebook queue 清空，如果其他 notebook 有排隊 task，sync caller 會被卡住。**Fix**: Scheduler 加 `waitForTask(taskId): Promise<void>` 方法，exec-tools 改用 `waitForTask(task.taskId)`。（FR-177, T067.1 已追蹤）
 
 ### Architecture（應修，Phase 6 前）
 
-- [ ] T-HF03 **Planner 缺少 canonical notebook context** — `src/agent/session-runner.ts:227` Planner systemMessage 只有 agent catalog + locale，不知道 daemon 已 resolve 的 target notebook alias。Planner 只能從使用者 NL prompt 猜 notebook，而不是以系統已決定的 alias 為準。**Fix**: 把 `options.notebookAlias` 注入 Planner systemMessage。（Finding C）
+- [x] T-HF03 **Planner 缺少 canonical notebook context** — `src/agent/session-runner.ts:227` Planner systemMessage 只有 agent catalog + locale，不知道 daemon 已 resolve 的 target notebook alias。Planner 只能從使用者 NL prompt 猜 notebook，而不是以系統已決定的 alias 為準。**Fix**: 把 `options.notebookAlias` 注入 Planner systemMessage。（Finding C）
 - [ ] T-HF04 **prompt prefix 拼接 → SDK systemMessage 參數** — `src/agent/session-runner.ts:279,399` 目前 system prompt 用 `fullPrompt = systemMessage + "\n\n---\n\n" + prompt` 手動拼成一個大 prompt。應該用 Copilot SDK `createSession({ systemMessage })` 分層：session-level policy 放 systemMessage，step-level instruction 放 sendAndWait prompt。**Fix**: Planner 和 Executor 都改用 SDK `systemMessage` 參數。（Finding D）
 - [ ] T-HF05 **acquireTab async shared-state race** — `src/tab-manager/tab-manager.ts:139` acquireTab 策略 2 的選 tab（同步）和 navigate（async `page.goto`）之間沒有互斥。多 notebook 並發進入時可能 double-acquire 同一個 idle tab。**Fix**: 短 critical section 內標記 `reserved/acquiring` → 離開 lock → goto → commit active 或 rollback idle。MVP 階段 scheduler per-notebook FIFO 降低發生機率，但架構上應修正。（Finding B）
 

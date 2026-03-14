@@ -441,6 +441,62 @@ describe("Scheduler", () => {
   });
 
   // -----------------------------------------------------------------------
+  // waitForTask (FR-177, T-HF02)
+  // -----------------------------------------------------------------------
+
+  describe("waitForTask", () => {
+    it("resolves immediately if task is already completed", async () => {
+      const runTask = vi.fn(async (): Promise<SessionResult> => ({ success: true }));
+      const scheduler = new Scheduler({ taskStore, runTask });
+
+      const task = await scheduler.submit({ notebookAlias: "nb", command: "fast" });
+      await scheduler.waitForIdle(); // let it finish
+
+      // Should resolve immediately since task is done.
+      await scheduler.waitForTask(task.taskId);
+    });
+
+    it("waits only for the specific task, not all queues", async () => {
+      let resolveNbB: (() => void) | undefined;
+      const blockNbB = new Promise<void>((r) => { resolveNbB = r; });
+
+      const runTask = vi.fn(async (task: AsyncTask): Promise<SessionResult> => {
+        if (task.notebookAlias === "nb-b") await blockNbB;
+        return { success: true };
+      });
+
+      const scheduler = new Scheduler({ taskStore, runTask });
+
+      const taskA = await scheduler.submit({ notebookAlias: "nb-a", command: "quick" });
+      await scheduler.submit({ notebookAlias: "nb-b", command: "slow" });
+
+      // waitForTask(taskA) should resolve even though nb-b is still blocked.
+      await scheduler.waitForTask(taskA.taskId);
+
+      const completedA = await taskStore.get(taskA.taskId);
+      expect(completedA?.status).toBe("completed");
+
+      // Clean up.
+      resolveNbB!();
+      await scheduler.waitForIdle();
+    });
+
+    it("resolves when a failed task completes", async () => {
+      const runTask = vi.fn(async (): Promise<SessionResult> => ({
+        success: false,
+        error: "boom",
+      }));
+      const scheduler = new Scheduler({ taskStore, runTask });
+
+      const task = await scheduler.submit({ notebookAlias: "nb", command: "fail" });
+      await scheduler.waitForTask(task.taskId);
+
+      const result = await taskStore.get(task.taskId);
+      expect(result?.status).toBe("failed");
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // getQueueSize
   // -----------------------------------------------------------------------
 

@@ -228,7 +228,15 @@ export async function runPlannerSession(
   // Build agent catalog for the Planner's system message.
   const agentCatalog = buildPlannerCatalog(agentConfigs);
 
+  // Canonical notebook context for Planner (T-HF03)
+  const notebookAlias = options.notebookAlias;
+
   const plannerSystemMessage = `你是 NotebookLM 控制器的 Planner。你的任務是分析使用者的自然語言指令，選擇正確的 agent config，組裝結構化 prompt 給 Executor 執行。
+
+## 目標 Notebook
+
+操作目標：${notebookAlias}
+（系統已 resolve 的 notebook alias，不需要從使用者指令中猜測）
 
 ## 可用的 Agent Configs
 

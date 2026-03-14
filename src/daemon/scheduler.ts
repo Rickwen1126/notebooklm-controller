@@ -53,6 +53,9 @@ export class Scheduler {
   /** Promises for currently-running processing loops (used by shutdown). */
   private readonly loopPromises = new Map<string, Promise<void>>();
 
+  /** Per-task completion resolvers (used by waitForTask). */
+  private readonly taskResolvers = new Map<string, () => void>();
+
   private shuttingDown = false;
 
   constructor(deps: SchedulerDeps) {
@@ -176,6 +179,23 @@ export class Scheduler {
     if (activeLoops.length > 0) {
       await Promise.all(activeLoops);
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // waitForTask — wait for a specific task to reach terminal state (FR-177)
+  // -------------------------------------------------------------------------
+
+  async waitForTask(taskId: string): Promise<void> {
+    // Check if already in terminal state.
+    const task = await this.taskStore.get(taskId);
+    if (task && ["completed", "failed", "cancelled"].includes(task.status)) {
+      return;
+    }
+
+    // Register a resolver that will be called when this task finishes.
+    return new Promise<void>((resolve) => {
+      this.taskResolvers.set(taskId, resolve);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -355,6 +375,13 @@ export class Scheduler {
       }
     } finally {
       this.cancellationFlags.delete(task.taskId);
+
+      // Resolve any waitForTask() callers waiting on this task.
+      const resolver = this.taskResolvers.get(task.taskId);
+      if (resolver) {
+        this.taskResolvers.delete(task.taskId);
+        resolver();
+      }
     }
   }
 }

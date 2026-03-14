@@ -146,9 +146,9 @@ function registerExec(
         }
 
         // -----------------------------------------------------------------
-        // Sync mode: wait for completion
+        // Sync mode: wait for this specific task (FR-177)
         // -----------------------------------------------------------------
-        await deps.scheduler.waitForIdle();
+        await deps.scheduler.waitForTask(task.taskId);
 
         const completed = await deps.taskStore.get(task.taskId);
         if (!completed) {

@@ -114,7 +114,7 @@ function createRunTask(
           hooks,
           locale,
           notebookAlias: task.notebookAlias,
-          tabUrl: tabHandle.url,
+          tabUrl: tabHandle.page.url(),
         },
         task.command,
       );
