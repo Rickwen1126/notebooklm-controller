@@ -13,7 +13,7 @@ interface LogContext {
 }
 
 interface LogEntry {
-  level: "info" | "warn" | "error";
+  level: "debug" | "info" | "warn" | "error";
   message: string;
   timestamp: string;
   taskId?: string;
@@ -24,14 +24,22 @@ interface LogEntry {
 
 class Logger {
   private context: LogContext;
+  private debugEnabled: boolean;
 
   constructor(context?: LogContext) {
     this.context = context ?? {};
+    this.debugEnabled = process.env.NBCTL_DEBUG === "1" || process.env.NBCTL_DEBUG === "true";
   }
 
   /** Create a child logger that inherits this logger's context merged with additional fields. */
   child(context: LogContext): Logger {
-    return new Logger({ ...this.context, ...context });
+    const child = new Logger({ ...this.context, ...context });
+    child.debugEnabled = this.debugEnabled;
+    return child;
+  }
+
+  debug(message: string, data?: Record<string, unknown>): void {
+    if (this.debugEnabled) this.log("debug", message, data);
   }
 
   info(message: string, data?: Record<string, unknown>): void {
@@ -47,7 +55,7 @@ class Logger {
   }
 
   private log(
-    level: "info" | "warn" | "error",
+    level: "debug" | "info" | "warn" | "error",
     message: string,
     data?: Record<string, unknown>,
   ): void {

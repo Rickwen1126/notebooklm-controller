@@ -108,6 +108,10 @@ export async function runSession(
       agentCount: customAgents.length,
       timeoutMs,
     });
+    log.debug("Session systemMessage", {
+      systemMessage: systemMessage?.slice(0, 2000),
+      systemMessageLength: systemMessage?.length,
+    });
 
     // 2. Create a session with tools, custom agents, hooks, and permission handler.
     session = await sdkClient.createSession({
@@ -122,6 +126,9 @@ export async function runSession(
     log.info("Session created, sending prompt", {
       sessionId: session.sessionId,
       promptLength: prompt.length,
+    });
+    log.debug("Session prompt", {
+      prompt: prompt.slice(0, 2000),
     });
 
     // 3. Send prompt and wait for completion with timeout.
@@ -344,6 +351,11 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
     agentCount: agentConfigs.length,
     locale,
   });
+  log.debug("Planner input", {
+    prompt: prompt.slice(0, 1000),
+    systemMessageLength: plannerSystemMessage.length,
+    agentCatalog: agentCatalog.slice(0, 1000),
+  });
 
   // Run Planner as a single session with submitPlan + rejectInput tools.
   // System message is passed via createSession({ systemMessage }) to separate
@@ -487,6 +499,11 @@ export async function runExecutorSession(
     agentName: step.agentName,
     toolCount: filteredTools.length,
     promptLength: step.executorPrompt.length,
+  });
+  log.debug("Executor input", {
+    executorPrompt: step.executorPrompt.slice(0, 1000),
+    systemMessageLength: systemMessage.length,
+    tools: filteredTools.map((t) => (t as { name?: string }).name ?? "?"),
   });
 
   // 4. Run via the low-level runSession primitive.
