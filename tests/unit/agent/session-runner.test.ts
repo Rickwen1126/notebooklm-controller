@@ -171,6 +171,7 @@ function mockPlannerResponse(plan: {
         sourceType: s.params.sourceType,
         sourcePath: s.params.sourcePath,
         sourceUrl: s.params.sourceUrl,
+        sourceName: s.params.sourceName,
       }));
       await submitPlan.handler({ reasoning: plan.reasoning, steps: expandedSteps });
     }

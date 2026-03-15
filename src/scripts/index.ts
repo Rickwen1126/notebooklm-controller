@@ -102,19 +102,15 @@ const SCRIPT_REGISTRY: Record<string, (ctx: ScriptContext, params: Record<string
     try {
       const content = await preprocessAddSource(p);
       const chunks = splitIntoChunks(content);
-
-      if (chunks.length === 1) {
-        // Single chunk — normal paste
-        return scriptedAddSource(ctx, chunks[0]);
-      }
-
-      // Multi-chunk — paste each as separate source
-      contentLog.info("Content split into chunks", { totalChars: content.length, chunks: chunks.length });
+      const sourceName = p.sourceName;
       const allLogs: ScriptResult["log"] = [];
       const t0 = Date.now();
 
       for (let i = 0; i < chunks.length; i++) {
-        contentLog.info(`Pasting chunk ${i + 1}/${chunks.length}`, { charCount: chunks[i].length });
+        if (chunks.length > 1) {
+          contentLog.info(`Pasting chunk ${i + 1}/${chunks.length}`, { charCount: chunks[i].length });
+        }
+
         const result = await scriptedAddSource(ctx, chunks[i]);
         allLogs.push(...result.log);
 
@@ -130,16 +126,34 @@ const SCRIPT_REGISTRY: Record<string, (ctx: ScriptContext, params: Record<string
           };
         }
 
+        // Auto-rename the newly added source
+        if (sourceName) {
+          const renameTo = chunks.length > 1
+            ? `${sourceName} (part ${i + 1}/${chunks.length})`
+            : sourceName;
+          contentLog.info("Renaming source", { name: renameTo });
+          const renameResult = await scriptedRenameSource(ctx, renameTo);
+          allLogs.push(...renameResult.log);
+          if (renameResult.status !== "success") {
+            contentLog.warn("Source rename failed (non-critical)", { name: renameTo });
+            // Non-critical — paste succeeded, rename is best-effort
+          }
+        }
+
         // Brief pause between chunks to let NotebookLM process
         if (i < chunks.length - 1) {
           await new Promise((r) => setTimeout(r, 3000));
         }
       }
 
+      const summary = chunks.length > 1
+        ? `Added ${chunks.length} source parts (${content.length} chars total)${sourceName ? `, named "${sourceName}"` : ""}`
+        : `Source added${sourceName ? ` as "${sourceName}"` : ""}`;
+
       return {
         operation: "addSource",
         status: "success",
-        result: `Added ${chunks.length} source parts (${content.length} chars total)`,
+        result: summary,
         log: allLogs,
         totalMs: Date.now() - t0,
         failedAtStep: null,
@@ -206,12 +220,13 @@ const SCRIPT_CATALOG: ScriptCatalogEntry[] = [
   { operation: "query", description: "Ask NotebookLM a question and get the answer", params: { question: "The question to ask" }, startPage: "notebook" },
   {
     operation: "addSource",
-    description: "Add a source to the notebook. Supports: plain text (content param), git repo (sourceType=repo + sourcePath), URL webpage (sourceType=url + sourceUrl), PDF file (sourceType=pdf + sourcePath). Content is automatically converted.",
+    description: "Add a source to the notebook. Supports: plain text (content param), git repo (sourceType=repo + sourcePath), URL webpage (sourceType=url + sourceUrl), PDF file (sourceType=pdf + sourcePath). Content is automatically converted. Auto-renamed after paste using sourceName.",
     params: {
       content: "(for text) The text content to add",
       sourceType: "(optional) text | repo | url | pdf. Default: text",
       sourcePath: "(for repo/pdf) Absolute path to the repo or PDF file",
       sourceUrl: "(for url) The URL to fetch and convert",
+      sourceName: "(recommended) Human-readable name for the source, e.g. 'my-project (repo)'",
     },
     startPage: "notebook",
   },

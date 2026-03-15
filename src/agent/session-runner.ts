@@ -299,10 +299,15 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
 1. A single operation produces exactly 1 step.
 2. A compound operation (e.g. "add a source then ask a question") produces multiple steps in order.
 3. params must include concrete values. For example, not just "ask a question" but \`{ "question": "What are the advantages of TypeScript?" }\`.
-4. Do not execute operations yourself — only plan.
-5. If the user's request is unrelated to NotebookLM operations, harmful, ambiguous, missing required context, or unsupported, call the rejectInput tool with a category and reason. Do not call submitPlan.
-6. The user's input may be in any language. Always understand their intent regardless of language.
-7. Current locale: ${locale}`;
+4. For addSource: ALWAYS provide a sourceName. Derive it from the input:
+   - repo path → repo folder name + "(repo)", e.g. "my-project (repo)"
+   - URL → domain + path + "(web)", e.g. "en.wikipedia.org/TypeScript (web)"
+   - PDF path → filename without extension + "(PDF)", e.g. "Copilot SDK 簡報 (PDF)"
+   - plain text → brief description from user prompt, e.g. "TypeScript 測試內容"
+5. Do not execute operations yourself — only plan.
+6. If the user's request is unrelated to NotebookLM operations, harmful, ambiguous, missing required context, or unsupported, call the rejectInput tool with a category and reason. Do not call submitPlan.
+7. The user's input may be in any language. Always understand their intent regardless of language.
+8. Current locale: ${locale}`;
 
   // Capture plan or rejection via closure.
   let capturedPlan = null as ExecutionPlan | null;
@@ -322,9 +327,10 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
         sourceType: z.string().optional().describe("For addSource: text | repo | url | pdf (default: text)"),
         sourcePath: z.string().optional().describe("For addSource with repo/pdf: absolute file path"),
         sourceUrl: z.string().optional().describe("For addSource with url: the URL to fetch and convert"),
+        sourceName: z.string().optional().describe("For addSource: human-readable name for the source (auto-rename after paste)"),
       })),
     }),
-    handler: async (args: { reasoning: string; steps: Array<{ operation: string; question?: string; content?: string; newName?: string; sourceType?: string; sourcePath?: string; sourceUrl?: string }> }) => {
+    handler: async (args: { reasoning: string; steps: Array<{ operation: string; question?: string; content?: string; newName?: string; sourceType?: string; sourcePath?: string; sourceUrl?: string; sourceName?: string }> }) => {
       // Convert expanded fields into params Record<string, string>
       const steps: ExecutionStep[] = args.steps.map((s) => {
         const params: Record<string, string> = {};
@@ -334,6 +340,7 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
         if (s.sourceType) params.sourceType = s.sourceType;
         if (s.sourcePath) params.sourcePath = s.sourcePath;
         if (s.sourceUrl) params.sourceUrl = s.sourceUrl;
+        if (s.sourceName) params.sourceName = s.sourceName;
         return { operation: s.operation, params };
       });
       capturedPlan = { steps, reasoning: args.reasoning };
