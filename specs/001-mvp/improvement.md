@@ -121,6 +121,17 @@ addSource script → detect type (text/repo/url/pdf) →
 - 加入 script-level result verification（不只回報 success，用 DOM 確認操作真的生效）
 - `findElementByText` 加 scope 參數（optional container selector）
 
+### P1.5: Smart Source Rename Agent
+
+**限制**：auto-rename 只在 source panel 有 exactly 1 個「貼上的文字」時才生效。如果有 >= 2 個同名未命名 source，skip rename 並提示使用者。
+
+**未來**：全 Agent rename 工具 — LLM agent 逐一點開每個未命名 source，讀取內容摘要，自動決定命名。適用於：
+- 納管既有 notebook（有多個未命名 source）
+- 使用者手動在 NotebookLM UI 加了 source 沒命名
+- 需要 Recovery-level browser tools（click, read, rename）
+
+這是 agent 工作不是 script 工作 — 需要 LLM 判斷內容 → 決定名稱。
+
 ### P2: Observability
 
 - Recovery session 的 tool call log 即時串流（不只在結束後 dump）
