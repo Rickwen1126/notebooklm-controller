@@ -266,6 +266,45 @@ mcp_call 31 "exec" '{"prompt":"刪除名為 G2-Test-Notebook 的筆記本"}'
 
 ---
 
+## Phase 2.5: Content Pipeline（repo / URL / PDF → 來源）
+
+> 測試 addSource 的 content preprocessing：自動偵測 sourceType，呼叫 converter，paste 轉換後的文字。
+> 每步用 ISO Browser 驗證來源確實新增。
+
+### CP01: Repo 來源
+```bash
+mcp_call "exec" '{"prompt":"把 /Users/rickwen/code/notebooklm-controller 的程式碼加入來源","notebook":"nbctl-test"}'
+```
+**預期**：Planner 選 `addSource` + `sourceType=repo` + `sourcePath`。repomix 轉換 → paste。
+**超時**：180 秒（repomix 可能需要 30-60s）
+**ISO 驗證**：source panel 多一個來源
+
+### CP02: URL 來源
+```bash
+mcp_call "exec" '{"prompt":"把 https://en.wikipedia.org/wiki/TypeScript 的內容爬下來加入來源","notebook":"nbctl-test"}'
+```
+**預期**：Planner 選 `sourceType=url` + `sourceUrl`。readability 擷取 → paste。
+**超時**：120 秒
+**ISO 驗證**：source panel 多一個來源
+
+### CP03: PDF 來源（如果有測試 PDF）
+```bash
+mcp_call "exec" '{"prompt":"把 /path/to/test.pdf 加入來源","notebook":"nbctl-test"}'
+```
+**預期**：Planner 選 `sourceType=pdf` + `sourcePath`。pdf-parse 轉換 → paste。
+**跳過條件**：如果沒有測試用 PDF 檔案可跳過此步。
+
+### CP04: 純文字來源（regression）
+```bash
+mcp_call "exec" '{"prompt":"加入一個文字來源，內容是：Content pipeline regression test。","notebook":"nbctl-test"}'
+```
+**預期**：跟之前 S02 一樣，純文字 paste，不走 converter。
+**ISO 驗證**：source panel 多一個來源
+
+**Phase 2.5 通過標準**：repo + URL 來源成功加入（ISO verified），純文字 regression OK
+
+---
+
 ## Phase 3: Recovery Test
 
 > 手動 corrupt UIMap → script 失敗 → Recovery LLM 接手完成 → repair log 產生
@@ -414,6 +453,7 @@ Claude Code 用 **Bash tool** 跑 curl + **iso-browser CLI** 跑 DOM 驗證。
 Phase 0: Pre-flight            ✅ PASS (Xs)
 Phase 1: Notebook Mgmt         ✅ PASS (Xs)
 Phase 2: All-Ops Happy Path    ✅ PASS (Xs)  [S01-S12, 10 operations]
+Phase 2.5: Content Pipeline    ✅ PASS (Xs)  [repo + URL + PDF → source]
 Phase 3: Recovery Test         ✅ PASS (Xs)  [corrupt → recovery → repair log]
 Phase 4: Planner NL Dispatch   ✅ PASS (Xs)  [single + multi + reject]
 Phase 5: Async + Tasks         ✅ PASS (Xs)
