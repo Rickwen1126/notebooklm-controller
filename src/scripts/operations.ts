@@ -84,15 +84,25 @@ async function openSourceMenu(
   const clickStart = Date.now();
   await helpers.dispatchClick(cdp, sourceMenus[0].x, sourceMenus[0].y);
 
-  // Wait for menu to render — menu items are plain BUTTONs, not [role=menuitem].
-  let menuRendered = false;
-  for (let i = 0; i < 15; i++) {
-    await new Promise((r) => setTimeout(r, 300));
-    const item = await helpers.findElementByText(page, "移除來源");
-    if (item) { menuRendered = true; break; }
+  // Wait for menu overlay using waitForVisible (not hardcode sleep).
+  const menuVisible = await helpers.waitForVisible(page, '.cdk-overlay-pane, [role=menu], [role=listbox]', { timeoutMs: 5000 });
+
+  if (!menuVisible.visible) {
+    // Retry click
+    await helpers.dispatchClick(cdp, sourceMenus[0].x, sourceMenus[0].y);
+    const retry = await helpers.waitForVisible(page, '.cdk-overlay-pane, [role=menu], [role=listbox]', { timeoutMs: 3000 });
+    if (!retry.visible) {
+      log.push(createLogEntry(stepNum, "click_source_menu", "fail",
+        `Clicked twice, menu overlay not detected`, clickStart));
+      return { ok: false, stepNum };
+    }
   }
+
+  // Confirm menu items rendered
+  const itemCheck = await helpers.waitForEnabled(page, "移除來源", "text", { timeoutMs: 3000 });
+  const menuRendered = itemCheck.enabled;
   log.push(createLogEntry(stepNum, "click_source_menu", menuRendered ? "ok" : "fail",
-    `Clicked menu at (${sourceMenus[0].x}, ${sourceMenus[0].y}), menu ${menuRendered ? "rendered" : "not detected (4.5s)"}`, clickStart));
+    `Clicked (${sourceMenus[0].x},${sourceMenus[0].y}), menu ${menuRendered ? `rendered in ${menuVisible.elapsedMs}ms` : "items not found"}`, clickStart));
 
   return { ok: menuRendered, stepNum };
 }
@@ -110,6 +120,7 @@ async function openNotebookMenu(
   const stepNum = startStep;
   const stepStart = Date.now();
 
+  // Find more_vert icons (or aria-label "專案動作選單")
   const menuIcons = await page.evaluate(`(() => {
     const els = document.querySelectorAll('button, [role=button]');
     const results = [];
@@ -121,35 +132,51 @@ async function openNotebookMenu(
       if (r.width === 0 || r.height === 0) continue;
       const s = getComputedStyle(el);
       if (s.display === 'none' || s.visibility === 'hidden') continue;
+      // Only include icons in the visible viewport (y < 900)
+      if (r.y + r.height / 2 > 900) continue;
       results.push({ x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) });
     }
     return results;
   })()`) as Array<{ x: number; y: number }>;
 
   if (menuIcons.length === 0) {
-    log.push(createLogEntry(stepNum, "find_notebook_menu", "fail", `No menu icons found`, Date.now()));
+    log.push(createLogEntry(stepNum, "find_notebook_menu", "fail", `No menu icons found in viewport`, Date.now()));
     return { ok: false, stepNum };
   }
 
   await helpers.dispatchClick(cdp, menuIcons[0].x, menuIcons[0].y);
 
-  // Wait for menu to render — items are plain BUTTONs, not [role=menuitem].
-  let menuRendered = false;
-  for (let i = 0; i < 15; i++) {
-    await new Promise((r) => setTimeout(r, 300));
-    const item = await helpers.findElementByText(page, "刪除");
-    if (!item) {
-      // Also try "編輯標題" as alternate indicator
-      const alt = await helpers.findElementByText(page, "編輯標題");
-      if (alt) { menuRendered = true; break; }
-    } else {
-      menuRendered = true; break;
+  // Wait for menu overlay to appear using waitForVisible (not hardcode sleep).
+  // NotebookLM renders menu in .cdk-overlay-pane or [role=menu].
+  const menuVisible = await helpers.waitForVisible(page, '.cdk-overlay-pane, [role=menu], [role=listbox]', { timeoutMs: 5000 });
+
+  if (!menuVisible.visible) {
+    // Retry click — first click may have been dismissed
+    await helpers.dispatchClick(cdp, menuIcons[0].x, menuIcons[0].y);
+    const retry = await helpers.waitForVisible(page, '.cdk-overlay-pane, [role=menu], [role=listbox]', { timeoutMs: 3000 });
+    if (!retry.visible) {
+      log.push(createLogEntry(stepNum, "click_notebook_menu", "fail",
+        `Clicked (${menuIcons[0].x},${menuIcons[0].y}) twice, menu overlay not detected`, stepStart));
+      return { ok: false, stepNum };
     }
   }
-  log.push(createLogEntry(stepNum, "click_notebook_menu", menuRendered ? "ok" : "fail",
-    `Clicked menu at (${menuIcons[0].x}, ${menuIcons[0].y}), menu ${menuRendered ? "rendered" : "not detected (4.5s)"}`, stepStart));
 
-  return { ok: menuRendered, stepNum };
+  // Confirm menu items are rendered by waiting for findElementByText
+  const itemCheck = await helpers.waitForEnabled(page, "刪除", "text", { timeoutMs: 3000 });
+  if (!itemCheck.enabled) {
+    // Try "編輯標題" as alternate indicator
+    const altCheck = await helpers.waitForEnabled(page, "編輯標題", "text", { timeoutMs: 2000 });
+    if (!altCheck.enabled) {
+      log.push(createLogEntry(stepNum, "click_notebook_menu", "fail",
+        `Menu overlay appeared but no menu items found`, stepStart));
+      return { ok: false, stepNum };
+    }
+  }
+
+  log.push(createLogEntry(stepNum, "click_notebook_menu", "ok",
+    `Clicked (${menuIcons[0].x},${menuIcons[0].y}), menu rendered in ${menuVisible.elapsedMs}ms`, stepStart));
+
+  return { ok: true, stepNum };
 }
 
 // =============================================================================
