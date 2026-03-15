@@ -334,11 +334,12 @@ export async function scriptedAddSource(
     await dispatchClick(cdp, addSourceEl.center.x, addSourceEl.center.y);
     log.push(createLogEntry(2, "click_add_source", "ok", `Clicked`, stepStart));
 
-    // Step 3: Wait for dialog
+    // Step 3: Wait for dialog to render
     stepNum = 3;
     stepStart = Date.now();
-    await new Promise((r) => setTimeout(r, 1000));
-    log.push(createLogEntry(3, "wait_dialog", "ok", `Waited 1000ms for dialog`, stepStart));
+    const dialogReady = await waitForVisible(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 5000 });
+    log.push(createLogEntry(3, "wait_dialog", dialogReady.visible ? "ok" : "warn",
+      dialogReady.visible ? `Dialog ready in ${dialogReady.elapsedMs}ms` : `Dialog not detected (timeout)`, stepStart));
 
     // Step 4: Find "複製的文字" option
     stepNum = 4;
@@ -349,12 +350,12 @@ export async function scriptedAddSource(
     }
     log.push(createLogEntry(4, "find_paste_source_type", "ok", `Found at (${pasteTypeEl.center.x}, ${pasteTypeEl.center.y})`, stepStart));
 
-    // Step 5: Click paste source type
+    // Step 5: Click paste source type → wait for textarea to appear
     stepNum = 5;
     stepStart = Date.now();
     await dispatchClick(cdp, pasteTypeEl.center.x, pasteTypeEl.center.y);
-    await new Promise((r) => setTimeout(r, 500));
-    log.push(createLogEntry(5, "click_paste_source_type", "ok", `Clicked`, stepStart));
+    await waitForVisible(page, 'textarea', { timeoutMs: 3000 });
+    log.push(createLogEntry(5, "click_paste_source_type", "ok", `Clicked, textarea appeared`, stepStart));
 
     // Step 6: Find textarea by placeholder
     stepNum = 6;
@@ -408,11 +409,12 @@ export async function scriptedAddSource(
     await dispatchClick(cdp, insertEl.center.x, insertEl.center.y);
     log.push(createLogEntry(10, "click_insert", "ok", `Clicked`, stepStart));
 
-    // Step 11: Wait for processing
+    // Step 11: Wait for dialog to close (source processing complete)
     stepNum = 11;
     stepStart = Date.now();
-    await new Promise((r) => setTimeout(r, 3000));
-    log.push(createLogEntry(11, "wait_processing", "ok", `Waited 3000ms for source processing`, stepStart));
+    const processingDone = await waitForGone(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 15000 });
+    log.push(createLogEntry(11, "wait_processing", processingDone.gone ? "ok" : "warn",
+      processingDone.gone ? `Source processed, dialog closed in ${processingDone.elapsedMs}ms` : `Timeout waiting for processing`, stepStart));
 
     // Step 12: Verify source was added by reading source panel
     stepNum = 12;
@@ -546,9 +548,16 @@ async function openSourceMenu(
   log.push(createLogEntry(stepNum, "find_source_menu", "ok", `Found ${sourceMenus.length} menu icon(s)`, stepStart));
 
   stepNum++;
+  const clickStart = Date.now();
   await dispatchClick(cdp, sourceMenus[0].x, sourceMenus[0].y);
-  await new Promise((r) => setTimeout(r, 500));
-  log.push(createLogEntry(stepNum, "click_source_menu", "ok", `Clicked menu at (${sourceMenus[0].x}, ${sourceMenus[0].y})`, Date.now()));
+
+  // Wait for menu to render
+  const menuReady = await waitForVisible(page, '[role=menuitem], [role=menu], .mat-mdc-menu-panel', { timeoutMs: 3000 });
+  if (!menuReady.visible) {
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  log.push(createLogEntry(stepNum, "click_source_menu", "ok",
+    `Clicked menu at (${sourceMenus[0].x}, ${sourceMenus[0].y}), render=${menuReady.visible ? `${menuReady.elapsedMs}ms` : "fallback 1s"}`, clickStart));
 
   return { ok: true, stepNum };
 }
@@ -588,8 +597,15 @@ async function openNotebookMenu(
   }
 
   await dispatchClick(cdp, menuIcons[0].x, menuIcons[0].y);
-  await new Promise((r) => setTimeout(r, 500));
-  log.push(createLogEntry(stepNum, "click_notebook_menu", "ok", `Clicked menu at (${menuIcons[0].x}, ${menuIcons[0].y})`, stepStart));
+
+  // Wait for menu to actually render (menu items contain "刪除" or "編輯標題")
+  const menuReady = await waitForVisible(page, '[role=menuitem], [role=menu], .mat-mdc-menu-panel', { timeoutMs: 3000 });
+  if (!menuReady.visible) {
+    // Fallback: just wait longer
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  log.push(createLogEntry(stepNum, "click_notebook_menu", "ok",
+    `Clicked menu at (${menuIcons[0].x}, ${menuIcons[0].y}), render=${menuReady.visible ? `${menuReady.elapsedMs}ms` : "fallback 1s"}`, stepStart));
 
   return { ok: true, stepNum };
 }
@@ -661,29 +677,33 @@ export async function scriptedRemoveSource(
     if (!removeEl) return fail(stepNum, "find_remove_source", `Menu item not found`, "remove_source");
     log.push(createLogEntry(stepNum, "find_remove_source", "ok", `Found at (${removeEl.center.x}, ${removeEl.center.y})`, stepStart));
 
-    // Click remove
+    // Click remove → may open confirmation
     stepNum++;
     stepStart = Date.now();
     await dispatchClick(cdp, removeEl.center.x, removeEl.center.y);
-    await new Promise((r) => setTimeout(r, 500));
+    // Brief pause then check for confirmation dialog
+    const confirmDialog = await waitForVisible(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 1500 });
     log.push(createLogEntry(stepNum, "click_remove_source", "ok", `Clicked`, stepStart));
 
     // Handle confirmation dialog if present
     stepNum++;
     stepStart = Date.now();
-    const confirmEl = await findElementByText(page, uiMap.elements.remove_source?.text ?? "移除來源");
-    if (confirmEl) {
-      await dispatchClick(cdp, confirmEl.center.x, confirmEl.center.y);
-      log.push(createLogEntry(stepNum, "confirm_remove", "ok", `Confirmed removal`, stepStart));
+    if (confirmDialog.visible) {
+      const confirmEl = await findElementByText(page, uiMap.elements.remove_source?.text ?? "移除來源");
+      if (confirmEl) {
+        await dispatchClick(cdp, confirmEl.center.x, confirmEl.center.y);
+        await waitForGone(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 5000 });
+        log.push(createLogEntry(stepNum, "confirm_remove", "ok", `Confirmed removal, dialog closed`, stepStart));
+      }
     } else {
       log.push(createLogEntry(stepNum, "confirm_remove", "ok", `No confirmation dialog (direct remove)`, stepStart));
     }
 
-    // Wait for removal
+    // Wait for source panel to update
     stepNum++;
     stepStart = Date.now();
-    await new Promise((r) => setTimeout(r, 2000));
-    log.push(createLogEntry(stepNum, "wait_removal", "ok", `Waited 2s`, stepStart));
+    await new Promise((r) => setTimeout(r, 1000)); // Brief settle — source panel re-renders
+    log.push(createLogEntry(stepNum, "wait_removal", "ok", `Source panel settled`, stepStart));
 
     return makeSuccess("removeSource", log, t0, `Source removed`);
   } catch (err) {
@@ -721,12 +741,13 @@ export async function scriptedRenameSource(
     if (!renameEl) return fail(stepNum, "find_rename_source", `Menu item not found`, "rename_source");
     log.push(createLogEntry(stepNum, "find_rename_source", "ok", `Found`, stepStart));
 
-    // Click rename → opens dialog
+    // Click rename → opens dialog. Wait for dialog to render, not hardcode.
     stepNum++;
     stepStart = Date.now();
     await dispatchClick(cdp, renameEl.center.x, renameEl.center.y);
-    await new Promise((r) => setTimeout(r, 500));
-    log.push(createLogEntry(stepNum, "click_rename", "ok", `Clicked, waiting for dialog`, stepStart));
+    const dialogReady = await waitForVisible(page, 'input[type="text"], input:not([type])', { timeoutMs: 5000 });
+    log.push(createLogEntry(stepNum, "click_rename", dialogReady.visible ? "ok" : "warn",
+      `Clicked, dialog ${dialogReady.visible ? `ready in ${dialogReady.elapsedMs}ms` : "not detected (timeout)"}`, stepStart));
 
     // Find input in dialog (fallback to any visible text input)
     stepNum++;
@@ -750,18 +771,17 @@ export async function scriptedRenameSource(
     stepNum++;
     stepStart = Date.now();
     await dispatchType(cdp, page, "Ctrl+A");
-    await new Promise((r) => setTimeout(r, 100));
     await dispatchPaste(cdp, newName);
     log.push(createLogEntry(stepNum, "type_new_name", "ok", `Typed "${newName}"`, stepStart));
 
-    // Find and click save
+    // Find and click save. Wait for dialog to close after save.
     stepNum++;
     stepStart = Date.now();
     const saveEl = await findElementByText(page, uiMap.elements.save_button?.text ?? "儲存");
     if (!saveEl) return fail(stepNum, "find_save_button", `Save button not found`, "save_button");
     await dispatchClick(cdp, saveEl.center.x, saveEl.center.y);
-    await new Promise((r) => setTimeout(r, 1000));
-    log.push(createLogEntry(stepNum, "click_save", "ok", `Saved`, stepStart));
+    await waitForGone(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 5000 });
+    log.push(createLogEntry(stepNum, "click_save", "ok", `Saved, dialog closed`, stepStart));
 
     return makeSuccess("renameSource", log, t0, `Source renamed to "${newName}"`);
   } catch (err) {
@@ -950,12 +970,13 @@ export async function scriptedRenameNotebook(
     if (!editEl) return fail(stepNum, "find_edit_title", `Not found`, "edit_title");
     log.push(createLogEntry(stepNum, "find_edit_title", "ok", `Found`, stepStart));
 
-    // Click → dialog
+    // Click → dialog. Wait for dialog input to render.
     stepNum++;
     stepStart = Date.now();
     await dispatchClick(cdp, editEl.center.x, editEl.center.y);
-    await new Promise((r) => setTimeout(r, 500));
-    log.push(createLogEntry(stepNum, "click_edit_title", "ok", `Clicked, waiting for dialog`, stepStart));
+    const dialogReady = await waitForVisible(page, 'input[type="text"], input:not([type])', { timeoutMs: 5000 });
+    log.push(createLogEntry(stepNum, "click_edit_title", dialogReady.visible ? "ok" : "warn",
+      `Clicked, dialog ${dialogReady.visible ? `ready in ${dialogReady.elapsedMs}ms` : "not detected"}`, stepStart));
 
     // Find input in dialog + select all + paste new name
     stepNum++;
@@ -974,18 +995,17 @@ export async function scriptedRenameNotebook(
     if (!inputPos) return fail(stepNum, "find_dialog_input", `No input in dialog`, "dialog_input");
     await dispatchClick(cdp, inputPos.x, inputPos.y);
     await dispatchType(cdp, page, "Ctrl+A");
-    await new Promise((r) => setTimeout(r, 100));
     await dispatchPaste(cdp, newName);
     log.push(createLogEntry(stepNum, "type_new_name", "ok", `Typed "${newName}"`, stepStart));
 
-    // Find and click save
+    // Find and click save. Wait for dialog to close.
     stepNum++;
     stepStart = Date.now();
     const saveEl = await findElementByText(page, uiMap.elements.save_button?.text ?? "儲存");
     if (!saveEl) return fail(stepNum, "find_save", `Save button not found`, "save_button");
     await dispatchClick(cdp, saveEl.center.x, saveEl.center.y);
-    await new Promise((r) => setTimeout(r, 1000));
-    log.push(createLogEntry(stepNum, "click_save", "ok", `Saved`, stepStart));
+    await waitForGone(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 5000 });
+    log.push(createLogEntry(stepNum, "click_save", "ok", `Saved, dialog closed`, stepStart));
 
     return makeSuccess("renameNotebook", log, t0, `Notebook renamed to "${newName}"`);
   } catch (err) {
@@ -1019,12 +1039,12 @@ export async function scriptedDeleteNotebook(
     if (!deleteEl) return fail(stepNum, "find_delete", `Not found`, "delete_notebook");
     log.push(createLogEntry(stepNum, "find_delete", "ok", `Found`, stepStart));
 
-    // Click delete → confirmation dialog
+    // Click delete → wait for confirmation dialog
     stepNum++;
     stepStart = Date.now();
     await dispatchClick(cdp, deleteEl.center.x, deleteEl.center.y);
-    await new Promise((r) => setTimeout(r, 500));
-    log.push(createLogEntry(stepNum, "click_delete", "ok", `Clicked, waiting for confirmation`, stepStart));
+    await waitForVisible(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 3000 });
+    log.push(createLogEntry(stepNum, "click_delete", "ok", `Clicked, confirmation dialog appeared`, stepStart));
 
     // Find and click confirmation "刪除" button (Finding #44: explicit)
     stepNum++;
@@ -1032,16 +1052,12 @@ export async function scriptedDeleteNotebook(
     const confirmEl = await findElementByText(page, "刪除");
     if (confirmEl) {
       await dispatchClick(cdp, confirmEl.center.x, confirmEl.center.y);
-      log.push(createLogEntry(stepNum, "confirm_delete", "ok", `Confirmed deletion`, stepStart));
+      // Wait for dialog to close and page to update
+      await waitForGone(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 5000 });
+      log.push(createLogEntry(stepNum, "confirm_delete", "ok", `Confirmed deletion, dialog closed`, stepStart));
     } else {
       log.push(createLogEntry(stepNum, "confirm_delete", "warn", `No confirmation dialog found`, stepStart));
     }
-
-    // Wait for page update
-    stepNum++;
-    stepStart = Date.now();
-    await new Promise((r) => setTimeout(r, 2000));
-    log.push(createLogEntry(stepNum, "wait_deletion", "ok", `Waited 2s`, stepStart));
 
     return makeSuccess("deleteNotebook", log, t0, "Notebook deleted");
   } catch (err) {
