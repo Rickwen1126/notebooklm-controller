@@ -812,8 +812,10 @@ export async function scriptedRenameNotebook(
     // Find input in dialog + select all + paste new name
     stepNum++;
     stepStart = Date.now();
+    // Wait for input to appear inside dialog, then find it
+    await helpers.waitForVisible(page, '[role=dialog] input, mat-dialog-container input, [role=dialog] textarea, .cdk-overlay-pane input', { timeoutMs: 5000 });
     const inputPos = await page.evaluate(`(() => {
-      const inputs = document.querySelectorAll('input[type="text"], input:not([type])');
+      const inputs = document.querySelectorAll('input[type="text"], input:not([type]), textarea, [contenteditable="true"]');
       for (const el of inputs) {
         const r = el.getBoundingClientRect();
         if (r.width === 0 || r.height === 0) continue;
@@ -823,18 +825,19 @@ export async function scriptedRenameNotebook(
       }
       return null;
     })()`) as { x: number; y: number } | null;
-    if (!inputPos) return fail(stepNum, "find_dialog_input", `No input in dialog`, "dialog_input");
+    if (!inputPos) return fail(stepNum, "find_dialog_input", `No input/textarea in dialog`, "dialog_input");
     await helpers.dispatchClick(cdp, inputPos.x, inputPos.y);
+    await new Promise((r) => setTimeout(r, 200));
     await helpers.dispatchType(cdp, page, "Ctrl+A");
     await helpers.dispatchPaste(cdp, newName);
     log.push(createLogEntry(stepNum, "type_new_name", "ok", `Typed "${newName}"`, stepStart));
 
-    // Find and click save
+    // Find and click save — wait for it to be enabled
     stepNum++;
     stepStart = Date.now();
-    const saveEl = await helpers.findElementByText(page, uiMap.elements.save_button?.text ?? "儲存");
-    if (!saveEl) return fail(stepNum, "find_save", `Save button not found`, "save_button");
-    await helpers.dispatchClick(cdp, saveEl.center.x, saveEl.center.y);
+    const saveCheck = await helpers.waitForEnabled(page, uiMap.elements.save_button?.text ?? "儲存", "text", { timeoutMs: 5000 });
+    if (!saveCheck.enabled || !saveCheck.element) return fail(stepNum, "find_save", `Save button not found or disabled`, "save_button");
+    await helpers.dispatchClick(cdp, saveCheck.element.center.x, saveCheck.element.center.y);
     await helpers.waitForGone(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 5000 });
     log.push(createLogEntry(stepNum, "click_save", "ok", `Saved, dialog closed`, stepStart));
 
