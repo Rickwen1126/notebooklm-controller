@@ -829,6 +829,22 @@ NotebookLM 無前端 paste 字數限制（10K~500K 全通過），但 500K chars
 詳見：`spike/FilePaste500KExperiment.md`
 腳本：`spike/browser-capability/paste-limit-experiment.ts`、`spike/browser-capability/paste-filepath-experiment.ts`
 
+### Finding #52 — Multi-Tab 並發操作：CDP 完全支援
+
+Chrome CDP 支援多個 tab 同時操作，每個 tab 獨立 CDPSession，互不干擾。
+
+| 測試 | 結果 | 說明 |
+|------|------|------|
+| 並發 Screenshot | ✅ | 兩 tab 同時截圖，內容各自正確 |
+| 並發 Find（DOM 查詢）| ✅ | 同時查詢，各自返回正確結果 |
+| 並發 Click | ✅ | 同時點擊不同 tab 不同元素，互不干擾 |
+| Sequential vs Parallel | ✅ | Sequential=81ms, Parallel=65ms, 1.25x speedup |
+| 交錯操作 20 次 | ✅ | 快速交替兩 tab 操作，全部成功 |
+
+**結論**：Multi-tab 架構可行。之前 Phase F batch test 衝突的原因是**同一個 tab 被兩個 agent 同時操作**，不是 multi-tab 本身的問題。Tab pool 的 acquire/release 機制只需保證**一個 tab 同一時間只被一個 agent 使用**即可。
+
+腳本：`spike/browser-capability/multi-tab-experiment.ts`
+
 ### 總結
 
 **Spike 完成。** 所有核心驗證通過：
@@ -840,6 +856,7 @@ NotebookLM 無前端 paste 字數限制（10K~500K 全通過），但 500K chars
 5. ✅ 13/13 全操作 batch test 通過（Phase F batch）
 6. ✅ Planner input gate 23/23 通過（Phase F guard）
 7. ✅ File-based paste: 500K chars, 0 token 消耗（Paste experiment）
+8. ✅ Multi-tab 並發：CDP 支援，互不干擾（Multi-tab experiment）
 
 **可以回到主線開發。** 架構確定：
 - `customAgents` sub-agent → 不用（SDK 限制）
@@ -851,3 +868,4 @@ NotebookLM 無前端 paste 字數限制（10K~500K 全通過），但 500K chars
 - Executor pre-navigate：系統層錨點判斷，agent 不自己判斷頁面狀態
 - Tab pool weak affinity：連續操作同 notebook 免 navigate
 - File-based paste：Tool boundary = context boundary，大內容 0 token
+- Multi-tab 並發：CDP 支援，tab pool 只需保證一 tab 一 agent
