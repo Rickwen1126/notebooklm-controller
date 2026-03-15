@@ -918,3 +918,204 @@ User request
 - File-based paste：Tool boundary = context boundary，大內容 0 token
 - Multi-tab 並發：CDP 支援，tab pool 只需保證一 tab 一 agent
 - **Script-first + Agent-as-supervisor**：確定性腳本跑 happy path，agent 監督/驗證/fallback/self-repair（Phase G 方向）
+
+---
+
+## Phase G — Script-first Spike 實驗記錄（2026-03-15）
+
+### 實驗結構
+
+```
+spike/browser-capability/
+  phase-g.ts              # CLI + test harness + compare 模式
+  phase-g-scripts.ts      # 確定性腳本：scriptedQuery, scriptedAddSource
+  phase-g-supervisor.ts   # Supervisor agent + Repair agent
+  phase-g-shared.ts       # 共用型別、CDP helpers、UI map、log utilities
+```
+
+### 遭遇的 Bug 與修正
+
+#### Bug 1：tsx/esbuild `__name` 注入（Finding #53）
+
+將 `waitForContent` 的 in-browser async polling（`page.evaluate(async () => {...})`）搬到 spike 時，tsx 的 esbuild 編譯器對 async arrow function 注入 `__name()` helper。此 helper 只存在 Node 端，瀏覽器 context 沒有 → `__name is not defined`。
+
+Production `waitForContent` 不受影響因為走 `tsc` 編譯（在 `src/` 裡）。
+
+**Fix**：改用字串版 `page.evaluate(\`(async () => {...})()\`)`。
+
+#### Bug 2：Chrome 背景 tab setTimeout 節流（Finding #54）
+
+字串版修好後，in-browser polling 跑了 154 秒才 timeout（應該 60 秒）。Debug 顯示 60 秒內只跑了 4 次 hash check（預期 60 次）。
+
+**Root cause**：從 terminal 跑時 NotebookLM tab 在背景，Chrome 把背景 tab 的 `setTimeout` 節流到約每分鐘 1 次。`page.evaluate` 內的 async loop 使用的是 tab context 的 timer，受節流影響。
+
+Production `waitForContent` 規避了此問題：agent 先呼叫 `wait(5)`（Node-side `setTimeout`，不被節流），等答案大致生成完才進入 in-browser polling，只需 2-3 次 check 就 stable。
+
+**Fix**：改回 Node-side polling loop。每次 poll 用同步的 `page.evaluate` 只算 hash 回傳（~1ms），穩定性邏輯在 Node 端跑，`setTimeout` 不被背景節流。
+
+#### Bug 3：過渡訊息誤判為答案（Finding #55）
+
+Node-side polling 修好後，3 秒就 `stable=true`，但拿到的是 `"Checking your uploads..."`（24 chars）和 `"Reading your inputs..."`（22 chars）。
+
+**Root cause**：NotebookLM 在 Gemini 處理期間，會在 `.to-user-container .message-content`（同一個 answer selector）裡顯示過渡訊息。`rejectPattern` 只包含 `Thinking|Refining`，沒覆蓋 `Checking`、`Reading` 等。加了 baselineHash（submit 前記住舊答案 hash 排除）也沒用，因為過渡訊息 hash 本來就跟舊答案不同。
+
+**Fix**：加 `len < 50` 最小長度門檻（真正答案 > 50 字，過渡訊息都 < 30 字）。但這是 workaround，不是 root fix。
+
+### 核心發現：`.thinking-message` DOM signal（Finding #56）
+
+對比 `/notebooklm`（notebooklm-skill，Patchright 實作），他們用了一個我們漏掉的機制：
+
+```python
+# notebooklm-skill 的做法
+thinking_element = page.query_selector('div.thinking-message')
+if thinking_element and thinking_element.is_visible():
+    time.sleep(1)
+    continue  # 跳過 text polling，等 thinking 結束
+```
+
+**`.thinking-message` 是 NotebookLM 自己的 loading 指示器**。visible 時 = 還在處理（所有過渡訊息都在這個階段）。disappear 後 = 答案開始/完成渲染。
+
+這解釋了為什麼 production `waitForContent` 不完全可靠：
+- `rejectIf="Thinking|Refining"` 沒覆蓋所有過渡訊息
+- 靠 agent 的 `wait(5)` 碰巧跳過，不是靠自己
+- 如果 Gemini 回應 > 5 秒才開始，`waitForContent` 會拿到過渡訊息
+
+**正確的 polling 架構應該是三層**：
+
+```
+Layer 1 — .thinking-message 可見性等待     ← DOM signal，最可靠，零 LLM ✅ spike 已實作
+Layer 2 — text hash stability 確認完整性   ← 答案不再變化，零 LLM     ✅ spike 已實作
+Layer 3 — Agent 異常處理（timeout/未知狀態）← 按需，不是每次跑         ✅ Supervisor 做
+```
+
+**Spike 已修正**：`pollForAnswer`（phase-g-scripts.ts）已加入 Layer 1 `.thinking-message` 可見性檢查，參考 notebooklm-skill `ask_question.py` 同一模式。`len < 50` 保留為 defense-in-depth。
+
+**Production action item**：`waitForContent` tool（src/agent/tools/browser-tools.ts）仍需修正：
+1. 加 `waitUntilGone?: string` 參數（CSS selector），hash polling 前先等該元素消失
+2. 改 Node-side polling（目前 in-browser async polling 被背景 tab 節流）
+3. 擴充 rejectIf default 加 `Checking|Reading|正在檢查`
+
+### 速度對比數據
+
+| 場景 | Script-first (Phase G) | Pure Agent (Phase F) | /notebooklm |
+|------|----------------------|---------------------|-------------|
+| 操作（click/paste/submit） | **1.1s** | ~10s (8+ LLM roundtrips) | ~3s (human-like typing) |
+| 等答案 | 15-33s (hash poll) | 5s (fixed wait) + read | 15-30s (thinking + poll) |
+| 驗證 | 7.5s (supervisor) | ~3s (LLM 自己判斷) | 無 |
+| 答案完整性 | ✅ stable=true | ⚠️ 可能不完整 | ✅ 3 次 stable |
+| Repair | ✅ selector 修復 | ❌ | ❌ |
+| Total | ~42s | ~22-29s | ~46s |
+
+### 結論
+
+1. **腳本操作速度確實遠勝 agent**（1s vs 10s），但佔總時間比例小
+2. **瓶頸是 Gemini 回答生成時間**（15-30s），三種做法都在等
+3. **每次跑 Supervisor 是浪費** — happy path 不需要 LLM 驗證，agent 應只在 fail 時介入
+4. **polling 穩定性不如 agent 視覺判斷** — 撞了 3 個 bug 才勉強穩定，agent 看一眼截圖就知道
+5. **`.thinking-message` DOM signal 是關鍵缺失** — 加了才能讓 polling 真正可靠
+6. **最佳架構 = 腳本操作 + DOM signal 等待 + hash stability + agent 異常處理**
+
+---
+
+## Phase G2 — Script + Recovery-on-fail 架構（2026-03-15）
+
+### 架構決策（Finding #57）
+
+Phase G 的 Supervisor 每次都跑（7.5s），即使 happy path 也浪費 LLM call。
+重新設計：**Completion 與 Repair 分離**。
+
+```
+Script → success + stable? → 直接回傳（0 LLM cost）
+       → fail?             → Recovery session（GPT-5-mini 推理模型，免費）：
+                              ① 用 browser tools 從失敗點接續完成任務（用戶拿到結果）
+                              ② 分析失敗原因（selector 變了？流程變了？狀態不對？）
+                              ③ 輸出 suggestedPatch
+                            → 結果回傳用戶
+                            → error log 存 ~/.nbctl/repair-logs/
+                            → 之後 `nbctl repair` 讀 log 批次修 UI map / script
+```
+
+### 設計原則
+
+1. **Happy path 零 LLM 開銷** — script success + stable=true → 直接回傳，不截圖、不驗證
+2. **用戶永遠拿到結果** — script 失敗時，推理模型用 browser tools 接手完成（不是修完重試，是直接做完）
+3. **Completion 與 Repair 分離** — 完成任務是急的（用戶在等），修 script 不急（可離線批次）
+4. **Error log 累積 pattern** — 同一個 selector 連續壞 N 次 → repair 有更多 context
+
+### 模型選擇
+
+| 角色 | 模型 | 原因 |
+|------|------|------|
+| Script | 無 LLM | 確定性腳本 |
+| Recovery（完成 + 分析）| GPT-5-mini | 推理模型，需要判斷失敗狀態 + 決定接續步驟，免費 |
+| Repair（離線修 script）| 推理模型 | 需要分析 error log pattern + 修改 UI map / code |
+
+### Recovery Session prompt 設計
+
+```
+你是 NotebookLM 操作的 recovery agent。一個自動化腳本在第 N 步失敗了。
+
+## 你的任務（按順序）
+
+1. **完成任務**：用 browser tools 從當前狀態接續完成原始目標
+2. **分析原因**：說明為什麼腳本失敗（selector 變了？流程變了？頁面狀態不對？）
+3. **呼叫 submitResult** 提交結果和分析
+```
+
+Recovery 一個 session 同時做 completion + analysis，不分兩個。
+
+### Error Log 結構
+
+```jsonc
+// ~/.nbctl/repair-logs/2026-03-15T12-30-00_query_chat_input.json
+{
+  "operation": "query",
+  "failedAtStep": 1,
+  "failedSelector": "chat_input",
+  "uiMapValue": { "text": "開始輸入", "match": "placeholder" },
+  "scriptLog": [ ... ],
+  "recovery": {
+    "success": true,
+    "model": "gpt-5-mini",
+    "toolCalls": 8,
+    "actions": [ "screenshot", "find('*')", "find('輸入您的問題')", "click", "paste", ... ],
+    "analysis": "chat_input placeholder 從 '開始輸入' 改為 '輸入您的問題'"
+  },
+  "suggestedPatch": {
+    "elementKey": "chat_input",
+    "oldValue": "開始輸入",
+    "newValue": "輸入您的問題",
+    "confidence": 0.95
+  },
+  "timestamp": "2026-03-15T12:30:00Z"
+}
+```
+
+### `nbctl repair`（Production 功能，spike 不實作）
+
+```bash
+nbctl repair              # 讀 repair-logs，分析 pattern，修 UI map
+nbctl repair --dry-run    # 只列出建議修改
+nbctl repair --auto       # 自動套用 confidence > 0.8 的 patch
+```
+
+### 對比 Phase G 原架構
+
+| | Phase G（原） | Phase G2（新） |
+|---|---|---|
+| Happy path | Script + Supervisor（7.5s） | Script only（0 LLM） |
+| Failure handling | Supervisor → Repair → Retry | Recovery 直接完成 + log |
+| 用戶拿到結果 | Retry 也失敗 → 無結果 | Recovery 接手 → 幾乎一定有結果 |
+| 修復時機 | 立即（time pressure） | 離線（batch，更好的 context） |
+| 預估 happy path 速度 | ~42s | ~35s（省 supervisor 7.5s） |
+| 預估 failure 速度 | ~70s（supervisor + repair + retry） | ~50s（script + recovery） |
+
+### 實驗計畫
+
+Phase G2 spike 驗證項目：
+
+1. **G2-01**: Happy path query — script success → 直接回傳，0 LLM，計時
+2. **G2-02**: Happy path addSource — 同上
+3. **G2-03**: Corrupt selector → recovery 接手完成 + 產出 error log
+4. **G2-04**: Corrupt selector → 驗證 error log 格式 + suggestedPatch 正確性
+5. **G2-05**: 速度對比 — Phase G（always supervisor）vs Phase G2（skip on success）
