@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 
 export const NBCTL_HOME = join(homedir(), ".nbctl");
 export const STATE_FILE = join(NBCTL_HOME, "state.json");
+export const CONFIG_FILE = join(NBCTL_HOME, "config.json");
 export const TASKS_DIR = join(NBCTL_HOME, "tasks");
 export const CACHE_DIR = join(NBCTL_HOME, "cache");
 export const PROFILES_DIR = join(NBCTL_HOME, "profiles");

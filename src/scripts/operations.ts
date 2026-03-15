@@ -98,8 +98,9 @@ async function openSourceMenu(
     }
   }
 
-  // Confirm menu items rendered
-  const itemCheck = await helpers.waitForEnabled(page, "移除來源", "text", { timeoutMs: 3000 });
+  // Confirm menu items rendered (use UIMap text, not hardcoded)
+  const removeSourceText = ctx.uiMap.elements.remove_source?.text ?? "Remove source";
+  const itemCheck = await helpers.waitForEnabled(page, removeSourceText, "text", { timeoutMs: 3000 });
   const menuRendered = itemCheck.enabled;
   log.push(createLogEntry(stepNum, "click_source_menu", menuRendered ? "ok" : "fail",
     `Clicked (${sourceMenus[0].x},${sourceMenus[0].y}), menu ${menuRendered ? `rendered in ${menuVisible.elapsedMs}ms` : "items not found"}`, clickStart));
@@ -161,11 +162,13 @@ async function openNotebookMenu(
     }
   }
 
-  // Confirm menu items are rendered by waiting for findElementByText
-  const itemCheck = await helpers.waitForEnabled(page, "刪除", "text", { timeoutMs: 3000 });
+  // Confirm menu items are rendered (use UIMap text, not hardcoded)
+  const deleteText = ctx.uiMap.elements.delete_notebook?.text ?? "Delete";
+  const editTitleText = ctx.uiMap.elements.edit_title?.text ?? "Edit title";
+  const itemCheck = await helpers.waitForEnabled(page, deleteText, "text", { timeoutMs: 3000 });
   if (!itemCheck.enabled) {
-    // Try "編輯標題" as alternate indicator
-    const altCheck = await helpers.waitForEnabled(page, "編輯標題", "text", { timeoutMs: 2000 });
+    // Try edit_title as alternate indicator
+    const altCheck = await helpers.waitForEnabled(page, editTitleText, "text", { timeoutMs: 2000 });
     if (!altCheck.enabled) {
       log.push(createLogEntry(stepNum, "click_notebook_menu", "fail",
         `Menu overlay appeared but no menu items found`, stepStart));
@@ -700,18 +703,19 @@ export async function scriptedClearChat(
     // Step 5: handle confirmation if present — search INSIDE overlay only
     stepNum = 5;
     stepStart = Date.now();
-    const confirmDeletePos = await page.evaluate(`(() => {
+    const deleteChatConfirmText = uiMap.elements.delete_notebook?.text ?? "Delete";
+    const confirmDeletePos = await page.evaluate(`((searchText) => {
       const overlay = document.querySelector('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
       if (!overlay) return null;
       const btns = overlay.querySelectorAll('button, [role=button], a');
       for (const b of btns) {
-        if (b.textContent.trim().includes('刪除')) {
+        if (b.textContent.trim().includes(searchText)) {
           const r = b.getBoundingClientRect();
           if (r.width > 0 && !b.disabled) return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
         }
       }
       return null;
-    })()`) as { x: number; y: number } | null;
+    })(${JSON.stringify(deleteChatConfirmText)})`) as { x: number; y: number } | null;
     if (confirmDeletePos) {
       await helpers.dispatchClick(cdp, confirmDeletePos.x, confirmDeletePos.y);
       log.push(createLogEntry(5, "confirm_delete", "ok", `Confirmed at (${confirmDeletePos.x},${confirmDeletePos.y})`, stepStart));
@@ -961,21 +965,22 @@ export async function scriptedDeleteNotebook(
     await helpers.waitForVisible(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 3000 });
     log.push(createLogEntry(stepNum, "click_delete", "ok", `Clicked, confirmation dialog appeared`, stepStart));
 
-    // Find and click confirmation "刪除" button INSIDE dialog overlay
+    // Find and click confirmation delete button INSIDE dialog overlay
     stepNum++;
     stepStart = Date.now();
-    const confirmDeletePos = await page.evaluate(`(() => {
+    const deleteConfirmText = uiMap.elements.delete_notebook?.text ?? "Delete";
+    const confirmDeletePos = await page.evaluate(`((searchText) => {
       const overlay = document.querySelector('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
       if (!overlay) return null;
       const btns = overlay.querySelectorAll('button, [role=button], a');
       for (const b of btns) {
-        if (b.textContent.trim().includes('刪除')) {
+        if (b.textContent.trim().includes(searchText)) {
           const r = b.getBoundingClientRect();
           if (r.width > 0 && !b.disabled) return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
         }
       }
       return null;
-    })()`) as { x: number; y: number } | null;
+    })(${JSON.stringify(deleteConfirmText)})`) as { x: number; y: number } | null;
     if (confirmDeletePos) {
       await helpers.dispatchClick(cdp, confirmDeletePos.x, confirmDeletePos.y);
       await helpers.waitForGone(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 5000 });

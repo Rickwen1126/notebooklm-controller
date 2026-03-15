@@ -11,15 +11,16 @@ import { createLogEntry } from "./types.js";
 const HOMEPAGE_URL = "https://notebooklm.google.com";
 
 /**
- * Ensure the chat panel is visible. If not, clicks the "對話" tab.
+ * Ensure the chat panel is visible. If not, clicks the chat tab.
  */
 export async function ensureChatPanel(
   ctx: ScriptContext,
   log: ScriptLogEntry[],
   _t0: number,
 ): Promise<boolean> {
-  const { cdp, page, helpers } = ctx;
+  const { cdp, page, uiMap, helpers } = ctx;
   const stepStart = Date.now();
+  const chatTabText = uiMap.elements.chat_tab?.text ?? "Chat";
 
   const chatVisible = await page.evaluate(`(() => {
     const panel = document.querySelector('.chat-panel');
@@ -29,11 +30,11 @@ export async function ensureChatPanel(
   })()`) as boolean;
 
   if (!chatVisible) {
-    const tabEl = await helpers.findElementByText(page, "對話");
+    const tabEl = await helpers.findElementByText(page, chatTabText);
     if (tabEl) {
       await helpers.dispatchClick(cdp, tabEl.center.x, tabEl.center.y);
       await new Promise((r) => setTimeout(r, 800));
-      log.push(createLogEntry(0, "ensure_chat_panel", "warn", `Clicked "對話" tab`, stepStart));
+      log.push(createLogEntry(0, "ensure_chat_panel", "warn", `Clicked "${chatTabText}" tab`, stepStart));
     } else {
       log.push(createLogEntry(0, "ensure_chat_panel", "warn", `Chat panel not visible, no tab found`, stepStart));
       return false;
@@ -45,7 +46,7 @@ export async function ensureChatPanel(
 }
 
 /**
- * Ensure the source panel is visible. If not, clicks the "來源" tab.
+ * Ensure the source panel is visible. If not, clicks the source tab.
  * Also handles collapsed source panel (collapse_content).
  */
 export async function ensureSourcePanel(
@@ -53,8 +54,9 @@ export async function ensureSourcePanel(
   log: ScriptLogEntry[],
   _t0: number,
 ): Promise<boolean> {
-  const { cdp, page, helpers } = ctx;
+  const { cdp, page, uiMap, helpers } = ctx;
   const stepStart = Date.now();
+  const sourceTabText = uiMap.elements.source_tab?.text ?? "Sources";
 
   const panelVisible = await page.evaluate(`(() => {
     const panel = document.querySelector('.source-panel');
@@ -64,11 +66,11 @@ export async function ensureSourcePanel(
   })()`) as boolean;
 
   if (!panelVisible) {
-    const tabEl = await helpers.findElementByText(page, "來源");
+    const tabEl = await helpers.findElementByText(page, sourceTabText);
     if (tabEl) {
       await helpers.dispatchClick(cdp, tabEl.center.x, tabEl.center.y);
       await new Promise((r) => setTimeout(r, 800));
-      log.push(createLogEntry(0, "ensure_source_panel", "warn", `Clicked "來源" tab`, stepStart));
+      log.push(createLogEntry(0, "ensure_source_panel", "warn", `Clicked "${sourceTabText}" tab`, stepStart));
     } else {
       log.push(createLogEntry(0, "ensure_source_panel", "warn", `Source panel not visible, no tab found`, stepStart));
       return false;
