@@ -44,6 +44,28 @@ function makeSuccess(
   };
 }
 
+/**
+ * Find a button by text inside ANY overlay/dialog container.
+ * Searches ALL .cdk-overlay-pane elements (not just the first one —
+ * NotebookLM may have multiple overlays stacked).
+ *
+ * Returns click coordinates or null if not found.
+ */
+const FIND_OVERLAY_BUTTON_JS = `((searchText) => {
+  const overlays = document.querySelectorAll('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
+  for (const overlay of overlays) {
+    const btns = overlay.querySelectorAll('button, [role=button], a');
+    for (const b of btns) {
+      const t = b.textContent.trim();
+      if (t === searchText || (t.length < 30 && t.includes(searchText))) {
+        const r = b.getBoundingClientRect();
+        if (r.width > 0 && !b.disabled) return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
+      }
+    }
+  }
+  return null;
+})`;
+
 // =============================================================================
 // Internal helper: openSourceMenu
 // =============================================================================
@@ -379,9 +401,10 @@ export async function scriptedAddSource(
     stepStart = Date.now();
     const insertBtnText = uiMap.elements.insert_button.text;
     let insertPos = await page.evaluate(`(() => {
-      const overlay = document.querySelector('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
-      if (!overlay) return null;
-      const btns = overlay.querySelectorAll('button, [role=button], a');
+      const overlays = document.querySelectorAll('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
+      if (overlays.length === 0) return null;
+      const btns = [];
+      for (const o of overlays) for (const b of o.querySelectorAll('button, [role=button], a')) btns.push(b);
       for (const b of btns) {
         if (b.textContent.trim().includes(${JSON.stringify(insertBtnText)})) {
           const r = b.getBoundingClientRect();
@@ -633,9 +656,10 @@ export async function scriptedRenameSource(
     stepStart = Date.now();
     const saveBtnText = uiMap.elements.save_button?.text ?? "儲存";
     const savePos = await page.evaluate(`(() => {
-      const overlay = document.querySelector('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
-      if (!overlay) return null;
-      const btns = overlay.querySelectorAll('button, [role=button], a');
+      const overlays = document.querySelectorAll('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
+      if (overlays.length === 0) return null;
+      const btns = [];
+      for (const o of overlays) for (const b of o.querySelectorAll('button, [role=button], a')) btns.push(b);
       for (const b of btns) {
         if (b.textContent.trim().includes(${JSON.stringify(saveBtnText)})) {
           const r = b.getBoundingClientRect();
@@ -705,9 +729,10 @@ export async function scriptedClearChat(
     stepStart = Date.now();
     const deleteChatConfirmText = uiMap.elements.delete_notebook?.text ?? "Delete";
     const confirmDeletePos = await page.evaluate(`((searchText) => {
-      const overlay = document.querySelector('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
-      if (!overlay) return null;
-      const btns = overlay.querySelectorAll('button, [role=button], a');
+      const overlays = document.querySelectorAll('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
+      if (overlays.length === 0) return null;
+      const btns = [];
+      for (const o of overlays) for (const b of o.querySelectorAll('button, [role=button], a')) btns.push(b);
       for (const b of btns) {
         if (b.textContent.trim().includes(searchText)) {
           const r = b.getBoundingClientRect();
@@ -970,9 +995,10 @@ export async function scriptedDeleteNotebook(
     stepStart = Date.now();
     const deleteConfirmText = uiMap.elements.delete_notebook?.text ?? "Delete";
     const confirmDeletePos = await page.evaluate(`((searchText) => {
-      const overlay = document.querySelector('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
-      if (!overlay) return null;
-      const btns = overlay.querySelectorAll('button, [role=button], a');
+      const overlays = document.querySelectorAll('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
+      if (overlays.length === 0) return null;
+      const btns = [];
+      for (const o of overlays) for (const b of o.querySelectorAll('button, [role=button], a')) btns.push(b);
       for (const b of btns) {
         if (b.textContent.trim().includes(searchText)) {
           const r = b.getBoundingClientRect();
