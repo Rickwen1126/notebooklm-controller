@@ -101,6 +101,22 @@ Auto-rename after addSource only works when exactly 1 unnamed source ("貼上的
 
 ---
 
+## E2E Testing Protocol
+
+**Any change to core functionality MUST run `/test-real` before commit.**
+
+Core functionality = scripts (`src/scripts/`), session-runner, daemon wiring, content pipeline, UIMap.
+
+Minimum E2E checklist:
+1. `npm test` — all unit/integration tests pass
+2. `/test-real` Phase 2 — S01-S12 all-ops happy path (at least the operations affected by the change)
+3. ISO Browser independent DOM verification — don't trust daemon's text response, verify visually
+4. If dialog/overlay logic changed → test on notebook with multiple sources (user content pollution)
+5. If viewport/coordinate logic changed → full S01-S12 rerun
+6. If content pipeline changed → CP01-CP04 (repo/URL/PDF/text)
+
+Skip only if the change is purely documentation or test-only.
+
 ## Checkpoint
 
 Run `/save` at: milestone completion, important decisions, tests passing, before ending session.
