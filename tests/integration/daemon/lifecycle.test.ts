@@ -273,11 +273,11 @@ vi.mock("../../../src/agent/agent-loader.js", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Mock: session-runner (runDualSession)
+// Mock: session-runner (runPipeline)
 // ---------------------------------------------------------------------------
 
 vi.mock("../../../src/agent/session-runner.js", () => ({
-  runDualSession: vi.fn().mockResolvedValue({ success: true, durationMs: 100 }),
+  runPipeline: vi.fn().mockResolvedValue({ success: true, durationMs: 100 }),
 }));
 
 // ---------------------------------------------------------------------------

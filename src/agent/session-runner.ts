@@ -3,7 +3,7 @@
  *
  * Two-level API:
  *   - `runSession()` — low-level primitive: single session lifecycle
- *   - `runDualSession()` — high-level: Planner → Script → Recovery orchestration
+ *   - `runPipeline()` — high-level: Planner → Script → Recovery orchestration
  *
  * G2 architecture: deterministic scripts replace LLM Executor sessions.
  * Happy path = 0 LLM (script only). Failure = Recovery session (GPT-5-mini).
@@ -197,10 +197,10 @@ export async function runSession(
 }
 
 // ---------------------------------------------------------------------------
-// Dual Session: Types
+// Pipeline: Types
 // ---------------------------------------------------------------------------
 
-export interface DualSessionOptions {
+export interface PipelineOptions {
   client: CopilotClientSingleton;
   /** All available browser + state tools (Recovery session uses these). */
   tools: Tool<any>[];
@@ -225,7 +225,7 @@ export interface DualSessionOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Dual Session: Planner
+// Pipeline: Planner
 // ---------------------------------------------------------------------------
 
 const PLANNER_TIMEOUT_MS = 60_000;
@@ -259,7 +259,7 @@ export type PlannerResult =
  * from rejections without exceptions.
  */
 export async function runPlannerSession(
-  options: DualSessionOptions,
+  options: PipelineOptions,
   prompt: string,
 ): Promise<PlannerResult> {
   const {
@@ -397,14 +397,14 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
 }
 
 // ---------------------------------------------------------------------------
-// Dual Session: ScriptContext builder
+// Pipeline: ScriptContext builder
 // ---------------------------------------------------------------------------
 
 /**
- * Build a ScriptContext from DualSessionOptions.
+ * Build a ScriptContext from PipelineOptions.
  * Injects all CDP helpers + wait primitives + ensure helpers into ctx.
  */
-function buildScriptContext(options: DualSessionOptions): ScriptContext {
+function buildScriptContext(options: PipelineOptions): ScriptContext {
   const { cdpSession: cdp, page, uiMap } = options;
 
   // CDP helpers (imported from tab-manager pattern)
@@ -471,7 +471,7 @@ function buildScriptContext(options: DualSessionOptions): ScriptContext {
 }
 
 // ---------------------------------------------------------------------------
-// Dual Session: Orchestrator (G2: Planner → Script → Recovery)
+// Pipeline: Orchestrator (G2: Planner → Script → Recovery)
 // ---------------------------------------------------------------------------
 
 /**
@@ -482,11 +482,11 @@ function buildScriptContext(options: DualSessionOptions): ScriptContext {
  *
  * This is the main entry point called by the Scheduler's `runTask`.
  */
-export async function runDualSession(
-  options: DualSessionOptions,
+export async function runPipeline(
+  options: PipelineOptions,
   prompt: string,
 ): Promise<SessionResult> {
-  const log = logger.child({ module: "session-runner:dual" });
+  const log = logger.child({ module: "session-runner:pipeline" });
   const startTime = Date.now();
 
   try {
@@ -599,7 +599,7 @@ export async function runDualSession(
     const durationMs = Date.now() - startTime;
     const lastResult = stepResults[stepResults.length - 1];
 
-    log.info("Dual session completed", {
+    log.info("Pipeline completed", {
       stepCount: plan.steps.length,
       durationMs,
     });
@@ -613,7 +613,7 @@ export async function runDualSession(
     const durationMs = Date.now() - startTime;
     const errorMessage = err instanceof Error ? err.message : String(err);
 
-    log.error("Dual session failed", { error: errorMessage, durationMs });
+    log.error("Pipeline failed", { error: errorMessage, durationMs });
 
     return {
       success: false,

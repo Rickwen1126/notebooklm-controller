@@ -19,7 +19,7 @@ import { CacheManager } from "../state/cache-manager.js";
 import { Notifier } from "../notification/notifier.js";
 import { NetworkGate } from "../network-gate/network-gate.js";
 import { resolveLocale, loadUIMap } from "../shared/locale.js";
-import { runDualSession } from "../agent/session-runner.js";
+import { runPipeline } from "../agent/session-runner.js";
 import { buildToolsForTab } from "../agent/tools/index.js";
 import { MCP_PORT, NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
@@ -146,7 +146,7 @@ function createRunTask(
       });
 
       // 5. Run dual session: Planner → Script → Recovery-on-fail.
-      const result = await runDualSession(
+      const result = await runPipeline(
         {
           client: copilotClient,
           tools,

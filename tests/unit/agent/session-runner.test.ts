@@ -54,12 +54,12 @@ vi.mock("../../../src/agent/repair-log.js", () => ({
 import {
   runSession,
   runPlannerSession,
-  runDualSession,
+  runPipeline,
   REJECTION_CATEGORIES,
 } from "../../../src/agent/session-runner.js";
 import type {
   SessionRunnerOptions,
-  DualSessionOptions,
+  PipelineOptions,
 } from "../../../src/agent/session-runner.js";
 import type { CopilotClientSingleton } from "../../../src/agent/client.js";
 import type { Tool } from "@github/copilot-sdk";
@@ -95,10 +95,10 @@ function makeOptions(
   };
 }
 
-/** Build DualSessionOptions with sensible defaults (G2 shape). */
+/** Build PipelineOptions with sensible defaults (G2 shape). */
 function makeDualOptions(
-  overrides?: Partial<DualSessionOptions>,
-): DualSessionOptions {
+  overrides?: Partial<PipelineOptions>,
+): PipelineOptions {
   return {
     client: { getClient: () => fakeSdkClient } as unknown as CopilotClientSingleton,
     tools: [{ name: "find" }, { name: "click" }] as unknown as Tool[],
@@ -588,10 +588,10 @@ describe("runPlannerSession — rejectInput", () => {
 });
 
 // ===========================================================================
-// runDualSession — G2: Planner -> Script -> Recovery
+// runPipeline — G2: Planner -> Script -> Recovery
 // ===========================================================================
 
-describe("runDualSession", () => {
+describe("runPipeline", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSendAndWait.mockResolvedValue(fakeAssistantMessage("Plan submitted."));
@@ -611,7 +611,7 @@ describe("runDualSession", () => {
     // Script succeeds
     mockRunScript.mockResolvedValue(makeScriptSuccess("TypeScript is a superset of JavaScript."));
 
-    const result = await runDualSession(makeDualOptions(), "What is TypeScript?");
+    const result = await runPipeline(makeDualOptions(), "What is TypeScript?");
 
     expect(result.success).toBe(true);
     expect(result.result).toBe("TypeScript is a superset of JavaScript.");
@@ -645,7 +645,7 @@ describe("runDualSession", () => {
       durationMs: 5000,
     });
 
-    const result = await runDualSession(makeDualOptions(), "test query");
+    const result = await runPipeline(makeDualOptions(), "test query");
 
     expect(result.success).toBe(true);
     expect(result.result).toBe("Recovered answer");
@@ -676,7 +676,7 @@ describe("runDualSession", () => {
       durationMs: 8000,
     });
 
-    const result = await runDualSession(makeDualOptions(), "test query");
+    const result = await runPipeline(makeDualOptions(), "test query");
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("Step 1/1");
@@ -693,7 +693,7 @@ describe("runDualSession", () => {
       reason: "Not a NotebookLM operation",
     });
 
-    const result = await runDualSession(makeDualOptions(), "天氣如何？");
+    const result = await runPipeline(makeDualOptions(), "天氣如何？");
 
     expect(result.success).toBe(false);
     expect(result.rejected).toBe(true);
@@ -719,7 +719,7 @@ describe("runDualSession", () => {
       .mockResolvedValueOnce(makeScriptSuccess("3 sources found"))
       .mockResolvedValueOnce(makeScriptSuccess("Summary: TypeScript is great."));
 
-    const result = await runDualSession(makeDualOptions(), "列出來源然後問問題");
+    const result = await runPipeline(makeDualOptions(), "列出來源然後問問題");
 
     expect(result.success).toBe(true);
     // Last step result is returned
@@ -736,7 +736,7 @@ describe("runDualSession", () => {
       disconnect: mockDisconnect,
     });
 
-    const result = await runDualSession(makeDualOptions(), "天氣如何？");
+    const result = await runPipeline(makeDualOptions(), "天氣如何？");
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("Planner did not submit a plan");
