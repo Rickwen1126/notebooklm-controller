@@ -371,30 +371,53 @@ export async function scriptedAddSource(
     await new Promise((r) => setTimeout(r, 300));
     log.push(createLogEntry(8, "paste_content", "ok", `Pasted ${content.length} chars`, stepStart));
 
-    // Step 9: Find insert button + verify NOT disabled
+    // Step 9: Find insert button INSIDE dialog overlay + verify NOT disabled
     stepNum = 9;
     stepStart = Date.now();
-    let insertEl = await helpers.findElementByText(page, uiMap.elements.insert_button.text);
-    if (!insertEl) {
-      return fail(9, "find_insert_button", `Element not found: "${uiMap.elements.insert_button.text}"`, "insert_button");
+    const insertBtnText = uiMap.elements.insert_button.text;
+    let insertPos = await page.evaluate(`(() => {
+      const overlay = document.querySelector('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
+      if (!overlay) return null;
+      const btns = overlay.querySelectorAll('button, [role=button], a');
+      for (const b of btns) {
+        if (b.textContent.trim().includes(${JSON.stringify(insertBtnText)})) {
+          const r = b.getBoundingClientRect();
+          if (r.width > 0) return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2), disabled: !!b.disabled };
+        }
+      }
+      return null;
+    })()`) as { x: number; y: number; disabled: boolean } | null;
+    if (!insertPos) {
+      return fail(9, "find_insert_button", `Element not found in dialog overlay: "${insertBtnText}"`, "insert_button");
     }
-    if (insertEl.disabled) {
+    if (insertPos.disabled) {
       // Content may not have been registered yet, wait and retry
       await new Promise((r) => setTimeout(r, 500));
-      const retryEl = await helpers.findElementByText(page, uiMap.elements.insert_button.text);
-      if (!retryEl || retryEl.disabled) {
+      const retryPos = await page.evaluate(`(() => {
+        const overlay = document.querySelector('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
+        if (!overlay) return null;
+        const btns = overlay.querySelectorAll('button, [role=button], a');
+        for (const b of btns) {
+          if (b.textContent.trim().includes(${JSON.stringify(insertBtnText)})) {
+            const r = b.getBoundingClientRect();
+            if (r.width > 0) return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2), disabled: !!b.disabled };
+          }
+        }
+        return null;
+      })()`) as { x: number; y: number; disabled: boolean } | null;
+      if (!retryPos || retryPos.disabled) {
         return fail(9, "find_insert_button", `Insert button is disabled (content not accepted?)`, "insert_button");
       }
-      log.push(createLogEntry(9, "find_insert_button", "warn", `Button was disabled, retry OK at (${retryEl.center.x}, ${retryEl.center.y})`, stepStart));
-      insertEl = retryEl;
+      log.push(createLogEntry(9, "find_insert_button", "warn", `Button was disabled, retry OK at (${retryPos.x}, ${retryPos.y})`, stepStart));
+      insertPos = retryPos;
     } else {
-      log.push(createLogEntry(9, "find_insert_button", "ok", `Found at (${insertEl.center.x}, ${insertEl.center.y})`, stepStart));
+      log.push(createLogEntry(9, "find_insert_button", "ok", `Found in overlay at (${insertPos.x}, ${insertPos.y})`, stepStart));
     }
 
     // Step 10: Click insert
     stepNum = 10;
     stepStart = Date.now();
-    await helpers.dispatchClick(cdp, insertEl.center.x, insertEl.center.y);
+    await helpers.dispatchClick(cdp, insertPos.x, insertPos.y);
     log.push(createLogEntry(10, "click_insert", "ok", `Clicked`, stepStart));
 
     // Step 11: Wait for dialog to close (source processing complete)
@@ -500,13 +523,25 @@ export async function scriptedRemoveSource(
     const confirmDialog = await helpers.waitForVisible(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 1500 });
     log.push(createLogEntry(stepNum, "click_remove_source", "ok", `Clicked`, stepStart));
 
-    // Handle confirmation dialog if present
+    // Handle confirmation dialog if present — search INSIDE overlay only
     stepNum++;
     stepStart = Date.now();
     if (confirmDialog.visible) {
-      const confirmEl = await helpers.findElementByText(page, uiMap.elements.remove_source?.text ?? "移除來源");
-      if (confirmEl) {
-        await helpers.dispatchClick(cdp, confirmEl.center.x, confirmEl.center.y);
+      const confirmBtnText = uiMap.elements.remove_source?.text ?? "移除來源";
+      const confirmPos = await page.evaluate(`(() => {
+        const overlay = document.querySelector('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
+        if (!overlay) return null;
+        const btns = overlay.querySelectorAll('button, [role=button], a');
+        for (const b of btns) {
+          if (b.textContent.trim().includes(${JSON.stringify(confirmBtnText)})) {
+            const r = b.getBoundingClientRect();
+            if (r.width > 0 && !b.disabled) return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
+          }
+        }
+        return null;
+      })()`) as { x: number; y: number } | null;
+      if (confirmPos) {
+        await helpers.dispatchClick(cdp, confirmPos.x, confirmPos.y);
         await helpers.waitForGone(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 5000 });
         log.push(createLogEntry(stepNum, "confirm_remove", "ok", `Confirmed removal, dialog closed`, stepStart));
       }
@@ -590,14 +625,26 @@ export async function scriptedRenameSource(
     await helpers.dispatchPaste(cdp, newName);
     log.push(createLogEntry(stepNum, "type_new_name", "ok", `Typed "${newName}"`, stepStart));
 
-    // Find and click save
+    // Find and click save INSIDE dialog overlay (not full page — "儲存" may appear in source names)
     stepNum++;
     stepStart = Date.now();
-    const saveEl = await helpers.findElementByText(page, uiMap.elements.save_button?.text ?? "儲存");
-    if (!saveEl) return fail(stepNum, "find_save_button", `Save button not found`, "save_button");
-    await helpers.dispatchClick(cdp, saveEl.center.x, saveEl.center.y);
+    const saveBtnText = uiMap.elements.save_button?.text ?? "儲存";
+    const savePos = await page.evaluate(`(() => {
+      const overlay = document.querySelector('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
+      if (!overlay) return null;
+      const btns = overlay.querySelectorAll('button, [role=button], a');
+      for (const b of btns) {
+        if (b.textContent.trim().includes(${JSON.stringify(saveBtnText)})) {
+          const r = b.getBoundingClientRect();
+          if (r.width > 0 && !b.disabled) return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
+        }
+      }
+      return null;
+    })()`) as { x: number; y: number } | null;
+    if (!savePos) return fail(stepNum, "find_save_button", `Save button not found in dialog overlay`, "save_button");
+    await helpers.dispatchClick(cdp, savePos.x, savePos.y);
     await helpers.waitForGone(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 5000 });
-    log.push(createLogEntry(stepNum, "click_save", "ok", `Saved, dialog closed`, stepStart));
+    log.push(createLogEntry(stepNum, "click_save", "ok", `Saved at (${savePos.x},${savePos.y}), dialog closed`, stepStart));
 
     return makeSuccess("renameSource", log, t0, `Source renamed to "${newName}"`);
   } catch (err) {
@@ -650,13 +697,24 @@ export async function scriptedClearChat(
     await new Promise((r) => setTimeout(r, 500));
     log.push(createLogEntry(4, "click_delete_chat", "ok", `Clicked`, stepStart));
 
-    // Step 5: handle confirmation if present
+    // Step 5: handle confirmation if present — search INSIDE overlay only
     stepNum = 5;
     stepStart = Date.now();
-    const confirmEl = await helpers.findElementByText(page, "刪除");
-    if (confirmEl && confirmEl.center.y > 300) {
-      await helpers.dispatchClick(cdp, confirmEl.center.x, confirmEl.center.y);
-      log.push(createLogEntry(5, "confirm_delete", "ok", `Confirmed`, stepStart));
+    const confirmDeletePos = await page.evaluate(`(() => {
+      const overlay = document.querySelector('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
+      if (!overlay) return null;
+      const btns = overlay.querySelectorAll('button, [role=button], a');
+      for (const b of btns) {
+        if (b.textContent.trim().includes('刪除')) {
+          const r = b.getBoundingClientRect();
+          if (r.width > 0 && !b.disabled) return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
+        }
+      }
+      return null;
+    })()`) as { x: number; y: number } | null;
+    if (confirmDeletePos) {
+      await helpers.dispatchClick(cdp, confirmDeletePos.x, confirmDeletePos.y);
+      log.push(createLogEntry(5, "confirm_delete", "ok", `Confirmed at (${confirmDeletePos.x},${confirmDeletePos.y})`, stepStart));
     } else {
       log.push(createLogEntry(5, "confirm_delete", "ok", `No confirmation needed`, stepStart));
     }
@@ -903,16 +961,27 @@ export async function scriptedDeleteNotebook(
     await helpers.waitForVisible(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 3000 });
     log.push(createLogEntry(stepNum, "click_delete", "ok", `Clicked, confirmation dialog appeared`, stepStart));
 
-    // Find and click confirmation "刪除" button
+    // Find and click confirmation "刪除" button INSIDE dialog overlay
     stepNum++;
     stepStart = Date.now();
-    const confirmEl = await helpers.findElementByText(page, "刪除");
-    if (confirmEl) {
-      await helpers.dispatchClick(cdp, confirmEl.center.x, confirmEl.center.y);
+    const confirmDeletePos = await page.evaluate(`(() => {
+      const overlay = document.querySelector('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
+      if (!overlay) return null;
+      const btns = overlay.querySelectorAll('button, [role=button], a');
+      for (const b of btns) {
+        if (b.textContent.trim().includes('刪除')) {
+          const r = b.getBoundingClientRect();
+          if (r.width > 0 && !b.disabled) return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
+        }
+      }
+      return null;
+    })()`) as { x: number; y: number } | null;
+    if (confirmDeletePos) {
+      await helpers.dispatchClick(cdp, confirmDeletePos.x, confirmDeletePos.y);
       await helpers.waitForGone(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 5000 });
-      log.push(createLogEntry(stepNum, "confirm_delete", "ok", `Confirmed deletion, dialog closed`, stepStart));
+      log.push(createLogEntry(stepNum, "confirm_delete", "ok", `Confirmed deletion at (${confirmDeletePos.x},${confirmDeletePos.y}), dialog closed`, stepStart));
     } else {
-      log.push(createLogEntry(stepNum, "confirm_delete", "warn", `No confirmation dialog found`, stepStart));
+      log.push(createLogEntry(stepNum, "confirm_delete", "warn", `No confirmation button found in dialog overlay`, stepStart));
     }
 
     return makeSuccess("deleteNotebook", log, t0, "Notebook deleted");
