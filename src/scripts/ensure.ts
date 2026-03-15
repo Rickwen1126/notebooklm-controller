@@ -87,14 +87,16 @@ export async function ensureHomepage(
   log: ScriptLogEntry[],
   _t0: number,
 ): Promise<boolean> {
-  const { page } = ctx;
+  const { page, helpers } = ctx;
   const stepStart = Date.now();
   const url = page.url();
   const isHomepage = url === HOMEPAGE_URL || url === HOMEPAGE_URL + "/";
 
   if (!isHomepage) {
     await page.goto(HOMEPAGE_URL, { waitUntil: "domcontentloaded" });
-    await new Promise((r) => setTimeout(r, 2000));
+    // Wait for notebook rows to render (not hardcode sleep).
+    // Homepage may have 100+ notebooks — rendering takes time.
+    await helpers.waitForVisible(page, 'tr[tabindex]', { timeoutMs: 10000 });
     log.push(createLogEntry(0, "ensure_homepage", "warn", `Navigated to homepage from ${url.slice(0, 60)}`, stepStart));
   } else {
     log.push(createLogEntry(0, "ensure_homepage", "ok", `Already on homepage`, stepStart));
