@@ -251,7 +251,7 @@ function registerCreateNotebook(
         // Normalize: strip query params, hash, trailing slash
         notebookUrl = normalizeUrl(notebookUrl);
 
-        log.info("URL extracted", { url: notebookUrl, method: clicked });
+        log.info("URL extracted", { url: notebookUrl });
 
         if (!notebookUrl) {
           return errorResult(
