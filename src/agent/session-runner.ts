@@ -308,19 +308,31 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
   let capturedPlan = null as ExecutionPlan | null;
   let capturedRejection = null as { category: RejectionCategory; reason: string } | null;
 
+  // Copilot SDK defineTool does NOT support z.record() — use expanded optional fields.
+  // The Planner fills in whichever params the operation needs.
   const submitPlanTool = defineTool("submitPlan", {
     description: "Submit the execution plan with scripted operations.",
     parameters: z.object({
       reasoning: z.string().describe("Brief explanation of why these steps were chosen"),
       steps: z.array(z.object({
         operation: z.string().describe("Name of the scripted operation to run"),
-        params: z.record(z.string()).describe("Parameters for the operation"),
+        question: z.string().optional().describe("For query: the question to ask"),
+        content: z.string().optional().describe("For addSource: the text content"),
+        newName: z.string().optional().describe("For renameSource/renameNotebook: new name"),
       })),
     }),
-    handler: async (args: { reasoning: string; steps: ExecutionStep[] }) => {
-      capturedPlan = { steps: args.steps, reasoning: args.reasoning };
+    handler: async (args: { reasoning: string; steps: Array<{ operation: string; question?: string; content?: string; newName?: string }> }) => {
+      // Convert expanded fields into params Record<string, string>
+      const steps: ExecutionStep[] = args.steps.map((s) => {
+        const params: Record<string, string> = {};
+        if (s.question) params.question = s.question;
+        if (s.content) params.content = s.content;
+        if (s.newName) params.newName = s.newName;
+        return { operation: s.operation, params };
+      });
+      capturedPlan = { steps, reasoning: args.reasoning };
       return {
-        textResultForLlm: `Plan accepted: ${args.steps.length} step(s).`,
+        textResultForLlm: `Plan accepted: ${steps.length} step(s).`,
         resultType: "success" as const,
       };
     },

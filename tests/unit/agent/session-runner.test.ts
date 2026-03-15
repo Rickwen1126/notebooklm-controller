@@ -162,7 +162,14 @@ function mockPlannerResponse(plan: {
   mockCreateSession.mockImplementation(async (opts: { tools?: Array<{ name: string; handler: (args: unknown) => Promise<unknown> }> }) => {
     const submitPlan = opts.tools?.find((t) => t.name === "submitPlan");
     if (submitPlan) {
-      await submitPlan.handler(plan);
+      // Convert params Record to expanded fields (matching real submitPlan schema)
+      const expandedSteps = plan.steps.map((s) => ({
+        operation: s.operation,
+        question: s.params.question,
+        content: s.params.content,
+        newName: s.params.newName,
+      }));
+      await submitPlan.handler({ reasoning: plan.reasoning, steps: expandedSteps });
     }
     return {
       sessionId: "planner-session",
