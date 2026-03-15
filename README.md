@@ -1,0 +1,96 @@
+# notebooklm-controller
+
+MCP Server for automating Google NotebookLM via Chrome. Feed repos, URLs, and PDFs as knowledge sources, then query them — all from your AI coding tool.
+
+## What It Does
+
+Your AI tool (Claude Code, etc.) connects to this daemon via MCP protocol and can:
+
+- **Add sources** — paste text, import git repos (via repomix), crawl URLs, convert PDFs. Large content auto-splits into multiple sources.
+- **Query notebooks** — ask questions grounded in your uploaded sources (no hallucination).
+- **Manage notebooks** — create, rename, delete, list. Multi-notebook parallel operations.
+- **Async operations** — submit long tasks, poll for completion, cancel if needed.
+
+All through natural language: `"把 ~/code/my-project 加入 NotebookLM 來源"` → Planner selects operation → deterministic script executes.
+
+## Architecture
+
+```
+User NL prompt
+    ↓
+Planner LLM (gpt-4.1) — selects operation + params
+    ↓
+Deterministic Script — DOM automation via CDP (0 LLM cost)
+    ↓ (on failure only)
+Recovery LLM (gpt-5-mini) — completes task + suggests UIMap patch
+```
+
+**G2 Script-first**: happy path uses zero LLM tokens for execution. Scripts handle all 10 NotebookLM operations (query, addSource, listSources, removeSource, renameSource, clearChat, listNotebooks, createNotebook, renameNotebook, deleteNotebook).
+
+### Modules
+
+| Module | Responsibility |
+|--------|---------------|
+| `daemon/` | MCP Server (Streamable HTTP), scheduler, task management |
+| `tab-manager/` | Chrome tab pool (max 10), CDP session management |
+| `scripts/` | 10 deterministic DOM operations + wait primitives |
+| `agent/` | Planner session, Recovery session, repair log |
+| `content/` | repo→text (repomix), URL→text (readability), PDF→text |
+| `network-gate/` | Rate limit protection (permit-based backoff) |
+| `state/` | JSON persistence (~/.nbctl/), cache, task store |
+
+## Quick Start
+
+```bash
+# Install
+npm install
+
+# First run — opens Chrome for Google login
+npx tsx src/daemon/launcher.ts
+
+# After login, restart headless
+npx tsx src/daemon/launcher.ts
+
+# Connect from your AI tool via MCP (127.0.0.1:19224)
+```
+
+### MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `exec` | Execute NL command (query, add source, etc.) |
+| `list_notebooks` | List registered notebooks |
+| `register_notebook` | Register existing NotebookLM notebook by URL |
+| `set_default` | Set default notebook |
+| `get_status` | Daemon + task status |
+| `cancel_task` | Cancel async task |
+| `list_agents` | List available scripted operations |
+
+## Design Decisions
+
+1. **Script-first, not Agent-first** — deterministic scripts for happy path (15-20s per query vs 70s with LLM executor). LLM only recovers failures.
+
+2. **Viewport is a contract** — 1920x1080. All scripts tested at this resolution. Changing it breaks coordinate-based interactions.
+
+3. **UIMap i18n** — all UI text from locale JSON files (`src/config/ui-maps/`). Supports zh-TW, zh-CN, en. No hardcoded strings in scripts.
+
+4. **Content auto-split** — sources > 100K chars split into multiple chunks, each pasted as separate source with auto-naming (`"my-project (repo) (part 1/20)"`).
+
+## Testing
+
+```bash
+# Unit + integration tests (688 tests)
+npm test
+
+# E2E against live daemon (requires Chrome + Google login)
+# Uses ISO Browser for independent DOM verification
+/test-real
+```
+
+## Tech Stack
+
+TypeScript 5.x, Node.js 22 LTS, @github/copilot-sdk, puppeteer-core (CDP), @modelcontextprotocol/sdk, repomix, zod, Vitest
+
+## License
+
+MIT

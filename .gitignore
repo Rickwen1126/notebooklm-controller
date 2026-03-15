@@ -11,6 +11,9 @@ coverage/
 .env*
 !.env.example
 
+# Progress (local Claude context, not for public repo)
+.progress/
+
 # OS
 .DS_Store
 Thumbs.db
