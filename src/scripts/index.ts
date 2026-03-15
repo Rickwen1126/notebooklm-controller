@@ -103,6 +103,7 @@ const SCRIPT_REGISTRY: Record<string, (ctx: ScriptContext, params: Record<string
       const content = await preprocessAddSource(p);
       const chunks = splitIntoChunks(content);
       const sourceName = p.sourceName;
+      let renamed = false;
       const allLogs: ScriptResult["log"] = [];
       const t0 = Date.now();
 
@@ -126,17 +127,41 @@ const SCRIPT_REGISTRY: Record<string, (ctx: ScriptContext, params: Record<string
           };
         }
 
-        // Auto-rename the newly added source
+        // Auto-rename: only if sourceName provided AND exactly 1 "貼上的文字" exists.
+        // If multiple unnamed sources exist, skip rename (can't identify which is new).
         if (sourceName) {
-          const renameTo = chunks.length > 1
-            ? `${sourceName} (part ${i + 1}/${chunks.length})`
-            : sourceName;
-          contentLog.info("Renaming source", { name: renameTo });
-          const renameResult = await scriptedRenameSource(ctx, renameTo);
-          allLogs.push(...renameResult.log);
-          if (renameResult.status !== "success") {
-            contentLog.warn("Source rename failed (non-critical)", { name: renameTo });
-            // Non-critical — paste succeeded, rename is best-effort
+          const pastedTextLabel = ctx.uiMap.elements.paste_source_type?.text ?? "Copied text";
+          const defaultSourceName = "貼上的文字"; // NotebookLM's default name for pasted sources
+          const unnamedCount = await ctx.page.evaluate(`(() => {
+            const panel = document.querySelector('.source-panel');
+            if (!panel) return 0;
+            const titles = panel.querySelectorAll('[class*=title]');
+            let count = 0;
+            for (const t of titles) {
+              if (t.textContent.trim() === '${defaultSourceName}') count++;
+            }
+            return count;
+          })()`) as number;
+
+          if (unnamedCount === 1) {
+            const renameTo = chunks.length > 1
+              ? `${sourceName} (part ${i + 1}/${chunks.length})`
+              : sourceName;
+            contentLog.info("Renaming source", { name: renameTo, unnamedCount });
+            const renameResult = await scriptedRenameSource(ctx, renameTo);
+            allLogs.push(...renameResult.log);
+            if (renameResult.status === "success") {
+              renamed = true;
+            } else {
+              contentLog.warn("Source rename failed (non-critical)", { name: renameTo });
+            }
+          } else if (unnamedCount > 1) {
+            contentLog.warn("Multiple unnamed sources found, skipping auto-rename", { unnamedCount });
+            allLogs.push({
+              step: 99, action: "auto_rename_skipped", status: "warn",
+              detail: `Found ${unnamedCount} sources named "${defaultSourceName}" — cannot identify which is new. Use rename source tool to rename manually.`,
+              durationMs: 0,
+            });
           }
         }
 
@@ -146,9 +171,10 @@ const SCRIPT_REGISTRY: Record<string, (ctx: ScriptContext, params: Record<string
         }
       }
 
+      const renameNote = renamed ? `, named "${sourceName}"` : (sourceName ? ` (rename skipped — multiple unnamed sources)` : "");
       const summary = chunks.length > 1
-        ? `Added ${chunks.length} source parts (${content.length} chars total)${sourceName ? `, named "${sourceName}"` : ""}`
-        : `Source added${sourceName ? ` as "${sourceName}"` : ""}`;
+        ? `Added ${chunks.length} source parts (${content.length} chars total)${renameNote}`
+        : `Source added${renameNote}`;
 
       return {
         operation: "addSource",
