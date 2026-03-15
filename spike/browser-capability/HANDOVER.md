@@ -845,6 +845,54 @@ Chrome CDP 支援多個 tab 同時操作，每個 tab 獨立 CDPSession，互不
 
 腳本：`spike/browser-capability/multi-tab-experiment.ts`
 
+### Finding #53 — Speed Comparison: 純腳本 vs 純 Agent
+
+同一問題（"What is git rebase and how does it differ from merge?"）、同一 notebook（Pro Git），3 次取平均：
+
+| 方案 | Run 1 | Run 2 | Run 3 | 平均 | Tool calls |
+|------|-------|-------|-------|------|-----------|
+| notebooklm-skill（Python/Patchright，每次開新 browser） | 47.2s | 46.0s | 46.0s | **46.4s** | 0（硬編碼） |
+| spike phase-f（Copilot SDK，持久 tab） | 69.4s | 82.1s | 60.2s | **70.6s** | 22-31 |
+
+**Agent 慢 52%**，原因：
+1. 每次 `read()` = 1 輪 LLM inference（~1-2s），agent 輪詢 22-31 次
+2. Planner session ~7s 固定開銷
+3. Agent 不確定回應是否完成，反覆 read 直到穩定
+
+**notebooklm-skill 的優勢**：硬編碼 DOM 操作 + `waitForSelector` 一次等完（三階段 polling：thinking indicator → text extraction → 3 次穩定檢查）
+
+**spike 的優勢**：通用性（13 種操作），不只 query
+
+腳本：`spike/browser-capability/phase-f.ts`（spike 端）、`~/.claude/skills/notebooklm-skill/scripts/ask_question.py`（skill 端）
+
+### Finding #54 — Script-first + Agent-as-supervisor 架構（Phase G 方向）
+
+純腳本快但無 fallback（UI 改版就壞），純 agent 有彈性但慢。社群沒人做複雜操作的純腳本（add-source, rename, delete），原因：
+- NotebookLM UI 會變，class name / layout 隨時改
+- Edge case 多（dialog 彈出、loading 卡住、狀態陷阱）
+- 純腳本失敗 = 直接失敗，用戶要自己 debug
+
+**Hybrid 架構**：確定性腳本跑 happy path（帶結構化 log），agent 只做監督/驗證/fallback：
+
+```
+User request
+  → Planner: 分類操作 → 選擇 scripted tool
+  → Scripted tool: DOM 操作（每步吐 log）
+    ├── 三階段 polling（thinking → text → 3x stability）
+    └── return { success, result, log[], timing }
+  → Agent (Supervisor): 檢查 log + 截圖驗證
+    ├── success → 回傳
+    ├── partial → 補 1 次確認
+    └── fail → fallback 到零散工具介入 → 標記需修復
+  → Repair Agent (gpt-5.4): 分析失敗 → 更新 selector/flow → 重新執行
+```
+
+**預估速度**：15-20s（腳本 10-15s + agent 監督 1 次 LLM call 3-5s），比 skill 還快（skill 每次開新 browser 15s overhead）
+
+**核心洞見**：Agent 的 22-31 次 read() 輪詢是 happy path 浪費。應該把 LLM 成本從 happy path 移到 unhappy path — 腳本跑日常，agent 修例外。
+
+**參考**：notebooklm-skill 和 notebooklm-mcp 的三階段 polling 機制（`div.thinking-message` → response text extraction → 3 stable polls），已驗證可靠。
+
 ### 總結
 
 **Spike 完成。** 所有核心驗證通過：
@@ -869,3 +917,4 @@ Chrome CDP 支援多個 tab 同時操作，每個 tab 獨立 CDPSession，互不
 - Tab pool weak affinity：連續操作同 notebook 免 navigate
 - File-based paste：Tool boundary = context boundary，大內容 0 token
 - Multi-tab 並發：CDP 支援，tab pool 只需保證一 tab 一 agent
+- **Script-first + Agent-as-supervisor**：確定性腳本跑 happy path，agent 監督/驗證/fallback/self-repair（Phase G 方向）
