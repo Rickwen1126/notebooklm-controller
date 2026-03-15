@@ -1,0 +1,101 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Code Review: Phase 3→5.5 2026-03-13",
+  "steps": [
+    {
+      "title": "Review Summary",
+      "description": "## Review Summary\n\n🔴 Critical: 3\n🟡 Suggestions: 6\n✅ Good Practices: 4\n\n### Scope\n\nPhase 3→5.5 實作：daemon lifecycle、MCP server、scheduler、notebook/exec/daemon MCP tools、dual session (Planner+Executor)、daemon wiring、hooks、notifier。\n\n共約 12 個 source files、~2500 行新增程式碼。\n\n### Focus\n\n- Security: MCP endpoint 安全、input validation\n- Architecture: 模組邊界、DI 一致性、type 重複\n- Correctness: 狀態機、race condition、error propagation\n- Testing: mock 覆蓋、邊界 case"
+    },
+    {
+      "file": "src/daemon/mcp-server.ts",
+      "line": 296,
+      "ref": "bd87eef37e5c6cdd1290c03a740a1d056efbb580",
+      "title": "🔴 readBody 沒有 body size limit — DoS 風險",
+      "description": "## Problem\n\n`readBody()` 從 HTTP request 讀取全部 body 到記憶體，沒有大小限制。惡意 client 可以送一個 10GB 的 POST body 讓 daemon OOM crash。雖然只 listen 在 127.0.0.1，但任何本機 process 都能打到這個 port。\n\n## Fix\n\n```typescript\nprivate readBody(req: import('node:http').IncomingMessage): Promise<string> {\n  const MAX_BODY_SIZE = 1_048_576; // 1MB — 遠超正常 MCP 請求\n  return new Promise((resolve, reject) => {\n    const chunks: Buffer[] = [];\n    let totalSize = 0;\n    req.on('data', (chunk: Buffer) => {\n      totalSize += chunk.length;\n      if (totalSize > MAX_BODY_SIZE) {\n        req.destroy();\n        reject(new Error('Request body too large'));\n        return;\n      }\n      chunks.push(chunk);\n    });\n    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));\n    req.on('error', reject);\n  });\n}\n```\n\n## Rationale\n\n即使是 local-only daemon，防禦性編碼很重要。其他 AI agent（MCP client）可能因 bug 送出超大 payload。1MB 上限對 JSON-RPC 請求綽綽有餘。"
+    },
+    {
+      "file": "src/daemon/exec-tools.ts",
+      "line": 151,
+      "ref": "bd87eef37e5c6cdd1290c03a740a1d056efbb580",
+      "title": "🔴 sync exec 的 waitForIdle() 等全部 queue 而非單一 task",
+      "description": "## Problem\n\n`scheduler.waitForIdle()` 等待所有 notebook 的所有 queue 清空，而非等待「這個 task」完成。如果有 3 個 notebook 各排了 5 個 task，sync exec 會等 15 個 task 全部跑完才回 response。\n\n更嚴重的是：如果另一個 MCP client 同時 submit 新 task，`waitForIdle()` 可能永遠不 resolve（queue 永遠不空）。\n\n## Fix\n\n讓 Scheduler 支援 per-task completion Promise：\n\n```typescript\n// In Scheduler:\nprivate readonly taskCompletions = new Map<string, {\n  resolve: (task: AsyncTask) => void;\n  promise: Promise<AsyncTask>;\n}>();\n\nasync waitForTask(taskId: string): Promise<AsyncTask> {\n  const existing = this.taskCompletions.get(taskId);\n  if (existing) return existing.promise;\n\n  let resolve!: (task: AsyncTask) => void;\n  const promise = new Promise<AsyncTask>((r) => { resolve = r; });\n  this.taskCompletions.set(taskId, { resolve, promise });\n  return promise;\n}\n\n// In executeTask(), after transition to terminal state:\nconst completion = this.taskCompletions.get(task.taskId);\nif (completion) {\n  completion.resolve(finalTask);\n  this.taskCompletions.delete(task.taskId);\n}\n```\n\nThen in exec-tools:\n```typescript\nconst completed = await deps.scheduler.waitForTask(task.taskId);\n```\n\n## Rationale\n\nsync exec 是最常用的模式（Claude Code 預設用 sync）。等 idle 的延遲不可預測且隨 queue 深度線性增長，會讓 MCP client timeout。"
+    },
+    {
+      "file": "src/daemon/notebook-tools.ts",
+      "line": 444,
+      "ref": "bd87eef37e5c6cdd1290c03a740a1d056efbb580",
+      "title": "🔴 rename_notebook 非原子操作 — 中途失敗會丟資料",
+      "description": "## Problem\n\n`rename_notebook` 分三步：addNotebook → removeNotebook → setDefault。如果步驟 2（removeNotebook）失敗，notebook 會同時存在於新舊 alias（重複）。如果步驟 1（addNotebook）成功但步驟 2 失敗後被吞掉，舊 alias 的資料仍在但 client 以為 rename 成功了。\n\n更糟的情況：如果步驟 2 成功但步驟 3 失敗（setDefault），default 指向已刪除的 alias。\n\n## Fix\n\n在 StateManager 加一個原子 rename 方法：\n\n```typescript\n// In StateManager:\nasync renameNotebook(oldAlias: string, newAlias: string): Promise<void> {\n  const state = await this.load();\n  const entry = state.notebooks[oldAlias];\n  if (!entry) throw new Error(`Notebook not found: ${oldAlias}`);\n  if (state.notebooks[newAlias]) throw new Error(`Alias exists: ${newAlias}`);\n\n  // Atomic: modify state object, then single save\n  state.notebooks[newAlias] = { ...entry, alias: newAlias };\n  delete state.notebooks[oldAlias];\n  if (state.defaultNotebook === oldAlias) {\n    state.defaultNotebook = newAlias;\n  }\n  await this.save(state);\n}\n```\n\nThen in notebook-tools:\n```typescript\nawait deps.stateManager.renameNotebook(oldAlias, newAlias);\n```\n\n## Rationale\n\nJSON state file 的「原子性」來自 temp+rename 的 save。三步操作 = 三次 save = 三次可能中斷的機會。合併成一次 save 就是原子的。"
+    },
+    {
+      "file": "src/agent/session-runner.ts",
+      "line": 352,
+      "ref": "bd87eef37e5c6cdd1290c03a740a1d056efbb580",
+      "title": "🟡 Tool filtering 用 type assertion 拿 name — fragile",
+      "description": "## Problem\n\n`(t as { name?: string }).name` 是 unsafe cast。如果 Copilot SDK 的 `Tool` type 改了 name 的位置（或不叫 name），這裡會靜默回空 string，filter 出空 array，Executor 拿不到任何 tool — 但不會報錯。\n\n## Fix\n\n```typescript\n// Extract tool name safely, with a helper:\nfunction getToolName(tool: Tool): string {\n  // defineTool() 回傳的 Tool 物件的 name 屬性\n  if ('name' in tool && typeof (tool as Record<string, unknown>).name === 'string') {\n    return (tool as Record<string, unknown>).name as string;\n  }\n  return '';\n}\n\n// Then:\nconst filteredTools = allTools.filter((t) => toolNameSet.has(getToolName(t)));\n```\n\n加一個 runtime warning：\n```typescript\nif (filteredTools.length === 0 && step.tools.length > 0) {\n  log.warn('No tools matched for step — possible tool name mismatch', {\n    requestedTools: step.tools,\n    availableTools: allTools.map(getToolName),\n  });\n}\n```\n\n## Rationale\n\n0-tool Executor session 是必然失敗的，但 error message 會很模糊（LLM 說「我沒有工具可用」）。加 warning log 讓除錯快很多。"
+    },
+    {
+      "file": "src/daemon/index.ts",
+      "line": 171,
+      "ref": "bd87eef37e5c6cdd1290c03a740a1d056efbb580",
+      "title": "🟡 agentConfigs dir 的 fallback 邏輯用 existsSync — race condition",
+      "description": "## Problem\n\n```typescript\nconst agentsDir = existsSync(AGENTS_DIR_USER) ? AGENTS_DIR_USER : AGENTS_DIR_BUNDLED;\n```\n\n`existsSync` 檢查目錄存在，但 `loadAllAgentConfigs` 真正讀取時目錄可能已被刪除（TOCTOU）。不過 `loadAllAgentConfigs` 內部已處理 non-existent directory（回空 array），所以不會 crash — 但靜靜回傳 0 個 agent config，Planner 會收到 `(no agents available)` 導致每個 exec 都失敗。\n\n## Fix\n\n```typescript\nconst agentsDir = existsSync(AGENTS_DIR_USER) ? AGENTS_DIR_USER : AGENTS_DIR_BUNDLED;\nconst agentConfigs = await loadAllAgentConfigs(agentsDir, locale);\nif (agentConfigs.length === 0) {\n  log.warn('No agent configs loaded — exec tool will fail', {\n    searchedDir: agentsDir,\n    userDir: AGENTS_DIR_USER,\n    bundledDir: AGENTS_DIR_BUNDLED,\n  });\n}\n```\n\n## Rationale\n\n0 agent config 是「合法但一定用不了」的狀態。加 warning 讓使用者立即知道，而非等到 exec 失敗後回溯原因。"
+    },
+    {
+      "file": "src/daemon/scheduler.ts",
+      "line": 260,
+      "ref": "bd87eef37e5c6cdd1290c03a740a1d056efbb580",
+      "title": "🟡 cancel() 和 executeTask() 之間的 state machine race",
+      "description": "## Problem\n\nLine 260: `taskStore.transition(taskId, 'running')` 把 task 設為 running。\nLine 129: `cancel()` 裡的 `taskStore.transition(taskId, 'cancelled')` 也修改同一個 task。\n\n如果 `cancel()` 在 `transition('running')` 之後、`cancellationFlag` check 之前被呼叫：\n1. cancel() 先 transition 到 cancelled\n2. executeTask 繼續跑 runTask（因為 flag check 還沒到）\n3. runTask 完成後，executeTask 檢查 flag → 發現 cancelled → 不做 transition\n\n結果：task 在 store 裡是 `cancelled` 但 runTask 實際已跑完。不會 crash 但語意不正確 — result 被丟棄了。\n\n## Fix\n\n目前這個 race 的結果是「安全的」（沒有 data corruption），只是浪費了一次 execution。真正要修需要把 cancellationFlag 傳進 runTask，讓 dual session 能提早 abort。這是 Phase 5.5 之後的改進方向。\n\n暫時的改善：在 executeTask 裡把「被 cancel 但已跑完的 result」log 出來，方便追蹤：\n\n```typescript\nif (cancellationFlag.cancelled) {\n  log.warn('task cancelled during execution — result discarded', {\n    taskId: task.taskId,\n    result: result.success ? 'success' : 'failed',\n  });\n}\n```\n\n## Rationale\n\n不影響正確性但影響可觀測性。知道有多少 task 被 cancel 後仍然跑完了，有助於判斷 cancel 機制的有效性。"
+    },
+    {
+      "file": "src/daemon/mcp-tools.ts",
+      "line": 149,
+      "ref": "bd87eef37e5c6cdd1290c03a740a1d056efbb580",
+      "title": "🟡 get_status 的 runningTasks 硬編碼為 0",
+      "description": "## Problem\n\n```typescript\nrunningTasks: 0, // TODO: expose from scheduler when available\n```\n\nScheduler 已經有 `cancellationFlags` Map，其 size 就是 running task count。但 get_status 還沒接上。MCP client 問 status 永遠看到 `runningTasks: 0`，即使有 task 正在跑。\n\n## Fix\n\n在 Scheduler 加：\n```typescript\ngetRunningCount(): number {\n  return this.cancellationFlags.size;\n}\n```\n\n在 mcp-tools.ts 改：\n```typescript\nrunningTasks: deps.scheduler.getRunningCount(),\n```\n\n## Rationale\n\n這是 TODO 的快速收尾。`cancellationFlags.size` 已經精確追蹤 running task 數量，沒有理由不暴露。client 看到正確的 running count 才能做正確的決策（要不要再 submit）。"
+    },
+    {
+      "file": "src/agent/session-runner.ts",
+      "line": 364,
+      "ref": "bd87eef37e5c6cdd1290c03a740a1d056efbb580",
+      "title": "🟡 screenshot 重複加入 toolList string 但可能已在 step.tools 中",
+      "description": "## Problem\n\n```typescript\nconst toolList = [...step.tools, \"screenshot\"].join(\", \");\n```\n\n如果 `step.tools` 已經包含 `\"screenshot\"`，constraint preamble 會列出 `\"..., screenshot, screenshot\"`。雖然不影響 LLM 行為（重複列名），但看起來不專業且可能讓 LLM 產生困惑。\n\n## Fix\n\n```typescript\nconst toolNames = new Set([...step.tools, 'screenshot']);\nconst toolList = [...toolNames].join(', ');\n```\n\n## Rationale\n\n小修，但 constraint preamble 是給 LLM 看的指令 — 重複的 tool name 可能被 LLM 解讀為「screenshot 特別重要，要多用」，產生意外行為。"
+    },
+    {
+      "file": "src/daemon/mcp-server.ts",
+      "line": 321,
+      "ref": "bd87eef37e5c6cdd1290c03a740a1d056efbb580",
+      "title": "🟡 invalid session ID 的 POST 會被 reject — 但合法場景（session expired）也會觸發",
+      "description": "## Problem\n\nLine 314-319: 如果 request 帶了 `mcp-session-id` 但不在 `transports` Map 裡，跳過。\nLine 321: 如果沒帶 session ID 且不是 initialize request，回 400。\n\n但如果 client 帶了過期的 session ID（server 重啟後），既不符合 line 314（沒在 map 裡），也不符合 line 321（有 session ID 但不是 initialize），最後落到 line 350 回 400 error。\n\nClient 收到的 error message 是 `No valid session ID provided`，但實際問題是 session expired — 應該告訴 client 重新 initialize。\n\n## Fix\n\n```typescript\nif (sessionId && !this.transports.has(sessionId)) {\n  // Session expired or server restarted — client should re-initialize\n  res.writeHead(404, { 'Content-Type': 'application/json' });\n  res.end(JSON.stringify({\n    jsonrpc: '2.0',\n    error: {\n      code: -32000,\n      message: 'Session not found. Please re-initialize.',\n    },\n    id: null,\n  }));\n  return;\n}\n```\n\n## Rationale\n\nMCP SDK 的 client 通常會在收到 session error 後自動重連（re-initialize）。404 + 明確 message 比 400 generic error 更容易被 client 正確處理。"
+    },
+    {
+      "file": "src/daemon/scheduler.ts",
+      "line": 58,
+      "ref": "bd87eef37e5c6cdd1290c03a740a1d056efbb580",
+      "title": "✅ Scheduler 的依賴注入設計 — 完美的模組邊界",
+      "description": "## Good Practice\n\n`SchedulerDeps` interface 只有三個 field：`taskStore`、`runTask`、`onTaskComplete`。Scheduler 不知道 Copilot SDK、Chrome、或 dual session 的存在。\n\n這讓 Scheduler 的 unit test 只需要 mock 兩個東西（taskStore + runTask），完全不需要啟動外部 process。Phase 3 實作 Scheduler 時 Phase 5 的 session-runner 還不存在 — 注入讓開發順序解耦。\n\nper-notebook FIFO queue + cross-notebook parallelism 的設計也優雅：一個 `Map<string, AsyncTask[]>` 就搞定，不需要複雜的 queue library。"
+    },
+    {
+      "file": "src/agent/hooks.ts",
+      "line": 83,
+      "ref": "bd87eef37e5c6cdd1290c03a740a1d056efbb580",
+      "title": "✅ Error classification pattern — 清晰的三級分類",
+      "description": "## Good Practice\n\n`classifyError()` 用三組 regex pattern 把 error 分成 `retry`（transient）、`skip`（non-critical）、`abort`（fatal），default 是 `abort`。\n\n這個設計有幾個好處：\n1. Pattern 列表是 declarative — 加新的 error pattern 只需要加一行 regex，不需要改邏輯\n2. Default to abort（安全方向）— unknown error 寧可停止也不要靜默繼續\n3. 分類結果直接對應 Copilot SDK 的 `errorHandling` field — 不需要轉換層\n\nfail-open 的 `acquirePermit` + 嚴格的 error classification 形成互補：traffic gate 寬鬆（怕 gate bug 擋住操作），error handling 嚴格（怕 agent 亂跑）。"
+    },
+    {
+      "file": "src/daemon/index.ts",
+      "line": 125,
+      "ref": "bd87eef37e5c6cdd1290c03a740a1d056efbb580",
+      "title": "✅ startDaemon 的 10 步啟動序列 — 順序正確且可追蹤",
+      "description": "## Good Practice\n\n`startDaemon()` 的啟動順序嚴格且正確：\n1. Init components（純建構，不 I/O）\n2. Launch Chrome（browser ready）\n3. Detect locale（需要 Chrome）\n4. Start Copilot（需要知道 locale）\n5. Load agents（需要 locale for template）\n6. Create MCP Server（純建構）\n7. Create Scheduler（需要 runTask = agents + copilot）\n8. Register tools（需要 all deps）\n9. Start MCP Server（listen，需要 tools 已註冊）\n10. Update state（daemon 完全就緒才寫 PID）\n\n每一步都有 log.info — crash 時看 log 就知道死在哪一步。`stopDaemon` 的 reverse order 也正確。"
+    },
+    {
+      "file": "src/agent/session-runner.ts",
+      "line": 210,
+      "ref": "bd87eef37e5c6cdd1290c03a740a1d056efbb580",
+      "title": "✅ Planner 的 submitPlan closure capture — 優雅的 tool-as-output-channel",
+      "description": "## Good Practice\n\n`runPlannerSession()` 用 closure 變數 `capturedPlan` + `defineTool('submitPlan', ...)` 實現了「讓 LLM 透過 tool call 輸出結構化資料」的 pattern。\n\n這比 parsing LLM text output 可靠得多：\n- Zod schema 強制 LLM 輸出正確格式（agentName、executorPrompt、tools[]）\n- 如果 LLM 不呼叫 submitPlan（判斷 prompt 不是 NotebookLM 操作），`capturedPlan === null` → 清楚的 error\n- handler 的 return value（`Plan accepted: N step(s).`）給 LLM 正向回饋，確認 plan 已被接受\n\n這個 pattern 可以推廣到任何「需要 LLM 輸出結構化資料」的場景。"
+    }
+  ]
+}

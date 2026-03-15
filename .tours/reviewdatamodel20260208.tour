@@ -1,0 +1,17 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "reviewDataModel@20260208",
+  "steps": [
+    {
+      "file": "specs/001-mvp/data-model.md",
+      "description": "這個 type 有點問題：\n1. 這些分類應該是我們 local 自己的分類，不是 notebook 網頁定義的分類吧？\n2. 如果是 1 這樣說的，那麼 text 跟 url 在這裡有點奇怪，url 幾乎不就是 web 了，除非妳是指讓 notebooklm 自己研究來源的功能，那麼命名要調整，text 的部分也有點混淆，因為我們為了規避技術問題，幾乎都是用 copy paste 的方式上傳文件，所以 text 如果你要說是對話或是 AI  自己的洞見，那麼也要改一下，可能 session summary or session note 比較適合？",
+      "line": 93
+    },
+    {
+      "file": "specs/001-mvp/data-model.md",
+      "description": "artifacttype 其實還有更多，還有心智圖之類簡報、影片，flashcard ，這邊你要再 survey 一下",
+      "line": 122
+    }
+  ],
+  "ref": "001-mvp"
+}

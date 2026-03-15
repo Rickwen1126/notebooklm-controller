@@ -1,0 +1,52 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Code Review: Phase 6+7 Content Pipeline + Bug Fixes 2026-03-14",
+  "steps": [
+    {
+      "title": "Review Summary",
+      "description": "## Review Summary\n\n🔴 Critical: 1\n🟡 Suggestions: 3\n✅ Good Practices: 3\n\n### Scope\nPhase 6+7 new files (repo-to-text, content-tools, integration tests) + T-HF01~03 bug fixes (tabUrl, waitForTask, Planner context)\n\n### Focus\nCorrectness of waitForTask, content pipeline safety, tool registry wiring"
+    },
+    {
+      "file": "src/daemon/scheduler.ts",
+      "line": 122,
+      "title": "🔴 cancel() 不 resolve waitForTask — sync exec 被 cancel 會永遠 hang",
+      "description": "## Problem\n\n`cancel()` 方法在 queued task 被取消時（L112 `queue.splice`），沒有 resolve 對應的 `taskResolvers` promise。\n\n如果 sync exec 走 `waitForTask(taskId)` → 另一個 client 呼叫 `cancel_task` → waitForTask 的 promise 永遠不會 resolve → sync caller hang forever。\n\nRunning task cancel 的 case 沒問題（`executeTask.finally` 會 resolve），但 queued task cancel 是漏洞。\n\n## Fix\n```typescript\n// In cancel(), after the queued task transition (L117-121):\nconst updated = await this.taskStore.transition(\n  taskId,\n  \"cancelled\",\n  \"cancelled by user\",\n);\n\n// Resolve waitForTask() if anyone is waiting\nconst resolver = this.taskResolvers.get(taskId);\nif (resolver) {\n  this.taskResolvers.delete(taskId);\n  resolver();\n}\n\nlog.info(\"queued task cancelled\", { taskId });\nreturn updated;\n```\n\n同樣的 fix 也要加在 running task cancel 路徑（L128-138），因為 `executeTask.finally` 可能在 cancel transition 之前或之後跑，如果之前跑了，resolver 已經被消費了沒問題；如果之後跑，finally 裡的 resolver check 會找不到（已被 cancel 消費），也沒問題。但保險起見兩邊都加。\n\n## Rationale\nSync exec 是 MVP 預設模式（async=false），如果 cancel_task 導致 hang，使用者的 AI 工具（Claude Code）會 timeout。這個 bug 在多 client 場景下可被觸發。"
+    },
+    {
+      "file": "src/content/repo-to-text.ts",
+      "line": 43,
+      "title": "🟡 npx 啟動開銷 — 考慮直接用 node_modules/.bin/repomix",
+      "description": "## Problem\n\n`npx repomix` 每次呼叫會走 npm resolution（查找 local package → resolve binary path），大約增加 200-500ms。`repomix` 已經是 local dependency（`package.json` 中有），可以直接用 `node_modules/.bin/repomix`。\n\n## Fix\n```typescript\nimport { resolve } from \"node:path\";\nimport { fileURLToPath } from \"node:url\";\n\nconst __dirname = fileURLToPath(new URL(\".\", import.meta.url));\nconst REPOMIX_BIN = resolve(__dirname, \"../../node_modules/.bin/repomix\");\n\n// Then use REPOMIX_BIN instead of \"npx\":\nconst { stdout } = await execFileAsync(\n  REPOMIX_BIN,\n  [\".\", \"--stdout\", \"--style\", \"plain\"],\n  { cwd: repoPath, ... },\n);\n```\n\n## Rationale\nrepoToText 在 add-source flow 的 critical path 上，200-500ms 是可感知的延遲。不是 blocker 但 Phase 8 實作 urlToText/pdfToText 時一起改會更好。"
+    },
+    {
+      "file": "src/content/repo-to-text.ts",
+      "line": 34,
+      "title": "🟡 .git 存在不等於有效 git repo — bare repo 或 worktree 可能沒有 .git 目錄",
+      "description": "## Problem\n\n`stat(join(repoPath, \".git\"))` 只檢查 `.git` 路徑存在。但有些場景：\n- Git worktrees：`.git` 是 file（指向 parent repo），不是 directory → `stat` 通過但語意不同\n- Bare repos：`.git` 不存在但 repo 有效（HEAD, objects/ 等直接在 root）\n\n不過 repomix 本身會處理這些 case，所以我們的 check 只是 fast-fail 提供更好的 error message。\n\n## Fix\n保持現狀即可。repomix 的 error message 不友善（通常是 git subprocess error），我們的 check 提供更好的 UX。Worktree case 的 `.git` file 也會被 `stat()` 找到，所以通過是正確的。\n\n## Rationale\nAcknowledge the limitation but it's acceptable for MVP."
+    },
+    {
+      "file": "src/daemon/scheduler.ts",
+      "line": 188,
+      "title": "🟡 waitForTask TOCTOU — 理論上安全但建議加防禦",
+      "description": "## Problem\n\n`waitForTask` 的 check-then-register 有理論 TOCTOU 風險：\n1. `taskStore.get()` 返回 \"running\"（task 還在跑）\n2. 在 `get()` await 返回和 `taskResolvers.set()` 之間，`executeTask.finally` 已跑完\n3. Resolver 永遠不被呼叫\n\n在 Node.js 單線程模型下，步驟 2 和 3 之間沒有 yield 點（同步代碼），所以實際上安全。但加一個防禦性 re-check 更保險。\n\n## Fix\n```typescript\nasync waitForTask(taskId: string): Promise<void> {\n  const task = await this.taskStore.get(taskId);\n  if (task && [\"completed\", \"failed\", \"cancelled\"].includes(task.status)) {\n    return;\n  }\n\n  return new Promise<void>((resolve) => {\n    this.taskResolvers.set(taskId, resolve);\n    // Defensive re-check: task may have completed during our await above\n    this.taskStore.get(taskId).then((t) => {\n      if (t && [\"completed\", \"failed\", \"cancelled\"].includes(t.status)) {\n        const r = this.taskResolvers.get(taskId);\n        if (r) {\n          this.taskResolvers.delete(taskId);\n          r();\n        }\n      }\n    });\n  });\n}\n```\n\n## Rationale\n防禦性編程。成本極低（一次額外 get），但消除 edge case hang 風險。"
+    },
+    {
+      "file": "src/daemon/index.ts",
+      "line": 117,
+      "title": "✅ T-HF01 fix: tabHandle.url → tabHandle.page.url()",
+      "description": "## Good Practice\n\n正確地從 live page URL 取值，而非 acquireTab 時的 assignment metadata。`tabHandle.page.url()` 是 Puppeteer Page 的同步方法，返回當前頁面的 URL，affinity reuse 時能反映真實頁面狀態。\n\nPre-navigate hint 的準確性取決於這個值——如果拿錯了，agent 會收到錯誤的 hint（「頁面已在 notebook X」但實際在 notebook Y），導致跳過必要的 navigate。"
+    },
+    {
+      "file": "src/agent/session-runner.ts",
+      "line": 231,
+      "title": "✅ T-HF03 fix: Planner systemMessage 注入 notebookAlias",
+      "description": "## Good Practice\n\nPlanner 現在收到明確的 target notebook alias，不需要從使用者 NL prompt 猜測。\n\n格式簡潔有效：\n```\n## 目標 Notebook\n\n操作目標：{alias}\n（系統已 resolve 的 notebook alias，不需要從使用者指令中猜測）\n```\n\n「不需要從使用者指令中猜測」這句話是給 GPT-4.1 的明確指令（prompt 零留白原則），避免 Planner 試圖從 prompt 中 parse notebook name。"
+    },
+    {
+      "file": "src/agent/tools/content-tools.ts",
+      "line": 47,
+      "title": "✅ content-tools 結構清晰 — build pattern + error boundary",
+      "description": "## Good Practice\n\n1. **Builder pattern**：`buildRepoToTextTool()` / `buildContentTools()` 返回 Tool instance，不是全域副作用。方便測試和組合。\n\n2. **Error boundary in handler**：`repoToText` 的 error 在 handler 內被 catch 並轉為 `errorResult`，不會 bubble up 到 Copilot SDK session 層。Agent 收到結構化的 error message 可以自主決定下一步（retry / 報告使用者）。\n\n3. **Phase 8 stubs**：urlToText/pdfToText 已預留 tool definition 和 Zod schema，Phase 8 只需替換 handler 內容。Agent config（add-source.md）已列出這三個 tool name，Planner 看到 catalog 時知道它們存在。"
+    }
+  ]
+}

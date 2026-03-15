@@ -1,0 +1,53 @@
+{
+  "name": "notebooklm-controller",
+  "version": "0.1.0",
+  "description": "MCP Server for controlling Google NotebookLM via Chrome automation",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "bin": {
+    "nbctl": "./dist/daemon/launcher.js"
+  },
+  "scripts": {
+    "build": "tsc && cp -r src/config dist/config 2>/dev/null || true",
+    "dev": "tsc --watch",
+    "start": "npx tsx dist/daemon/launcher.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:contract": "vitest run --project contract",
+    "lint": "eslint src/ tests/",
+    "lint:fix": "eslint src/ tests/ --fix",
+    "format": "prettier --write 'src/**/*.ts' 'tests/**/*.ts'",
+    "format:check": "prettier --check 'src/**/*.ts' 'tests/**/*.ts'"
+  },
+  "keywords": [
+    "notebooklm",
+    "mcp",
+    "chrome",
+    "automation"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@github/copilot-sdk": "^0.1.32",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@mozilla/readability": "^0.6.0",
+    "jsdom": "^28.1.0",
+    "pdf-parse": "^2.4.5",
+    "puppeteer-core": "^24.39.0",
+    "repomix": "^1.12.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^28.0.0",
+    "@types/node": "^25.4.0",
+    "@typescript-eslint/eslint-plugin": "^8.57.0",
+    "@typescript-eslint/parser": "^8.57.0",
+    "eslint": "^10.0.3",
+    "prettier": "^3.8.1",
+    "typescript": "~5.8",
+    "vitest": "^4.0.18"
+  }
+}

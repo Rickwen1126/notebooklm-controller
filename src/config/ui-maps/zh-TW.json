@@ -1,0 +1,43 @@
+{
+  "locale": "zh-TW",
+  "verified": true,
+  "elements": {
+    "create_notebook": { "text": "新建" },
+    "paste_source_type": { "text": "複製的文字" },
+    "paste_textarea": { "text": "在這裡貼上文字", "match": "placeholder" },
+    "insert_button": { "text": "插入" },
+    "submit_button": { "text": "提交", "disambiguate": "y > 400" },
+    "chat_input": { "text": "開始輸入", "match": "placeholder" },
+    "add_source": { "text": "新增來源" },
+    "collapse_source": { "text": "collapse_content" },
+    "remove_source": { "text": "移除來源" },
+    "rename_source": { "text": "重新命名來源" },
+    "delete_chat": { "text": "刪除對話記錄" },
+    "audio_overview": { "text": "語音摘要" },
+    "customize_audio": { "text": "自訂語音摘要", "match": "aria-label" },
+    "url_source_type": { "text": "網站" },
+    "upload_source_type": { "text": "上傳檔案" },
+    "drive_source_type": { "text": "雲端硬碟" },
+    "url_textarea": { "text": "貼上任何連結", "match": "placeholder" },
+    "save_button": { "text": "儲存" },
+    "cancel_button": { "text": "取消" },
+    "edit_title": { "text": "編輯標題" },
+    "delete_notebook": { "text": "刪除" },
+    "download_audio": { "text": "下載" },
+    "play_audio": { "text": "播放", "match": "aria-label" },
+    "notebook_settings": { "text": "設定筆記本", "match": "aria-label" },
+    "conversation_options": { "text": "對話選項", "match": "aria-label" },
+    "more_vert": { "text": "more_vert" },
+    "source_tab": { "text": "來源" },
+    "chat_tab": { "text": "對話" }
+  },
+  "selectors": {
+    "answer": ".to-user-container .message-content",
+    "question": ".from-user-container",
+    "suggestions": ".suggestions-container",
+    "source_panel": ".source-panel",
+    "studio_panel": "studio-panel",
+    "notebook_title": "h1",
+    "notebook_rows": "tr[tabindex]"
+  }
+}

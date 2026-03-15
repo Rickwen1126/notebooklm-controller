@@ -1,0 +1,59 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Code Review: Tab Pool + Notebook-First Alignment 2026-03-14",
+  "steps": [
+    {
+      "title": "Review Summary",
+      "description": "## Review Summary\n\n🔴 Critical: 0（3 個已在本次 session 修正）\n🟡 Suggestions: 4\n✅ Good Practices: 3\n\n### Scope\nReview Point 1.5 的 code alignment：types.ts, tab-manager.ts, notebook-tools.ts, mcp-tools.ts, index.ts, session-runner.ts, agent-loader.ts, 10 個 agent config files, 及 27 個 test files。\n\n### Focus\n架構邊界正確性、resource lifecycle safety、API contract 一致性、agent prompt injection 品質。\n\n### 已修正的 Critical Issues\n原始實作中 `index.ts` 有 3 個 critical issues（C1: 沒傳 notebookAlias、C2: 沒用 acquireTab、C3: acquireTab/releaseTab 沒被呼叫）。這些已在 code review 後立即修正。"
+    },
+    {
+      "file": "src/tab-manager/tab-manager.ts",
+      "line": 147,
+      "ref": "25a58f582f54db5db73272da27b85881e3c1183b",
+      "title": "🟡 Affinity path 不更新 tab.url",
+      "description": "## Problem\n\n策略 1（affinity match）重用同一 notebook 的 idle tab 時，不更新 `tab.url` 也不 navigate。這意味著 `tab.url` 可能和 `tab.page.url()` 不一致 — 如果上一個任務在 session 中 navigate 到了別的頁面。\n\n下游 `createRunTask` 把 `tabHandle.url` 傳給 `runDualSession` 的 `tabUrl` 做 pre-navigate hint 判斷。如果 `tab.url` 是 stale 的，hint 可能是錯的。\n\n## Fix\n\n```typescript\n// Option A: 讀取真實 URL\ntab.url = tab.page.url();\n\n// Option B: 在 createRunTask 裡用 page.url() 而非 tabHandle.url\ntabUrl: tabHandle.page.url(),\n```\n\n## Rationale\n\nPre-navigate hint 是 \"hint not assertion\"，所以 stale URL 不會造成操作錯誤。但如果 hint 頻繁錯誤，agent 會浪費時間自己驗證，降低效率。建議在 acquireTab 的 affinity path 加一行 `tab.url = tab.page.url()`。"
+    },
+    {
+      "file": "src/agent/session-runner.ts",
+      "line": 377,
+      "ref": "25a58f582f54db5db73272da27b85881e3c1183b",
+      "title": "🟡 HOMEPAGE_URL 硬寫，和 notebook-tools.ts 重複",
+      "description": "## Problem\n\n`HOMEPAGE_URL = \"https://notebooklm.google.com\"` 在 `session-runner.ts` 裡局部定義（L377），而 `notebook-tools.ts` 有 `NOTEBOOK_URL_PREFIX = \"https://notebooklm.google.com/notebook/\"`（L27）。同一個域名的基底 URL 散落在兩個不同模組。\n\n## Fix\n\n```typescript\n// src/shared/config.ts\nexport const NOTEBOOKLM_BASE_URL = \"https://notebooklm.google.com\";\nexport const NOTEBOOK_URL_PREFIX = `${NOTEBOOKLM_BASE_URL}/notebook/`;\n```\n\n然後兩處都 import 共用常數。\n\n## Rationale\n\n目前不影響正確性。但如果 NotebookLM 改域名（e.g. lab.google.com），需要改兩個地方，容易遺漏。提取到 config.ts 是 single source of truth 的做法。"
+    },
+    {
+      "file": "src/daemon/mcp-tools.ts",
+      "line": 152,
+      "ref": "25a58f582f54db5db73272da27b85881e3c1183b",
+      "title": "🟡 runningTasks 仍然 hardcoded 0",
+      "description": "## Problem\n\n`runningTasks: 0` 帶著 `// TODO: expose from scheduler when available` 的註解，從 Phase 2 就存在。現在 `tabPool.usedSlots` 提供了 tab 級別的使用量，但 task 級別的 running count 仍然缺失。\n\n## Fix\n\n```typescript\n// 在 Scheduler 加 getRunningCount() method\nrunningTasks: deps.scheduler.getRunningCount(),\n```\n\n## Rationale\n\n`usedSlots` 和 `runningTasks` 語義不同（一個 tab 可能在一個 dual-session 的多個 step 中都是 active）。對 MCP client 來說，`runningTasks` 比 `usedSlots` 更直觀反映「系統忙不忙」。但這不影響目前功能，屬於 tech debt。"
+    },
+    {
+      "file": "src/tab-manager/tab-manager.ts",
+      "line": 275,
+      "ref": "25a58f582f54db5db73272da27b85881e3c1183b",
+      "title": "🟡 switchMode 的 \"active tab(s)\" 語義混淆",
+      "description": "## Problem\n\n`switchMode` 的 guard 是 `this.tabs.size > 0`，錯誤訊息是 `Cannot switch mode: ${this.tabs.size} active tab(s)`。在新 pool 語義下，\"active\" 指的是 `state === \"active\"` 的 tab，但這裡 `tabs.size` 包含 idle tab。一個有 3 個 idle tab 的系統會報 \"3 active tab(s)\"，實際上都是閒置的。\n\n## Fix\n\n```typescript\nif (this.tabs.size > 0) {\n  throw new ChromeError(\n    `Cannot switch mode: ${this.tabs.size} tab(s) in pool ` +\n    `(${this.listActiveTabs().length} active, ${this.listIdleTabs().length} idle). ` +\n    `Close all tabs first.`,\n  );\n}\n```\n\n## Rationale\n\n使用者看到 \"3 active tab(s)\" 會以為有 3 個任務在跑。實際上可能都是 idle。更精確的訊息幫助 debug。"
+    },
+    {
+      "file": "src/daemon/index.ts",
+      "line": 127,
+      "ref": "25a58f582f54db5db73272da27b85881e3c1183b",
+      "title": "✅ try/finally 保證 releaseTab",
+      "description": "## Good Practice\n\n`try { runDualSession } finally { releaseTab }` 是 resource pool 的 golden pattern。不管 session 成功、失敗、還是拋 exception，tab 一定會歸還。這避免了 resource leak — database connection pool 的教訓在這裡被正確應用。\n\n結合 `acquireTab` 在前（L84），形成完整的 acquire-use-release lifecycle，全部在同一個函式裡，不跨模組。"
+    },
+    {
+      "file": "src/shared/types.ts",
+      "line": 4,
+      "ref": "25a58f582f54db5db73272da27b85881e3c1183b",
+      "title": "✅ NotebookStatus 移除 closed — single source of truth",
+      "description": "## Good Practice\n\n移除 `\"closed\"` 和 `active: boolean` 消除了 schema 層的雙重 source of truth。之前 `active` flag 和 tab 實際存在性可以不同步（使用者 call `close_notebook` 但 tab 還在 pool 裡，或反過來）。\n\n現在 tab 狀態完全由 `TabManager` runtime 管理，`NotebookEntry` 只記使用者的決策（註冊/移除）。清楚的 ownership boundary。"
+    },
+    {
+      "file": "src/agent/session-runner.ts",
+      "line": 374,
+      "ref": "25a58f582f54db5db73272da27b85881e3c1183b",
+      "title": "✅ Pre-navigate hint 設計為 hint 而非 assertion",
+      "description": "## Good Practice\n\nPre-navigate 的結果是 prompt 內的 `[系統提示: ...]`，不是自動 navigate。Agent 可以：\n1. 信任 hint，直接開始操作\n2. 先 `screenshot()` 確認頁面狀態\n3. 自行 `navigate()` 到正確頁面\n\n這遵循 Finding #48 的設計原則：**系統做 O(1) 判斷提供 hint，agent 保留自主驗證權**。在 GPT-4.1 這種非推理模型上，explicit hint 比 implicit inference 更可靠，但不 over-constrain agent 的行為。"
+    }
+  ]
+}
