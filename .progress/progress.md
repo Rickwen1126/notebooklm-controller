@@ -114,8 +114,27 @@
 - drag-and-drop upload 理論可行但 CDP 模擬複雜，暫不實作
 - Converter 不應拒絕大內容 — splitting 是 dispatch 層責任
 
-**State**: Branch `main` at `dd213e4`。688 tests ✅。Content pipeline 完整：repo ✅, URL ✅, text ✅, PDF untested (code ready)。
+**State**: Branch `main` at `dd213e4`。688 tests ✅。
+
+---
+
+## 2026-03-15 23:59 — Content pipeline + auto-rename complete
+
+**Goal**: Content pipeline 驗證 + source auto-rename
+
+**Done**:
+- CP03 PDF ✅ (Copilot SDK 簡報 43 頁, 8768 chars, 一次 paste 成功)
+- Auto-rename 實作：addSource 後自動 rename（Planner 提供 sourceName）
+- Smart skip：count「貼上的文字」> 1 → 放棄 rename + 提示使用者
+- Planner system message 加命名規則（repo/URL/PDF/text 各有格式）
+- improvement.md 記錄限制 + future agent rename 方案
+
+**Decisions**:
+- Auto-rename 只在 exactly 1 個未命名 source 時生效（系統從頭管理的 notebook 永遠滿足）
+- 納管既有 notebook 的多未命名 source → 列為限制，未來用 LLM agent 逐一點開辨識
+- 新 notebook `?addSource=true` URL 自動開 dialog 是邊緣 case，正常操作不影響
+
+**State**: Branch `main` at `e17c188`。688 tests ✅。Content pipeline 4/4 verified (repo/URL/PDF/text)。Auto-rename implemented with smart skip。
 
 **Next**:
-- [ ] CP03 PDF source 驗證（需要測試用 PDF）
-- [ ] Source 自動命名（`{name} (part 1/20)` 格式，目前都叫「貼上的文字」）
+- [ ] Content pipeline 已完成，考慮下一個 feature（audio? smart notebook selection?）
