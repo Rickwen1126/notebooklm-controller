@@ -1,30 +1,40 @@
-## 2026-03-15 04:00 — Prompt 重寫 + bug fixes，準備重新測試
+## 2026-03-15 04:30 — add-source + query + input gate 全部通過
 
-**Commits (this session, 5 commits)**:
+**Commits (this session, 7 commits)**:
 1. `93fb327`: build fixes + daemon startup + reauth + keyboard shortcuts
-2. `b68019a`: create_notebook tool + Chrome crash bubble + keyboard keyCode fix
-3. `6041174`: paste(clear=true) + agent-based create_notebook + tab/Chrome fixes
-4. `66e1482`: /test-real complete + remove shutdown MCP tool
-5. `b8400fa`: Goal-oriented agent prompts + Planner WHAT-not-HOW + code bug fixes
+2. `b68019a`: create_notebook + Chrome crash bubble + keyCode fix
+3. `6041174`: paste(clear=true) + agent-based create_notebook
+4. `66e1482`: /test-real complete + remove shutdown
+5. `b8400fa`: Goal-oriented prompts + Planner WHAT-not-HOW + bug fixes
+6. `659ef89`: Debug logging (NBCTL_DEBUG=1)
+7. `073222c`: Fix add-source flow + debug logging + log file
 
-**State**: Branch `001-mvp` at `b8400fa`。640 tests ✅。
+**State**: Branch `001-mvp` at `073222c`。640 tests ✅。
 
-### Prompt 架構改動
-- `_knowledge.md`: 觀察→行動→驗證 loop、元件名稱是高信心參考不是指令
-- Planner systemMessage: executorPrompt 只說 WHAT 不說 HOW
-- Agent prompts: goal-oriented + reference flow 風格
-- add-source: 一律走「複製的文字」
-- query: 明確要求 read 回完整答案
+### /test-real 真實驗證結果
 
-### 已修 Bug
-- input gate rejection metadata 傳遞
-- URL normalize（去 query params）
+| 操作 | 結果 |
+|------|------|
+| create_notebook("nbctl-test") | ✅ 建立 + 命名 + 自動納管 |
+| list_notebooks | ✅ |
+| set_default | ✅ |
+| rename_notebook | ✅ |
+| add source (text) | ✅ 「複製的文字」流程完整 12 步 |
+| query | ✅ grounded answer 回傳 |
+| input gate (off_topic) | ✅ Rejected(off_topic) |
+| input gate (ambiguous) | ✅ Rejected(ambiguous) |
+| async submit + track + cancel | ✅ |
+| error handling | ✅ |
+| remove + cleanup | ✅ |
+
+### Root Cause（add-source 失敗）
+agent-loader.ts 的 UI Elements 表缺少 `find("新增來源") → click` 第一步。
+Agent 直接找「複製的文字」但 dialog 還沒開，找不到就亂貼。
+修正後 agent 完美執行 12 步流程。
 
 ### 待處理
-- [ ] 重新跑 /test-real 全流程驗證
-- [ ] session log 加 prompt/systemMessage 內容（debug 用）
-- [ ] tab pool: create_notebook URL 提取應走 acquireTab/releaseTab
-- [ ] untracked tabs 攔截（browser.on targetcreated）
-- [ ] content pipeline: URL/PDF 轉 markdown 品質改善
-- [ ] repo 分段貼上（超過 limit 時自動分 chunk）
-- [ ] agent prompt 自我修復能力驗證
+- [ ] content pipeline: URL/PDF 轉 markdown、repo 分段
+- [ ] tab pool: create_notebook URL 提取走 acquireTab
+- [ ] untracked tabs 攔截
+- [ ] 多筆記本 concurrent 測試
+- [ ] agent prompt 自我修復能力進一步驗證
