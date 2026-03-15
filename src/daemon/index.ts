@@ -155,6 +155,7 @@ function createRunTask(
           locale,
           notebookAlias: task.notebookAlias,
           taskId: task.taskId,
+          networkGate,
         },
         task.command,
       );

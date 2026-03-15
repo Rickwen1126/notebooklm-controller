@@ -216,6 +216,8 @@ export interface DualSessionOptions {
   notebookAlias: string;
   /** Task ID for screenshot persistence. */
   taskId?: string;
+  /** NetworkGate for rate-limit protection. Acquired per-operation before each script. */
+  networkGate?: { acquirePermit: () => Promise<void> };
   /** Model for Planner session. Defaults to PLANNER_MODEL. */
   plannerModel?: string;
   /** Timeout for Planner. Defaults to 60s. */
@@ -507,7 +509,12 @@ export async function runDualSession(
         operation: step.operation,
       });
 
-      // 2a. Run deterministic script (0 LLM cost).
+      // 2a. Acquire NetworkGate permit (rate-limit protection, per-operation).
+      if (options.networkGate) {
+        await options.networkGate.acquirePermit();
+      }
+
+      // 2b. Run deterministic script (0 LLM cost).
       const scriptResult = await runScript(step.operation, step.params, ctx);
 
       // Persist screenshot after each step (if taskId available).
