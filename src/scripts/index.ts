@@ -65,8 +65,8 @@ async function preprocessAddSource(params: Record<string, string>): Promise<stri
   throw new Error(`Unknown sourceType: ${sourceType}`);
 }
 
-/** Max chars per source paste. Content exceeding this is split into multiple sources. */
-const CHUNK_SIZE = 500_000;
+/** Max chars per source paste. 100K keeps paste fast (~20s) and avoids textarea hang. */
+const CHUNK_SIZE = 100_000;
 
 /**
  * Split text into chunks of at most CHUNK_SIZE chars.
