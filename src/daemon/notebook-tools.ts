@@ -28,6 +28,10 @@ import { logger } from "../shared/logger.js";
 
 const NOTEBOOK_URL_PREFIX = `${NOTEBOOKLM_HOMEPAGE}/notebook/`;
 
+/** Strip query params, hash fragments, and trailing slash for consistent URL comparison. */
+const normalizeUrl = (u: string) =>
+  u.split("?")[0].split("#")[0].replace(/\/$/, "");
+
 /**
  * Alias validation regex:
  * - 2-50 chars: starts and ends with [a-z0-9], middle allows hyphens
@@ -232,8 +236,8 @@ function registerCreateNotebook(
 
         await deps.tabManager.closeTab(tab.tabId);
 
-        // Normalize: strip query params (e.g. ?addSource=true)
-        notebookUrl = notebookUrl.split("?")[0];
+        // Normalize: strip query params, hash, trailing slash
+        notebookUrl = normalizeUrl(notebookUrl);
 
         log.info("URL extracted", { url: notebookUrl, method: clicked });
 
@@ -325,8 +329,7 @@ function registerAddNotebook(
           return errorResult(`Alias already exists: "${alias}"`);
         }
 
-        // Check for duplicate URL (normalize by stripping query params)
-        const normalizeUrl = (u: string) => u.split("?")[0];
+        // Check for duplicate URL
         const existingByUrl = Object.values(state.notebooks).find(
           (nb) => normalizeUrl(nb.url) === normalizeUrl(url),
         );
