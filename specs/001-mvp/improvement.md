@@ -56,12 +56,16 @@ GPT-4.1 對某些 prompt 會思考 60s+ 不 call tool。「Planner 不 call tool
 
 | 項目 | 嚴重度 | 說明 |
 |------|--------|------|
+| Tab pool background eviction | **HIGH** | task crash 不 release tab → pool 逐漸耗盡。需 setInterval sweep，release 超過 timeoutAt 的 active tab。 |
+| `inferActionType` regex | MEDIUM | 用 regex 從 NL prompt 推斷 actionType，但 Planner 已有 operation name，應直接用 |
 | `agent-loader.ts` + `AgentConfig` | LOW | 不再被主流程使用，保留增加認知負擔 |
 | `waitForContent` browser tool | LOW | 被 `pollForAnswer` 取代但未刪 |
 | `operations.ts` 991 行 | MEDIUM | dialog 操作 boilerplate 重複多，應抽 helper |
 | renameSource 用 CDP `dispatchPaste` | MEDIUM | 可能跟 renameNotebook 一樣有 false positive，未驗證 |
 | `.chat-panel` / `.source-panel` CSS class | HIGH | Google 改這些 class 全壞，無替代 selector |
 | `ensureHomepage` hardcode URL | LOW | `https://notebooklm.google.com` 寫死 |
+| MCP session stale sweep | LOW | transport.onclose 已有清理，但異常斷開可能漏。可加定期 sweep。 |
+| Observability metrics | LOW | 缺 MCP request count/latency、script success/fail rate、tab pool utilization。可擴展 get_status。 |
 
 ---
 
