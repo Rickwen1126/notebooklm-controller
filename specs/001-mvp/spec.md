@@ -44,6 +44,68 @@
      MCP tool 自描述取代 Skill Template，MCP notification 取代 Adapter。
 -->
 
+## Implementation Status (2026-03-15)
+
+> Tracked against actual codebase as of 2026-03-15.
+> This section is a status overlay — the User Stories below remain unchanged.
+
+### Summary
+
+| Status | Count | Stories |
+|--------|-------|---------|
+| DONE | 15 | US1, US2, US7, US8, US9, US10, US11, US13, US14, US15, US17, US20, US21, US22, US23 |
+| PARTIAL | 4 | US3, US4, US5, US18 |
+| NOT STARTED | 3 | US6, US12, US19 |
+
+### DONE — fully implemented + tested
+
+| Story | Title | Notes |
+|-------|-------|-------|
+| US1 | Daemon 生命週期管理 | startDaemon, stopDaemon, Chrome launch, Google session check, reauth, get_status, MCP Server |
+| US2 | Notebook 管理 | register, remove, list, set_default, rename (alias), create via exec, parallel multi-notebook |
+| US7 | Source 狀態查詢 | listSources via exec, source panel reading |
+| US8 | 截圖除錯 | captureScreenshot via CDP, screenshot persistence to `~/.nbctl/screenshots/` |
+| US9 | 狀態持久化 | state.json, task-store, cache-manager |
+| US10 | 查詢 NotebookLM | scriptedQuery via exec, pollForAnswer with 3-layer stability check |
+| US11 | 多輪對話 | chat panel maintains conversation, clearChat operation |
+| US13 | 非同步操作 | async:true submit, taskId return, get_status polling, cancel_task |
+| US14 | MCP 通知 | Notifier sends task completion/failure notifications |
+| US15 | MCP tool 探索 | tools/list auto-discovery, list_agents returns script catalog |
+| US17 | TabManager | tab pool (max 10), acquire/release, weak affinity, CDP background tab ops |
+| US20 | Source 命名 | scriptedRenameSource via exec |
+| US21 | 本地快取 | CacheManager with sources.json, artifacts.json per notebook |
+| US22 | 操作歷程 | OperationLogEntry recording per task |
+| US23 | Notebook 標題管理 | scriptedRenameNotebook, scriptedDeleteNotebook via exec |
+
+### PARTIAL — code exists but not fully integrated into G2 script flow
+
+| Story | Title | Notes |
+|-------|-------|-------|
+| US3 | Repo → source | `src/content/repo-to-text.ts` exists (uses repomix), but addSource script only supports plain text paste. Not wired to Planner dispatch. |
+| US4 | URL → source | `src/content/url-to-text.ts` exists (uses @mozilla/readability), but not wired to addSource script. NotebookLM native URL import not scripted. |
+| US5 | PDF → source | `src/content/pdf-to-text.ts` exists (uses pdf-parse), but not wired to addSource script. |
+| US18 | Agent Config 參數化 | Legacy agent-loader.ts exists but G2 uses scripts instead. Partially relevant as scripts are externalized. |
+
+### NOT STARTED
+
+| Story | Title | Notes |
+|-------|-------|-------|
+| US6 | Audio overview 生成 + 下載 | No script, no spike verification |
+| US12 | 查詢結果輸出至檔案 | Not implemented |
+| US19 | 智慧 notebook 選擇 | Not implemented |
+
+### Architecture Change: G2 Script-first (not in original spec)
+
+The implementation diverged from the original Agent Executor approach to a **G2 Script-first architecture**:
+
+- **Planner LLM → deterministic Script → Recovery LLM** (only on failure). Happy path = 0 LLM cost.
+- **Recovery session** — GPT-5-mini completes failed operations + analyzes cause + suggests UIMap patches.
+- **Repair log + screenshot persistence** — `~/.nbctl/repair-logs/`, `~/.nbctl/screenshots/`
+- **NetworkGate per-operation** — `acquirePermit()` before each script run.
+- **Viewport 1920x1080 contract** — All scripts tested at this resolution.
+
+---
+
 ## 使用者情境與測試 *(mandatory)*
 
 <!--
