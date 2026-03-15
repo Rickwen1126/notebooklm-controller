@@ -165,6 +165,9 @@ export async function scriptedQuery(
   };
 
   try {
+    // Step 0: Ensure chat panel is visible
+    await ensureChatPanel(cdp, page, log, t0);
+
     // Step 1: Find chat input
     stepNum = 1;
     let stepStart = Date.now();
@@ -350,12 +353,14 @@ export async function scriptedAddSource(
     }
     log.push(createLogEntry(4, "find_paste_source_type", "ok", `Found at (${pasteTypeEl.center.x}, ${pasteTypeEl.center.y})`, stepStart));
 
-    // Step 5: Click paste source type → wait for textarea to appear
+    // Step 5: Click paste source type → wait for paste dialog textarea
     stepNum = 5;
     stepStart = Date.now();
     await dispatchClick(cdp, pasteTypeEl.center.x, pasteTypeEl.center.y);
-    await waitForVisible(page, 'textarea', { timeoutMs: 3000 });
-    log.push(createLogEntry(5, "click_paste_source_type", "ok", `Clicked, textarea appeared`, stepStart));
+    // Wait for the paste textarea specifically (aria-label="貼上的文字"), not any textarea
+    const pasteTextareaReady = await waitForVisible(page, 'textarea[aria-label="貼上的文字"]', { timeoutMs: 5000 });
+    log.push(createLogEntry(5, "click_paste_source_type", pasteTextareaReady.visible ? "ok" : "warn",
+      pasteTextareaReady.visible ? `Paste textarea appeared in ${pasteTextareaReady.elapsedMs}ms` : `Paste textarea not detected`, stepStart));
 
     // Step 6: Find textarea by placeholder
     stepNum = 6;
@@ -512,6 +517,65 @@ async function ensureSourcePanel(
 }
 
 // =============================================================================
+// Helper: ensure chat panel is visible (shared by query/clearChat)
+// =============================================================================
+
+async function ensureChatPanel(
+  cdp: CDPSession,
+  page: Page,
+  log: ScriptLogEntry[],
+  t0: number,
+): Promise<boolean> {
+  const stepStart = Date.now();
+  const chatVisible = await page.evaluate(`(() => {
+    const panel = document.querySelector('.chat-panel');
+    if (!panel) return false;
+    const rect = panel.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  })()`) as boolean;
+
+  if (!chatVisible) {
+    const tabEl = await findElementByText(page, "對話");
+    if (tabEl) {
+      await dispatchClick(cdp, tabEl.center.x, tabEl.center.y);
+      await new Promise((r) => setTimeout(r, 800));
+      log.push(createLogEntry(0, "ensure_chat_panel", "warn", `Clicked "對話" tab`, stepStart));
+    } else {
+      log.push(createLogEntry(0, "ensure_chat_panel", "warn", `Chat panel not visible, no tab found`, stepStart));
+      return false;
+    }
+  } else {
+    log.push(createLogEntry(0, "ensure_chat_panel", "ok", `Chat panel visible`, stepStart));
+  }
+  return true;
+}
+
+// =============================================================================
+// Helper: ensure on homepage (shared by notebook CRUD operations)
+// =============================================================================
+
+const HOMEPAGE_URL = "https://notebooklm.google.com";
+
+async function ensureHomepage(
+  page: Page,
+  log: ScriptLogEntry[],
+  t0: number,
+): Promise<boolean> {
+  const stepStart = Date.now();
+  const url = page.url();
+  const isHomepage = url === HOMEPAGE_URL || url === HOMEPAGE_URL + "/";
+
+  if (!isHomepage) {
+    await page.goto(HOMEPAGE_URL, { waitUntil: "domcontentloaded" });
+    await new Promise((r) => setTimeout(r, 2000));
+    log.push(createLogEntry(0, "ensure_homepage", "warn", `Navigated to homepage from ${url.slice(0, 60)}`, stepStart));
+  } else {
+    log.push(createLogEntry(0, "ensure_homepage", "ok", `Already on homepage`, stepStart));
+  }
+  return true;
+}
+
+// =============================================================================
 // Helper: open source context menu (for remove/rename)
 // =============================================================================
 
@@ -551,13 +615,16 @@ async function openSourceMenu(
   const clickStart = Date.now();
   await dispatchClick(cdp, sourceMenus[0].x, sourceMenus[0].y);
 
-  // Wait for menu to render
-  const menuReady = await waitForVisible(page, '[role=menuitem], [role=menu], .mat-mdc-menu-panel', { timeoutMs: 3000 });
-  if (!menuReady.visible) {
-    await new Promise((r) => setTimeout(r, 1000));
+  // Wait for menu to render — menu items are plain BUTTONs, not [role=menuitem].
+  // Wait for known menu item text to appear instead of CSS selector.
+  let menuRendered = false;
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setTimeout(r, 300));
+    const item = await findElementByText(page, "移除來源");
+    if (item) { menuRendered = true; break; }
   }
-  log.push(createLogEntry(stepNum, "click_source_menu", "ok",
-    `Clicked menu at (${sourceMenus[0].x}, ${sourceMenus[0].y}), render=${menuReady.visible ? `${menuReady.elapsedMs}ms` : "fallback 1s"}`, clickStart));
+  log.push(createLogEntry(stepNum, "click_source_menu", menuRendered ? "ok" : "warn",
+    `Clicked menu at (${sourceMenus[0].x}, ${sourceMenus[0].y}), menu ${menuRendered ? "rendered" : "not detected"}`, clickStart));
 
   return { ok: true, stepNum };
 }
@@ -598,14 +665,16 @@ async function openNotebookMenu(
 
   await dispatchClick(cdp, menuIcons[0].x, menuIcons[0].y);
 
-  // Wait for menu to actually render (menu items contain "刪除" or "編輯標題")
-  const menuReady = await waitForVisible(page, '[role=menuitem], [role=menu], .mat-mdc-menu-panel', { timeoutMs: 3000 });
-  if (!menuReady.visible) {
-    // Fallback: just wait longer
-    await new Promise((r) => setTimeout(r, 1000));
+  // Wait for menu to render — items are plain BUTTONs, not [role=menuitem].
+  // Wait for known menu item text ("刪除" or "編輯標題") to appear.
+  let menuRendered = false;
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setTimeout(r, 300));
+    const item = await findElementByText(page, "刪除");
+    if (item) { menuRendered = true; break; }
   }
-  log.push(createLogEntry(stepNum, "click_notebook_menu", "ok",
-    `Clicked menu at (${menuIcons[0].x}, ${menuIcons[0].y}), render=${menuReady.visible ? `${menuReady.elapsedMs}ms` : "fallback 1s"}`, stepStart));
+  log.push(createLogEntry(stepNum, "click_notebook_menu", menuRendered ? "ok" : "warn",
+    `Clicked menu at (${menuIcons[0].x}, ${menuIcons[0].y}), menu ${menuRendered ? "rendered" : "not detected"}`, stepStart));
 
   return { ok: true, stepNum };
 }
@@ -804,6 +873,9 @@ export async function scriptedClearChat(
   const fail = makeFail("clearChat", log, t0);
 
   try {
+    // Step 0: Ensure chat panel is visible
+    await ensureChatPanel(cdp, page, log, t0);
+
     // Step 1: find conversation options menu
     let stepStart = Date.now();
     const optionsEl = await findElementByText(page, uiMap.elements.conversation_options?.text ?? "對話選項", { match: "aria-label" });
@@ -869,6 +941,8 @@ export async function scriptedListNotebooks(
   const fail = makeFail("listNotebooks", log, t0);
 
   try {
+    await ensureHomepage(page, log, t0);
+
     const stepStart = Date.now();
     const result = await page.evaluate(`(() => {
       const rows = document.querySelectorAll('tr[tabindex]');
@@ -904,6 +978,7 @@ export async function scriptedCreateNotebook(
   const fail = makeFail("createNotebook", log, t0);
 
   try {
+    await ensureHomepage(page, log, t0);
     const initialUrl = page.url();
 
     // Step 1: find "新建" button
@@ -959,6 +1034,8 @@ export async function scriptedRenameNotebook(
   const fail = makeFail("renameNotebook", log, t0);
 
   try {
+    await ensureHomepage(page, log, t0);
+
     // Step 1: open notebook context menu
     const menu = await openNotebookMenu(cdp, page, log, 1);
     if (!menu.ok) return fail(menu.stepNum, "open_notebook_menu", "Failed", "notebook_menu");
@@ -970,11 +1047,16 @@ export async function scriptedRenameNotebook(
     if (!editEl) return fail(stepNum, "find_edit_title", `Not found`, "edit_title");
     log.push(createLogEntry(stepNum, "find_edit_title", "ok", `Found`, stepStart));
 
-    // Click → dialog. Wait for dialog input to render.
+    // Click → dialog. Wait for dialog to render by checking for mat-dialog-container.
     stepNum++;
     stepStart = Date.now();
     await dispatchClick(cdp, editEl.center.x, editEl.center.y);
-    const dialogReady = await waitForVisible(page, 'input[type="text"], input:not([type])', { timeoutMs: 5000 });
+    // mat-dialog-container has role=dialog. Also try checking for input appearance.
+    const dialogReady = await waitForVisible(page, 'mat-dialog-container, [role=dialog]', { timeoutMs: 5000 });
+    if (dialogReady.visible) {
+      // Extra wait for input to render inside the dialog
+      await waitForVisible(page, 'mat-dialog-container input, [role=dialog] input', { timeoutMs: 3000 });
+    }
     log.push(createLogEntry(stepNum, "click_edit_title", dialogReady.visible ? "ok" : "warn",
       `Clicked, dialog ${dialogReady.visible ? `ready in ${dialogReady.elapsedMs}ms` : "not detected"}`, stepStart));
 
@@ -1028,6 +1110,8 @@ export async function scriptedDeleteNotebook(
   const fail = makeFail("deleteNotebook", log, t0);
 
   try {
+    await ensureHomepage(page, log, t0);
+
     // Step 1: open notebook context menu
     const menu = await openNotebookMenu(cdp, page, log, 1);
     if (!menu.ok) return fail(menu.stepNum, "open_notebook_menu", "Failed", "notebook_menu");
