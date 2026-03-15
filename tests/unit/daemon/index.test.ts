@@ -8,7 +8,7 @@ import type { UIMap } from "../../../src/shared/types.js";
 
 vi.mock("../../../src/shared/logger.js", () => {
   const noop = () => {};
-  const childLogger = { info: noop, warn: noop, error: noop, child: () => childLogger };
+  const childLogger = { info: noop, warn: noop, error: noop, debug: noop, child: () => childLogger };
   return { logger: childLogger };
 });
 
@@ -59,9 +59,7 @@ const mockMcpServerInstance = {
   start: vi.fn().mockResolvedValue(undefined),
   stop: vi.fn().mockResolvedValue(undefined),
   registerTool: vi.fn(),
-  getServer: vi.fn().mockReturnValue({
-    server: { notification: vi.fn().mockResolvedValue(undefined) },
-  }),
+  getSessionServers: vi.fn(() => [][Symbol.iterator]()),
 };
 
 vi.mock("../../../src/daemon/mcp-server.js", () => {
@@ -379,9 +377,9 @@ describe("Daemon entry point", () => {
       expect(mockMcpServerInstance.start).toHaveBeenCalledOnce();
       expect(mockNotifierInstance.setServer).toHaveBeenCalledOnce();
 
-      // Notifier should receive the low-level Server from mcpServer.getServer().server
+      // Notifier should receive the NbctlMcpServer (has getSessionServers for broadcast)
       const serverArg = mockNotifierInstance.setServer.mock.calls[0][0];
-      expect(serverArg).toHaveProperty("notification");
+      expect(serverArg).toHaveProperty("getSessionServers");
     });
 
     it("updates daemon state with pid, startedAt, and port", async () => {

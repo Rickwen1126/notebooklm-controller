@@ -20,7 +20,7 @@ vi.mock("../../../../src/tab-manager/cdp-helpers.js", () => ({
 // Suppress logger output during tests.
 vi.mock("../../../../src/shared/logger.js", () => {
   const noop = () => {};
-  const childLogger = { info: noop, warn: noop, error: noop, child: () => childLogger };
+  const childLogger = { info: noop, warn: noop, error: noop, debug: noop, child: () => childLogger };
   return { logger: childLogger };
 });
 

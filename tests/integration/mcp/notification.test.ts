@@ -16,7 +16,7 @@ vi.mock("../../../src/shared/logger.js", () => {
   const noop = () => {};
   const childLogger = {
     info: noop,
-    warn: noop,
+    warn: noop, debug: noop,
     error: noop,
     child: () => childLogger,
   };
@@ -104,9 +104,14 @@ function createMockTaskStore() {
 // Mock MCP Server — just needs a `notification` method
 // ---------------------------------------------------------------------------
 
-function createMockMcpServer() {
+function createMockMcpServer(
+  notificationImpl = vi.fn().mockResolvedValue(undefined),
+) {
+  const notification = notificationImpl;
+  const sessionServer = { server: { notification } };
   return {
-    notification: vi.fn().mockResolvedValue(undefined),
+    notification, // expose for assertions
+    getSessionServers: vi.fn(() => [sessionServer][Symbol.iterator]()),
   };
 }
 

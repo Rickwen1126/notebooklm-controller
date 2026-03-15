@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 vi.mock("../../../src/shared/logger.js", () => {
   const noop = () => {};
-  const childLogger = { info: noop, warn: noop, error: noop, child: () => childLogger };
+  const childLogger = { info: noop, warn: noop, error: noop, debug: noop, child: () => childLogger };
   return { logger: childLogger };
 });
 

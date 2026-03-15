@@ -18,7 +18,7 @@ vi.mock("../../../src/shared/logger.js", () => {
   const noop = () => {};
   const childLogger = {
     info: noop,
-    warn: noop,
+    warn: noop, debug: noop,
     error: noop,
     child: () => childLogger,
   };
@@ -144,6 +144,8 @@ function createMockMcpServer() {
     string,
     { options: unknown; handler: (...args: unknown[]) => unknown }
   >();
+  const notification = vi.fn().mockResolvedValue(undefined);
+  const sessionServer = { server: { notification } };
   return {
     registerTool: vi.fn(
       (
@@ -154,7 +156,9 @@ function createMockMcpServer() {
         tools.set(name, { options, handler });
       },
     ),
-    notification: vi.fn().mockResolvedValue(undefined),
+    // expose for assertions (same underlying mock as the session server)
+    notification,
+    getSessionServers: vi.fn(() => [sessionServer][Symbol.iterator]()),
     tools,
     getHandler(name: string) {
       const tool = tools.get(name);
@@ -278,7 +282,7 @@ describe("T068K: exec end-to-end integration", () => {
     expect(result.status).toBe("queued");
     expect(result.taskId).toBeDefined();
     expect(result.notebook).toBe("my-notebook");
-    expect(result.hint).toBeDefined();
+    expect(result.next_action).toBeDefined();
 
     // Wait for the background task to finish
     await scheduler.waitForIdle();

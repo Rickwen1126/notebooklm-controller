@@ -63,8 +63,10 @@ function registerExec(
     {
       description:
         "Execute a natural language instruction against a NotebookLM notebook. " +
-        "By default waits for completion (sync). Set async=true to return " +
-        "immediately with a taskId for later polling via get_status.",
+        "By default waits for completion (sync) and returns the result directly — use this for most cases. " +
+        "Set async=true only for very long operations (>2 min); it returns a taskId immediately. " +
+        "When async=true: you MUST poll get_status(taskId) every 15-20 seconds until " +
+        "status is 'completed' or 'failed'. Do not rely on notifications — poll actively.",
       inputSchema: {
         prompt: z
           .string()
@@ -166,7 +168,9 @@ function registerExec(
             taskId: task.taskId,
             status: "queued",
             notebook: notebookAlias,
-            hint: `Use get_status tool with taskId='${task.taskId}' to check results.`,
+            // Explicit polling instruction — notifications are unreliable with stateless HTTP clients.
+            // The LLM must drive polling; do not wait passively.
+            next_action: `Call get_status(taskId='${task.taskId}') every 15-20 seconds. Stop when status is 'completed' or 'failed'. Tasks typically take 1-3 minutes.`,
           });
         }
 

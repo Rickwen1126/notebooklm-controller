@@ -20,7 +20,7 @@ vi.mock("../../../src/shared/logger.js", () => {
   const noop = () => {};
   const childLogger = {
     info: noop,
-    warn: noop,
+    warn: noop, debug: noop,
     error: noop,
     child: () => childLogger,
   };
@@ -75,9 +75,7 @@ const mockMcpServerInstance = {
   start: vi.fn().mockResolvedValue(undefined),
   stop: vi.fn().mockResolvedValue(undefined),
   registerTool: vi.fn(),
-  getServer: vi.fn().mockReturnValue({
-    server: { notification: vi.fn().mockResolvedValue(undefined) },
-  }),
+  getSessionServers: vi.fn(() => [][Symbol.iterator]()),
 };
 
 vi.mock("../../../src/daemon/mcp-server.js", () => {
@@ -375,9 +373,9 @@ describe("T037: Daemon lifecycle integration", () => {
       expect(mockMcpServerInstance.start).toHaveBeenCalledOnce();
       expect(mockNotifierInstance.setServer).toHaveBeenCalledOnce();
 
-      // Notifier gets the low-level Server from mcpServer.getServer().server
+      // Notifier gets NbctlMcpServer directly for session-aware broadcast
       const serverArg = mockNotifierInstance.setServer.mock.calls[0][0];
-      expect(serverArg).toHaveProperty("notification");
+      expect(serverArg).toHaveProperty("getSessionServers");
     });
 
     it("daemon state is persisted with pid, startedAt, port", async () => {

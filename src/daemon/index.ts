@@ -242,7 +242,7 @@ export async function startDaemon(options?: {
   const taskStore = new TaskStore();
   const cacheManager = new CacheManager();
   const networkGate = NetworkGate.getInstance();
-  const notifier = new Notifier(null);
+  const notifier = new Notifier(null); // mcpServer set below after start()
 
   // 2. Launch Chrome
   log.info("Launching Chrome...");
@@ -346,7 +346,10 @@ export async function startDaemon(options?: {
 
   // 9. Start MCP Server
   await mcpServer.start();
-  notifier.setServer(mcpServer.getServer().server);
+  // Pass NbctlMcpServer to Notifier for best-effort broadcast.
+  // NOTE: Notifications are expected to fail for stateless clients (Claude Code).
+  // Async task results are retrieved via polling (get_status). See notifier.ts 待研究.
+  notifier.setServer(mcpServer);
 
   // 10. Update daemon state
   await stateManager.updateDaemon({

@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Notifier } from "../../../src/notification/notifier.js";
 import type { AsyncTask } from "../../../src/shared/types.js";
-import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { NbctlMcpServer } from "../../../src/daemon/mcp-server.js";
 
 // Suppress logger output during tests.
 vi.mock("../../../src/shared/logger.js", () => {
   const noop = () => {};
-  const childLogger = { info: noop, warn: noop, error: noop, child: () => childLogger };
+  const childLogger = { info: noop, warn: noop, error: noop, debug: noop, child: () => childLogger };
   return { logger: childLogger };
 });
 
@@ -27,13 +27,27 @@ function makeTask(overrides: Partial<AsyncTask> = {}): AsyncTask {
   };
 }
 
-/** Helper: create a mock MCP Server with a notification method. */
-function makeMockServer(
-  notificationImpl?: (...args: unknown[]) => Promise<void>,
-): Server {
-  return {
-    notification: notificationImpl ?? vi.fn().mockResolvedValue(undefined),
-  } as unknown as Server;
+/** Helper: create a mock NbctlMcpServer that wraps N session servers. */
+function makeMockMcpServer(
+  notificationImpls: Array<(...args: unknown[]) => Promise<void>> = [
+    vi.fn().mockResolvedValue(undefined),
+  ],
+): { mcpServer: NbctlMcpServer; notifications: ReturnType<typeof vi.fn>[] } {
+  const notifications = notificationImpls.map((impl) =>
+    typeof impl === "function" && (impl as ReturnType<typeof vi.fn>).mock
+      ? (impl as ReturnType<typeof vi.fn>)
+      : vi.fn().mockImplementation(impl),
+  );
+
+  const sessionServers = notifications.map((notif) => ({
+    server: { notification: notif },
+  }));
+
+  const mcpServer = {
+    getSessionServers: vi.fn(() => sessionServers[Symbol.iterator]()),
+  } as unknown as NbctlMcpServer;
+
+  return { mcpServer, notifications };
 }
 
 describe("Notifier", () => {
@@ -49,8 +63,8 @@ describe("Notifier", () => {
 
   it("sends notification to connected MCP server instance", async () => {
     const mockNotification = vi.fn().mockResolvedValue(undefined);
-    const server = makeMockServer(mockNotification);
-    notifier.setServer(server);
+    const { mcpServer } = makeMockMcpServer([mockNotification]);
+    notifier.setServer(mcpServer);
 
     const task = makeTask();
     notifier.notify(task);
@@ -78,10 +92,10 @@ describe("Notifier", () => {
   // ---------------------------------------------------------------------------
 
   it("fire-and-forget: does not throw on send failure", () => {
-    const server = makeMockServer(
+    const { mcpServer } = makeMockMcpServer([
       vi.fn().mockRejectedValue(new Error("transport broken")),
-    );
-    notifier.setServer(server);
+    ]);
+    notifier.setServer(mcpServer);
 
     const task = makeTask();
 
@@ -107,8 +121,8 @@ describe("Notifier", () => {
 
   it("builds correct TaskNotificationPayload from AsyncTask", async () => {
     const mockNotification = vi.fn().mockResolvedValue(undefined);
-    const server = makeMockServer(mockNotification);
-    notifier.setServer(server);
+    const { mcpServer } = makeMockMcpServer([mockNotification]);
+    notifier.setServer(mcpServer);
 
     const task = makeTask({
       taskId: "task-xyz",
@@ -152,8 +166,8 @@ describe("Notifier", () => {
 
   it('notification method is "notifications/task-completed"', async () => {
     const mockNotification = vi.fn().mockResolvedValue(undefined);
-    const server = makeMockServer(mockNotification);
-    notifier.setServer(server);
+    const { mcpServer } = makeMockMcpServer([mockNotification]);
+    notifier.setServer(mcpServer);
 
     notifier.notify(makeTask());
 
@@ -179,13 +193,44 @@ describe("Notifier", () => {
 
     // Now set a server and verify it receives the notification.
     const mockNotification = vi.fn().mockResolvedValue(undefined);
-    const server = makeMockServer(mockNotification);
-    notifier.setServer(server);
+    const { mcpServer } = makeMockMcpServer([mockNotification]);
+    notifier.setServer(mcpServer);
 
     notifier.notify(task);
 
     await vi.waitFor(() => {
       expect(mockNotification).toHaveBeenCalledOnce();
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Broadcasts to all active sessions
+  // ---------------------------------------------------------------------------
+
+  it("broadcasts to all active sessions when multiple clients are connected", async () => {
+    const notif1 = vi.fn().mockResolvedValue(undefined);
+    const notif2 = vi.fn().mockResolvedValue(undefined);
+    const { mcpServer } = makeMockMcpServer([notif1, notif2]);
+    notifier.setServer(mcpServer);
+
+    notifier.notify(makeTask());
+
+    await vi.waitFor(() => {
+      expect(notif1).toHaveBeenCalledOnce();
+      expect(notif2).toHaveBeenCalledOnce();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // No sessions: drops notification with warning (no crash)
+  // ---------------------------------------------------------------------------
+
+  it("drops notification gracefully when no active sessions", () => {
+    const mcpServer = {
+      getSessionServers: vi.fn(() => [][Symbol.iterator]()),
+    } as unknown as NbctlMcpServer;
+    notifier.setServer(mcpServer);
+
+    expect(() => notifier.notify(makeTask())).not.toThrow();
   });
 });

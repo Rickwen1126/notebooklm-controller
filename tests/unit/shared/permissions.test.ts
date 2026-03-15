@@ -26,7 +26,7 @@ vi.mock("../../../src/shared/config.js", () => ({
 // Mock logger
 vi.mock("../../../src/shared/logger.js", () => {
   const noop = () => {};
-  const childLogger = { info: noop, warn: noop, error: noop, child: () => childLogger };
+  const childLogger = { info: noop, warn: noop, error: noop, debug: noop, child: () => childLogger };
   return { logger: childLogger };
 });
 
