@@ -15,7 +15,7 @@ import { TMP_DIR } from "../shared/config.js";
 const execFileAsync = promisify(execFile);
 
 /** Maximum character count for NotebookLM text source. */
-const MAX_CHAR_COUNT = 500_000;
+const MAX_CHAR_COUNT = 5_000_000;
 
 export interface RepoToTextResult {
   /** Path to the temp file containing converted text. */

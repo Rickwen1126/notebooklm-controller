@@ -173,12 +173,12 @@ describe("urlToText", () => {
     );
   });
 
-  it("throws if content exceeds 500K character limit", async () => {
-    const hugeContent = "x".repeat(500_001);
+  it("throws if content exceeds 5M character limit", async () => {
+    const hugeContent = "x".repeat(5_000_001);
     mockParseResult = { title: null, textContent: hugeContent, content: hugeContent, length: hugeContent.length, excerpt: null, byline: null, dir: null, siteName: null, lang: null, publishedTime: null };
 
     await expect(urlToText("https://example.com/huge")).rejects.toThrow(
-      "exceeds 500,000 character limit",
+      "exceeds 5,000,000 character limit",
     );
   });
 

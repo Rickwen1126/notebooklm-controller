@@ -13,7 +13,7 @@ import { Readability } from "@mozilla/readability";
 import { TMP_DIR } from "../shared/config.js";
 
 /** Maximum character count for NotebookLM text source. */
-const MAX_CHAR_COUNT = 500_000;
+const MAX_CHAR_COUNT = 5_000_000;
 
 /** Timeout for HTTP fetch (30 seconds). */
 const FETCH_TIMEOUT_MS = 30_000;

@@ -97,8 +97,8 @@ describe("repoToText", () => {
     await expect(repoToText("/fake/repo")).rejects.toThrow("repomix failed");
   });
 
-  it("throws if output exceeds 500K character limit", async () => {
-    const hugeOutput = "x".repeat(500_001);
+  it("throws if output exceeds 5M character limit", async () => {
+    const hugeOutput = "x".repeat(5_000_001);
 
     mockExecFile.mockImplementation(
       (_cmd: unknown, _args: unknown, _opts: unknown, callback?: unknown) => {
@@ -110,7 +110,7 @@ describe("repoToText", () => {
     );
 
     await expect(repoToText("/fake/repo")).rejects.toThrow(
-      "exceeds 500,000 character limit",
+      "exceeds 5,000,000 character limit",
     );
   });
 

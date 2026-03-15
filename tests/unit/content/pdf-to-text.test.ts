@@ -153,12 +153,12 @@ describe("pdfToText", () => {
     );
   });
 
-  it("throws if content exceeds 500K character limit", async () => {
-    const hugeText = "x".repeat(500_001);
+  it("throws if content exceeds 5M character limit", async () => {
+    const hugeText = "x".repeat(5_000_001);
     mockGetTextResult = { text: hugeText, total: 1 };
 
     await expect(pdfToText("/docs/huge.pdf")).rejects.toThrow(
-      "exceeds 500,000 character limit",
+      "exceeds 5,000,000 character limit",
     );
   });
 
