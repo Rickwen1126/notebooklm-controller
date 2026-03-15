@@ -52,7 +52,8 @@ parameters:
 ### 參考流程
 1. 準備內容（如需轉換，先呼叫對應 tool 取得 filePath）
 2. find("{{add_source}}") → click 開啟來源選單
-3. find("{{paste_source_type}}") → click 選擇「複製的文字」
+3. wait(2) — 等待選單/對話框載入
+4. find("{{paste_source_type}}") → click 選擇「複製的文字」
 4. find("{{paste_textarea}}") → click 聚焦輸入框
 5. 貼入內容：
    - 有 filePath → `paste(filePath="...")`
