@@ -110,7 +110,7 @@ Core functionality = scripts (`src/scripts/`), session-runner, daemon wiring, co
 Minimum E2E checklist:
 1. `npm test` — all unit/integration tests pass
 2. `/test-real` Phase 2 — S01-S12 all-ops happy path (at least the operations affected by the change)
-3. ISO Browser independent DOM verification — don't trust daemon's text response, verify visually
+3. `/iso-browser` local skill independent DOM verification — don't trust daemon's text response, verify visually
 4. If dialog/overlay logic changed → test on notebook with multiple sources (user content pollution)
 5. If viewport/coordinate logic changed → full S01-S12 rerun
 6. If content pipeline changed → CP01-CP04 (repo/URL/PDF/text)
