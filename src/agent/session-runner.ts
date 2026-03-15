@@ -317,17 +317,23 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
       steps: z.array(z.object({
         operation: z.string().describe("Name of the scripted operation to run"),
         question: z.string().optional().describe("For query: the question to ask"),
-        content: z.string().optional().describe("For addSource: the text content"),
+        content: z.string().optional().describe("For addSource: the text content (for plain text sources)"),
         newName: z.string().optional().describe("For renameSource/renameNotebook: new name"),
+        sourceType: z.string().optional().describe("For addSource: text | repo | url | pdf (default: text)"),
+        sourcePath: z.string().optional().describe("For addSource with repo/pdf: absolute file path"),
+        sourceUrl: z.string().optional().describe("For addSource with url: the URL to fetch and convert"),
       })),
     }),
-    handler: async (args: { reasoning: string; steps: Array<{ operation: string; question?: string; content?: string; newName?: string }> }) => {
+    handler: async (args: { reasoning: string; steps: Array<{ operation: string; question?: string; content?: string; newName?: string; sourceType?: string; sourcePath?: string; sourceUrl?: string }> }) => {
       // Convert expanded fields into params Record<string, string>
       const steps: ExecutionStep[] = args.steps.map((s) => {
         const params: Record<string, string> = {};
         if (s.question) params.question = s.question;
         if (s.content) params.content = s.content;
         if (s.newName) params.newName = s.newName;
+        if (s.sourceType) params.sourceType = s.sourceType;
+        if (s.sourcePath) params.sourcePath = s.sourcePath;
+        if (s.sourceUrl) params.sourceUrl = s.sourceUrl;
         return { operation: s.operation, params };
       });
       capturedPlan = { steps, reasoning: args.reasoning };

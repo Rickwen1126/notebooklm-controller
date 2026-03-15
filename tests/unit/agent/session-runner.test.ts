@@ -168,6 +168,9 @@ function mockPlannerResponse(plan: {
         question: s.params.question,
         content: s.params.content,
         newName: s.params.newName,
+        sourceType: s.params.sourceType,
+        sourcePath: s.params.sourcePath,
+        sourceUrl: s.params.sourceUrl,
       }));
       await submitPlan.handler({ reasoning: plan.reasoning, steps: expandedSteps });
     }
