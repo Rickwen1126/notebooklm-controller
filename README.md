@@ -21,8 +21,12 @@ User NL prompt
 Planner LLM (gpt-4.1) — selects operation + params
     ↓
 Deterministic Script — DOM automation via CDP (0 LLM cost)
-    ↓ (on failure only)
-Recovery LLM (gpt-5-mini) — completes task + suggests UIMap patch
+    ├── success → return result
+    └── failure ↓
+        Recovery LLM (gpt-5-mini) — completes task from current state
+            ├── success → return result + save repair log
+            └── analysis → UIMap patch suggestion (self-healing)
+                           saved to ~/.nbctl/repair-logs/
 ```
 
 **G2 Script-first**: happy path uses zero LLM tokens for execution. Scripts handle all 10 NotebookLM operations (query, addSource, listSources, removeSource, renameSource, clearChat, listNotebooks, createNotebook, renameNotebook, deleteNotebook).
@@ -41,6 +45,15 @@ Recovery LLM (gpt-5-mini) — completes task + suggests UIMap patch
 
 ## Quick Start
 
+### Prerequisites
+
+- Node.js 22 LTS
+- Google Chrome installed
+- GitHub Copilot license (required for `@github/copilot-sdk` — the Planner and Recovery LLM sessions run through Copilot's agent runtime)
+- A Google account with access to [NotebookLM](https://notebooklm.google.com)
+
+### Setup
+
 ```bash
 # Install
 npm install
@@ -48,11 +61,25 @@ npm install
 # First run — opens Chrome for Google login
 npx tsx src/daemon/launcher.ts
 
-# After login, restart headless
+# Complete Google login in the Chrome window, then restart headless
 npx tsx src/daemon/launcher.ts
-
-# Connect from your AI tool via MCP (127.0.0.1:19224)
 ```
+
+### Connect from Claude Code
+
+Add to your project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "notebooklm": {
+      "url": "http://127.0.0.1:19224/mcp"
+    }
+  }
+}
+```
+
+Then use natural language: `"把 ~/code/my-project 加入 NotebookLM 來源"`
 
 ### MCP Tools
 
@@ -68,7 +95,7 @@ npx tsx src/daemon/launcher.ts
 
 ## Design Decisions
 
-1. **Script-first, not Agent-first** — deterministic scripts for happy path (15-20s per query vs 70s with LLM executor). LLM only recovers failures.
+1. **Script-first, not Agent-first** — deterministic scripts for happy path (15-20s per query vs 70s with LLM executor). LLM only recovers failures and produces repair logs for self-healing.
 
 2. **Viewport is a contract** — 1920x1080. All scripts tested at this resolution. Changing it breaks coordinate-based interactions.
 
@@ -79,13 +106,21 @@ npx tsx src/daemon/launcher.ts
 ## Testing
 
 ```bash
-# Unit + integration tests (688 tests)
+# Unit + integration tests (45 files, 688 test cases)
 npm test
+
+# Lint
+npm run lint
 
 # E2E against live daemon (requires Chrome + Google login)
 # Uses ISO Browser for independent DOM verification
 /test-real
 ```
+
+| Layer | Where | When |
+|-------|-------|------|
+| `npm test` + lint | GitHub Actions CI | Every push/PR |
+| `/test-real` (8-phase E2E) | Local | Core changes + before release |
 
 ## Tech Stack
 
