@@ -70,6 +70,20 @@ TypeScript 5.x, Node.js 22 LTS: Follow standard conventions
 - `ToolResultObject.binaryResultsForLlm` 回傳截圖（Tool 自包原則）
 - `session.sendAndWait({ prompt })` 執行操作
 
+## CRITICAL: Script DOM 搜尋安全規則
+
+**Dialog 內的按鈕搜尋必須 scope 到 overlay container，不能搜全頁面。**
+
+用戶的 notebook/source 名稱可能包含 UI 按鈕文字（「儲存」「刪除」「插入」「提交」等），`findElementByText` 搜全頁面會 match 到錯誤元素（false positive — script 報 success 但操作沒生效）。
+
+**規則：**
+- Dialog 按鈕：用 `page.evaluate` 在 `.cdk-overlay-pane, [role=dialog]` 內搜尋
+- 頁面級固定 UI（「新增來源」「開始輸入」等）：可以用 `findElementByText`
+- 有歧義的全頁搜尋：加 `disambiguate` 限制（如 `y > 400`）
+- Angular Material input 設值：用 `HTMLInputElement.prototype.value` native setter + `dispatchEvent('input')`，CDP `Input.insertText` 不觸發 change detection
+
+這些規則也適用於 Repair Agent 的 UIMap patch 建議。
+
 ## CRITICAL: Copilot SDK defineTool 限制
 
 **`defineTool` 的 parameters 不支援 `z.record()`、`z.map()` 等動態 key types。**
