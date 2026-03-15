@@ -792,22 +792,30 @@ export async function scriptedRenameNotebook(
     if (!menu.ok) return fail(menu.stepNum, "open_notebook_menu", "Failed", "notebook_menu");
     stepNum = menu.stepNum + 1;
 
-    // Find "編輯標題"
+    // Find "編輯標題" and click immediately (menu may auto-close on focus loss)
     let stepStart = Date.now();
     const editEl = await helpers.findElementByText(page, uiMap.elements.edit_title?.text ?? "編輯標題");
     if (!editEl) return fail(stepNum, "find_edit_title", `Not found`, "edit_title");
-    log.push(createLogEntry(stepNum, "find_edit_title", "ok", `Found`, stepStart));
+    await helpers.dispatchClick(cdp, editEl.center.x, editEl.center.y);
+    log.push(createLogEntry(stepNum, "click_edit_title", "ok", `Found and clicked`, stepStart));
 
-    // Click -> dialog. Wait for dialog + input.
+    // Wait for dialog with input to appear
     stepNum++;
     stepStart = Date.now();
-    await helpers.dispatchClick(cdp, editEl.center.x, editEl.center.y);
-    const dialogReady = await helpers.waitForVisible(page, 'mat-dialog-container, [role=dialog]', { timeoutMs: 5000 });
-    if (dialogReady.visible) {
-      await helpers.waitForVisible(page, 'mat-dialog-container input, [role=dialog] input', { timeoutMs: 3000 });
+    const dialogReady = await helpers.waitForVisible(page, '.cdk-overlay-pane input, [role=dialog] input, mat-dialog-container input', { timeoutMs: 8000 });
+    if (!dialogReady.visible) {
+      // Retry: re-open menu and click again
+      const retry = await openNotebookMenu(ctx, log, stepNum);
+      if (retry.ok) {
+        const retryEdit = await helpers.findElementByText(page, uiMap.elements.edit_title?.text ?? "編輯標題");
+        if (retryEdit) {
+          await helpers.dispatchClick(cdp, retryEdit.center.x, retryEdit.center.y);
+          await helpers.waitForVisible(page, '.cdk-overlay-pane input, [role=dialog] input', { timeoutMs: 5000 });
+        }
+      }
     }
-    log.push(createLogEntry(stepNum, "click_edit_title", dialogReady.visible ? "ok" : "warn",
-      `Clicked, dialog ${dialogReady.visible ? `ready in ${dialogReady.elapsedMs}ms` : "not detected"}`, stepStart));
+    log.push(createLogEntry(stepNum, "wait_dialog", dialogReady.visible ? "ok" : "warn",
+      dialogReady.visible ? `Dialog ready in ${dialogReady.elapsedMs}ms` : "Dialog not detected, retried", stepStart));
 
     // Find input in dialog + select all + paste new name
     stepNum++;
