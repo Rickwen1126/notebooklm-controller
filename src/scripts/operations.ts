@@ -817,26 +817,29 @@ export async function scriptedRenameNotebook(
     log.push(createLogEntry(stepNum, "wait_dialog", dialogReady.visible ? "ok" : "warn",
       dialogReady.visible ? `Dialog ready in ${dialogReady.elapsedMs}ms` : "Dialog not detected, retried", stepStart));
 
-    // Find input in dialog, focus via JS (not CDP click — headless may not focus),
-    // select all, clear, then paste new name.
+    // Find input in dialog, set value via JS native setter + input event.
+    // CDP Input.insertText does NOT trigger Angular Material change detection.
+    // Must use HTMLInputElement.prototype.value setter + dispatchEvent('input').
     stepNum++;
     stepStart = Date.now();
     await helpers.waitForVisible(page, '[role=dialog] input, mat-dialog-container input, [role=dialog] textarea, .cdk-overlay-pane input', { timeoutMs: 5000 });
-    const inputReady = await page.evaluate(`(() => {
-      const sels = ['[role=dialog] input', 'mat-dialog-container input', '.cdk-overlay-pane input', 'input:not([type])', 'input[type="text"]'];
+    const inputSet = await page.evaluate(`((newName) => {
+      const sels = ['.cdk-overlay-pane input', '[role=dialog] input', 'mat-dialog-container input', 'input:not([type])'];
       for (const sel of sels) {
         const el = document.querySelector(sel);
         if (el && el.getBoundingClientRect().width > 0) {
           el.focus();
-          el.select();
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+          setter.call(el, newName);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
           return true;
         }
       }
       return false;
-    })()`) as boolean;
-    if (!inputReady) return fail(stepNum, "find_dialog_input", `No input in dialog or focus failed`, "dialog_input");
-    await helpers.dispatchPaste(cdp, newName);
-    log.push(createLogEntry(stepNum, "type_new_name", "ok", `Focused + pasted "${newName}"`, stepStart));
+    })(${JSON.stringify(newName)})`) as boolean;
+    if (!inputSet) return fail(stepNum, "find_dialog_input", `No input in dialog or value set failed`, "dialog_input");
+    log.push(createLogEntry(stepNum, "type_new_name", "ok", `Set value "${newName}" via native setter`, stepStart));
 
     // Find and click save — wait for it to be enabled
     stepNum++;
