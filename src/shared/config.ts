@@ -14,8 +14,8 @@ export const PROFILES_DIR = join(NBCTL_HOME, "profiles");
 export const LOGS_DIR = join(NBCTL_HOME, "logs");
 export const TMP_DIR = join(NBCTL_HOME, "tmp");
 
-// Agent configs directories (checked in order, first existing one wins).
-// User-local override > project bundled.
+// Agent configs directories (legacy — kept for backward compatibility).
+// G2 uses scripts instead of agent configs.
 export const AGENTS_DIR_USER = join(NBCTL_HOME, "agents");
 export const AGENTS_DIR_BUNDLED = join(process.cwd(), "agents");
 
@@ -126,5 +126,8 @@ export const CIRCUIT_BREAKER_THRESHOLD = 3 as const;
 // ---------------------------------------------------------------------------
 
 export const PLANNER_MODEL = "gpt-4.1" as const;
-export const EXECUTOR_MODEL = "gpt-5-mini" as const;
-export const DEFAULT_AGENT_MODEL = EXECUTOR_MODEL;
+export const RECOVERY_MODEL = "gpt-5-mini" as const;
+export const DEFAULT_AGENT_MODEL = RECOVERY_MODEL;
+export const RECOVERY_TIMEOUT_MS = 120_000 as const; // 2 min
+export const REPAIR_LOGS_DIR = join(NBCTL_HOME, "repair-logs");
+export const SCREENSHOTS_DIR = join(NBCTL_HOME, "screenshots");

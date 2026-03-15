@@ -232,15 +232,54 @@ export interface DaemonStatusResult {
 
 /** A single step in an execution plan produced by the Planner session. */
 export interface ExecutionStep {
-  agentName: string;
-  executorPrompt: string;
-  tools: string[];
+  operation: string;
+  params: Record<string, string>;
 }
 
 /** Structured execution plan captured from the Planner session via submitPlan tool. */
 export interface ExecutionPlan {
   steps: ExecutionStep[];
   reasoning: string;
+}
+
+/** A single tool call recorded during a Recovery session. */
+export interface RecoveryToolCall {
+  tool: string;
+  input: string;   // truncated
+  output: string;  // truncated
+}
+
+/** Repair log entry persisted at ~/.nbctl/repair-logs/. */
+export interface RepairLog {
+  operation: string;
+  failedAtStep: number | null;
+  failedSelector: string | null;
+  uiMapValue: Record<string, unknown> | null;
+  scriptLog: Array<{
+    step: number;
+    action: string;
+    status: "ok" | "warn" | "fail";
+    detail: string;
+    durationMs: number;
+  }>;
+  recovery: {
+    success: boolean;
+    model: string;
+    toolCalls: number;
+    durationMs: number;
+    result: string | null;
+    analysis: string | null;
+    toolCallLog: RecoveryToolCall[];
+    agentMessages: string[];
+    finalScreenshotPath: string | null;
+  };
+  suggestedPatch: {
+    elementKey: string;
+    oldValue: string;
+    newValue: string;
+    confidence: number;
+  } | null;
+  timestamp: string;
 }
 
 /** A single UI element entry in the locale-specific UI map. */

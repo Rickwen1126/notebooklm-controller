@@ -3,11 +3,15 @@
  */
 
 import { readFileSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { UIMap } from "./types.js";
 
 /** Directory containing built-in UI map JSON files. */
 const UI_MAPS_DIR = join(import.meta.dirname, "..", "config", "ui-maps");
+
+/** User-override directory (repair agent can edit). */
+const USER_UI_MAPS_DIR = join(homedir(), ".nbctl", "ui-maps");
 
 /**
  * Resolve a browser `navigator.language` string to a supported locale key.
@@ -23,12 +27,24 @@ export function resolveLocale(browserLang: string): string {
 /**
  * Load a UIMap JSON file for the given locale.
  *
- * Falls back to "en" if the requested locale file does not exist.
+ * Resolution order:
+ * 1. User override: ~/.nbctl/ui-maps/{locale}.json (repair agent can edit)
+ * 2. Bundled: UI_MAPS_DIR/{locale}.json
+ * 3. Fallback: UI_MAPS_DIR/en.json
  */
 export function loadUIMap(locale: string): UIMap {
-  const filepath = join(UI_MAPS_DIR, `${locale}.json`);
-  if (!existsSync(filepath)) {
-    return JSON.parse(readFileSync(join(UI_MAPS_DIR, "en.json"), "utf-8")) as UIMap;
+  // 1. User override (repair agent can edit)
+  const userPath = join(USER_UI_MAPS_DIR, `${locale}.json`);
+  if (existsSync(userPath)) {
+    return JSON.parse(readFileSync(userPath, "utf-8")) as UIMap;
   }
-  return JSON.parse(readFileSync(filepath, "utf-8")) as UIMap;
+
+  // 2. Bundled locale
+  const bundledPath = join(UI_MAPS_DIR, `${locale}.json`);
+  if (existsSync(bundledPath)) {
+    return JSON.parse(readFileSync(bundledPath, "utf-8")) as UIMap;
+  }
+
+  // 3. Fallback to English
+  return JSON.parse(readFileSync(join(UI_MAPS_DIR, "en.json"), "utf-8")) as UIMap;
 }

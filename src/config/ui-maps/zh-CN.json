@@ -26,7 +26,10 @@
     "download_audio": { "text": "下载" },
     "play_audio": { "text": "播放", "match": "aria-label" },
     "notebook_settings": { "text": "设置笔记本", "match": "aria-label" },
-    "conversation_options": { "text": "对话选项", "match": "aria-label" }
+    "conversation_options": { "text": "对话选项", "match": "aria-label" },
+    "more_vert": { "text": "more_vert" },
+    "source_tab": { "text": "来源" },
+    "chat_tab": { "text": "对话" }
   },
   "selectors": {
     "answer": ".to-user-container .message-content",

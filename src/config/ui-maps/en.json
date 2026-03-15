@@ -26,7 +26,10 @@
     "download_audio": { "text": "Download" },
     "play_audio": { "text": "Play", "match": "aria-label" },
     "notebook_settings": { "text": "Set up notebook", "match": "aria-label" },
-    "conversation_options": { "text": "Chat options", "match": "aria-label" }
+    "conversation_options": { "text": "Chat options", "match": "aria-label" },
+    "more_vert": { "text": "more_vert" },
+    "source_tab": { "text": "Sources" },
+    "chat_tab": { "text": "Chat" }
   },
   "selectors": {
     "answer": ".to-user-container .message-content",
