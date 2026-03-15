@@ -126,6 +126,10 @@ npm run lint
 
 TypeScript 5.x, Node.js 22 LTS, @github/copilot-sdk, puppeteer-core (CDP), @modelcontextprotocol/sdk, repomix, zod, Vitest
 
+## Roadmap
+
+- **Self-repair CLI** (`nbctl repair`) — Recovery Agent 失敗時產生 repair log（問題分析 + suggestedPatch）。CLI 工具讀取 log，自動修補 script 並替換 happy path。可行因為 script 用 ctx injection 零依賴設計，可直接熱替換。刻意不做成 MCP tool — 修改 happy path script 必須 human-in-the-loop。
+
 ## License
 
 MIT
