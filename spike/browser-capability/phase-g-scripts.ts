@@ -1,8 +1,20 @@
 /**
- * Phase G — Deterministic scripts: scriptedQuery, scriptedAddSource
+ * Phase G — Deterministic scripts for all 13 NotebookLM operations
  *
  * Pure code scripts with structured logging. No LLM calls.
  * Three-phase polling for answer stability (borrowed from notebooklm-skill/mcp).
+ *
+ * Operations:
+ *   scriptedQuery         — submit question, poll answer
+ *   scriptedAddSource     — add text source via paste
+ *   scriptedListSources   — read source panel
+ *   scriptedRemoveSource  — source menu → remove → confirm
+ *   scriptedRenameSource  — source menu → rename → dialog → save
+ *   scriptedClearChat     — conversation menu → delete history
+ *   scriptedCreateNotebook — homepage → create → wait for redirect
+ *   scriptedRenameNotebook — homepage → notebook menu → edit title → save
+ *   scriptedDeleteNotebook — homepage → notebook menu → delete → confirm
+ *   scriptedListNotebooks  — homepage → read notebook table
  */
 
 import type { CDPSession, Page } from "puppeteer-core";
@@ -14,7 +26,11 @@ import {
   findElementByText,
   dispatchClick,
   dispatchPaste,
-  captureScreenshot,
+  dispatchType,
+  waitForGone,
+  waitForVisible,
+  waitForNavigation,
+  waitForCountChange,
 } from "./phase-g-shared.js";
 
 // =============================================================================
@@ -423,5 +439,612 @@ export async function scriptedAddSource(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return fail(`step_${stepNum}_exception`, msg);
+  }
+}
+
+// =============================================================================
+// Helper: standard fail + success builders
+// =============================================================================
+
+function makeFail(
+  operation: string,
+  log: ScriptLogEntry[],
+  t0: number,
+) {
+  return (stepNum: number, action: string, detail: string, selector?: string): ScriptResult => {
+    log.push(createLogEntry(stepNum, action, "fail", detail, t0));
+    return {
+      operation, status: "fail", result: null, log,
+      totalMs: Date.now() - t0,
+      failedAtStep: stepNum, failedSelector: selector ?? null,
+    };
+  };
+}
+
+function makeSuccess(
+  operation: string,
+  log: ScriptLogEntry[],
+  t0: number,
+  result: string | null,
+): ScriptResult {
+  return {
+    operation, status: "success", result, log,
+    totalMs: Date.now() - t0,
+    failedAtStep: null, failedSelector: null,
+  };
+}
+
+// =============================================================================
+// Helper: ensure source panel is visible (shared by source operations)
+// =============================================================================
+
+async function ensureSourcePanel(
+  cdp: CDPSession,
+  page: Page,
+  uiMap: UIMap,
+  log: ScriptLogEntry[],
+  t0: number,
+): Promise<boolean> {
+  const stepStart = Date.now();
+  const panelVisible = await page.evaluate(`(() => {
+    const panel = document.querySelector('.source-panel');
+    if (!panel) return false;
+    const rect = panel.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  })()`) as boolean;
+
+  if (!panelVisible) {
+    const tabEl = await findElementByText(page, "來源");
+    if (tabEl) {
+      await dispatchClick(cdp, tabEl.center.x, tabEl.center.y);
+      await new Promise((r) => setTimeout(r, 800));
+      log.push(createLogEntry(0, "ensure_source_panel", "warn", `Clicked "來源" tab`, stepStart));
+    } else {
+      log.push(createLogEntry(0, "ensure_source_panel", "warn", `Source panel not visible, no tab found`, stepStart));
+      return false;
+    }
+  } else {
+    log.push(createLogEntry(0, "ensure_source_panel", "ok", `Source panel visible`, stepStart));
+  }
+  return true;
+}
+
+// =============================================================================
+// Helper: open source context menu (for remove/rename)
+// =============================================================================
+
+async function openSourceMenu(
+  cdp: CDPSession,
+  page: Page,
+  log: ScriptLogEntry[],
+  startStep: number,
+): Promise<{ ok: boolean; stepNum: number }> {
+  let stepNum = startStep;
+
+  // Find "more_vert" in source panel area (x < 400)
+  const stepStart = Date.now();
+  const menuIcons = await page.evaluate(`(() => {
+    const els = document.querySelectorAll('button, [role=button]');
+    const results = [];
+    for (const el of els) {
+      const text = (el.textContent || '').trim();
+      if (!text.includes('more_vert')) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      const s = getComputedStyle(el);
+      if (s.display === 'none' || s.visibility === 'hidden') continue;
+      results.push({ x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) });
+    }
+    return results;
+  })()`) as Array<{ x: number; y: number }>;
+
+  const sourceMenus = menuIcons.filter((m) => m.x < 400);
+  if (sourceMenus.length === 0) {
+    log.push(createLogEntry(stepNum, "find_source_menu", "fail", `No more_vert icons in source panel area`, Date.now()));
+    return { ok: false, stepNum };
+  }
+  log.push(createLogEntry(stepNum, "find_source_menu", "ok", `Found ${sourceMenus.length} menu icon(s)`, stepStart));
+
+  stepNum++;
+  await dispatchClick(cdp, sourceMenus[0].x, sourceMenus[0].y);
+  await new Promise((r) => setTimeout(r, 500));
+  log.push(createLogEntry(stepNum, "click_source_menu", "ok", `Clicked menu at (${sourceMenus[0].x}, ${sourceMenus[0].y})`, Date.now()));
+
+  return { ok: true, stepNum };
+}
+
+// =============================================================================
+// Helper: open notebook context menu on homepage
+// =============================================================================
+
+async function openNotebookMenu(
+  cdp: CDPSession,
+  page: Page,
+  log: ScriptLogEntry[],
+  startStep: number,
+): Promise<{ ok: boolean; stepNum: number }> {
+  const stepNum = startStep;
+  const stepStart = Date.now();
+
+  const menuIcons = await page.evaluate(`(() => {
+    const els = document.querySelectorAll('button, [role=button]');
+    const results = [];
+    for (const el of els) {
+      const text = (el.textContent || '').trim();
+      const aria = el.getAttribute('aria-label') || '';
+      if (!text.includes('more_vert') && !aria.includes('專案動作選單')) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      const s = getComputedStyle(el);
+      if (s.display === 'none' || s.visibility === 'hidden') continue;
+      results.push({ x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) });
+    }
+    return results;
+  })()`) as Array<{ x: number; y: number }>;
+
+  if (menuIcons.length === 0) {
+    log.push(createLogEntry(stepNum, "find_notebook_menu", "fail", `No menu icons found`, Date.now()));
+    return { ok: false, stepNum };
+  }
+
+  await dispatchClick(cdp, menuIcons[0].x, menuIcons[0].y);
+  await new Promise((r) => setTimeout(r, 500));
+  log.push(createLogEntry(stepNum, "click_notebook_menu", "ok", `Clicked menu at (${menuIcons[0].x}, ${menuIcons[0].y})`, stepStart));
+
+  return { ok: true, stepNum };
+}
+
+// =============================================================================
+// scriptedListSources
+// =============================================================================
+
+export async function scriptedListSources(
+  cdp: CDPSession,
+  page: Page,
+  uiMap: UIMap,
+): Promise<ScriptResult> {
+  const log: ScriptLogEntry[] = [];
+  const t0 = Date.now();
+  const fail = makeFail("listSources", log, t0);
+
+  try {
+    await ensureSourcePanel(cdp, page, uiMap, log, t0);
+
+    const stepStart = Date.now();
+    const result = await page.evaluate(`(() => {
+      const panel = document.querySelector('.source-panel');
+      if (!panel) return { count: 0, sources: [] };
+      const items = panel.querySelectorAll('[class*="source-item"], [class*="source-card"], li, [role="listitem"]');
+      const sources = [];
+      for (const item of items) {
+        const text = (item.textContent || '').trim();
+        if (text) sources.push(text.slice(0, 100));
+      }
+      return { count: sources.length, sources };
+    })()`) as { count: number; sources: string[] };
+
+    log.push(createLogEntry(1, "read_sources", "ok",
+      `Found ${result.count} source(s)`, stepStart));
+
+    return makeSuccess("listSources", log, t0, JSON.stringify(result));
+  } catch (err) {
+    return fail(1, "exception", err instanceof Error ? err.message : String(err));
+  }
+}
+
+// =============================================================================
+// scriptedRemoveSource
+// =============================================================================
+
+export async function scriptedRemoveSource(
+  cdp: CDPSession,
+  page: Page,
+  uiMap: UIMap,
+): Promise<ScriptResult> {
+  const log: ScriptLogEntry[] = [];
+  const t0 = Date.now();
+  let stepNum = 0;
+  const fail = makeFail("removeSource", log, t0);
+
+  try {
+    await ensureSourcePanel(cdp, page, uiMap, log, t0);
+
+    // Steps 1-2: open source menu
+    stepNum = 1;
+    const menu = await openSourceMenu(cdp, page, log, stepNum);
+    if (!menu.ok) return fail(menu.stepNum, "open_source_menu", "Failed to open source menu", "source_menu");
+    stepNum = menu.stepNum + 1;
+
+    // Find "移除來源"
+    let stepStart = Date.now();
+    const removeEl = await findElementByText(page, uiMap.elements.remove_source?.text ?? "移除來源");
+    if (!removeEl) return fail(stepNum, "find_remove_source", `Menu item not found`, "remove_source");
+    log.push(createLogEntry(stepNum, "find_remove_source", "ok", `Found at (${removeEl.center.x}, ${removeEl.center.y})`, stepStart));
+
+    // Click remove
+    stepNum++;
+    stepStart = Date.now();
+    await dispatchClick(cdp, removeEl.center.x, removeEl.center.y);
+    await new Promise((r) => setTimeout(r, 500));
+    log.push(createLogEntry(stepNum, "click_remove_source", "ok", `Clicked`, stepStart));
+
+    // Handle confirmation dialog if present
+    stepNum++;
+    stepStart = Date.now();
+    const confirmEl = await findElementByText(page, uiMap.elements.remove_source?.text ?? "移除來源");
+    if (confirmEl) {
+      await dispatchClick(cdp, confirmEl.center.x, confirmEl.center.y);
+      log.push(createLogEntry(stepNum, "confirm_remove", "ok", `Confirmed removal`, stepStart));
+    } else {
+      log.push(createLogEntry(stepNum, "confirm_remove", "ok", `No confirmation dialog (direct remove)`, stepStart));
+    }
+
+    // Wait for removal
+    stepNum++;
+    stepStart = Date.now();
+    await new Promise((r) => setTimeout(r, 2000));
+    log.push(createLogEntry(stepNum, "wait_removal", "ok", `Waited 2s`, stepStart));
+
+    return makeSuccess("removeSource", log, t0, `Source removed`);
+  } catch (err) {
+    return fail(stepNum, "exception", err instanceof Error ? err.message : String(err));
+  }
+}
+
+// =============================================================================
+// scriptedRenameSource
+// =============================================================================
+
+export async function scriptedRenameSource(
+  cdp: CDPSession,
+  page: Page,
+  uiMap: UIMap,
+  newName: string,
+): Promise<ScriptResult> {
+  const log: ScriptLogEntry[] = [];
+  const t0 = Date.now();
+  let stepNum = 0;
+  const fail = makeFail("renameSource", log, t0);
+
+  try {
+    await ensureSourcePanel(cdp, page, uiMap, log, t0);
+
+    // Steps 1-2: open source menu
+    stepNum = 1;
+    const menu = await openSourceMenu(cdp, page, log, stepNum);
+    if (!menu.ok) return fail(menu.stepNum, "open_source_menu", "Failed to open source menu", "source_menu");
+    stepNum = menu.stepNum + 1;
+
+    // Find "重新命名來源"
+    let stepStart = Date.now();
+    const renameEl = await findElementByText(page, uiMap.elements.rename_source?.text ?? "重新命名來源");
+    if (!renameEl) return fail(stepNum, "find_rename_source", `Menu item not found`, "rename_source");
+    log.push(createLogEntry(stepNum, "find_rename_source", "ok", `Found`, stepStart));
+
+    // Click rename → opens dialog
+    stepNum++;
+    stepStart = Date.now();
+    await dispatchClick(cdp, renameEl.center.x, renameEl.center.y);
+    await new Promise((r) => setTimeout(r, 500));
+    log.push(createLogEntry(stepNum, "click_rename", "ok", `Clicked, waiting for dialog`, stepStart));
+
+    // Find input in dialog (fallback to any visible text input)
+    stepNum++;
+    stepStart = Date.now();
+    const inputPos = await page.evaluate(`(() => {
+      const inputs = document.querySelectorAll('input[type="text"], input:not([type]), textarea');
+      for (const el of inputs) {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        const s = getComputedStyle(el);
+        if (s.display === 'none' || s.visibility === 'hidden') continue;
+        return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
+      }
+      return null;
+    })()`) as { x: number; y: number } | null;
+    if (!inputPos) return fail(stepNum, "find_dialog_input", `No input found in dialog`, "dialog_input");
+    await dispatchClick(cdp, inputPos.x, inputPos.y);
+    log.push(createLogEntry(stepNum, "find_dialog_input", "ok", `Found input at (${inputPos.x}, ${inputPos.y})`, stepStart));
+
+    // Select all + paste new name
+    stepNum++;
+    stepStart = Date.now();
+    await dispatchType(cdp, page, "Ctrl+A");
+    await new Promise((r) => setTimeout(r, 100));
+    await dispatchPaste(cdp, newName);
+    log.push(createLogEntry(stepNum, "type_new_name", "ok", `Typed "${newName}"`, stepStart));
+
+    // Find and click save
+    stepNum++;
+    stepStart = Date.now();
+    const saveEl = await findElementByText(page, uiMap.elements.save_button?.text ?? "儲存");
+    if (!saveEl) return fail(stepNum, "find_save_button", `Save button not found`, "save_button");
+    await dispatchClick(cdp, saveEl.center.x, saveEl.center.y);
+    await new Promise((r) => setTimeout(r, 1000));
+    log.push(createLogEntry(stepNum, "click_save", "ok", `Saved`, stepStart));
+
+    return makeSuccess("renameSource", log, t0, `Source renamed to "${newName}"`);
+  } catch (err) {
+    return fail(stepNum, "exception", err instanceof Error ? err.message : String(err));
+  }
+}
+
+// =============================================================================
+// scriptedClearChat
+// =============================================================================
+
+export async function scriptedClearChat(
+  cdp: CDPSession,
+  page: Page,
+  uiMap: UIMap,
+): Promise<ScriptResult> {
+  const log: ScriptLogEntry[] = [];
+  const t0 = Date.now();
+  let stepNum = 1;
+  const fail = makeFail("clearChat", log, t0);
+
+  try {
+    // Step 1: find conversation options menu
+    let stepStart = Date.now();
+    const optionsEl = await findElementByText(page, uiMap.elements.conversation_options?.text ?? "對話選項", { match: "aria-label" });
+    if (!optionsEl) return fail(1, "find_conversation_options", `Not found`, "conversation_options");
+    log.push(createLogEntry(1, "find_conversation_options", "ok", `Found at (${optionsEl.center.x}, ${optionsEl.center.y})`, stepStart));
+
+    // Step 2: click to open menu
+    stepNum = 2;
+    stepStart = Date.now();
+    await dispatchClick(cdp, optionsEl.center.x, optionsEl.center.y);
+    await new Promise((r) => setTimeout(r, 500));
+    log.push(createLogEntry(2, "click_conversation_options", "ok", `Clicked`, stepStart));
+
+    // Step 3: find "刪除對話記錄"
+    stepNum = 3;
+    stepStart = Date.now();
+    const deleteEl = await findElementByText(page, uiMap.elements.delete_chat?.text ?? "刪除對話記錄");
+    if (!deleteEl) return fail(3, "find_delete_chat", `Menu item not found`, "delete_chat");
+    log.push(createLogEntry(3, "find_delete_chat", "ok", `Found`, stepStart));
+
+    // Step 4: click delete
+    stepNum = 4;
+    stepStart = Date.now();
+    await dispatchClick(cdp, deleteEl.center.x, deleteEl.center.y);
+    await new Promise((r) => setTimeout(r, 500));
+    log.push(createLogEntry(4, "click_delete_chat", "ok", `Clicked`, stepStart));
+
+    // Step 5: handle confirmation if present
+    stepNum = 5;
+    stepStart = Date.now();
+    const confirmEl = await findElementByText(page, "刪除");
+    if (confirmEl && confirmEl.center.y > 300) {
+      await dispatchClick(cdp, confirmEl.center.x, confirmEl.center.y);
+      log.push(createLogEntry(5, "confirm_delete", "ok", `Confirmed`, stepStart));
+    } else {
+      log.push(createLogEntry(5, "confirm_delete", "ok", `No confirmation needed`, stepStart));
+    }
+
+    // Step 6: wait for chat to clear
+    stepNum = 6;
+    stepStart = Date.now();
+    const result = await waitForGone(page, ".message-content", { timeoutMs: 5000 });
+    log.push(createLogEntry(6, "wait_chat_clear", result.gone ? "ok" : "warn",
+      result.gone ? `Chat cleared in ${result.elapsedMs}ms` : `Timeout waiting for clear`, stepStart));
+
+    return makeSuccess("clearChat", log, t0, "Chat cleared");
+  } catch (err) {
+    return fail(stepNum, "exception", err instanceof Error ? err.message : String(err));
+  }
+}
+
+// =============================================================================
+// scriptedListNotebooks (homepage)
+// =============================================================================
+
+export async function scriptedListNotebooks(
+  cdp: CDPSession,
+  page: Page,
+  uiMap: UIMap,
+): Promise<ScriptResult> {
+  const log: ScriptLogEntry[] = [];
+  const t0 = Date.now();
+  const fail = makeFail("listNotebooks", log, t0);
+
+  try {
+    const stepStart = Date.now();
+    const result = await page.evaluate(`(() => {
+      const rows = document.querySelectorAll('tr[tabindex]');
+      const notebooks = [];
+      for (const row of rows) {
+        const text = (row.textContent || '').trim();
+        if (text) notebooks.push(text.slice(0, 150));
+      }
+      return { count: notebooks.length, notebooks };
+    })()`) as { count: number; notebooks: string[] };
+
+    log.push(createLogEntry(1, "read_notebooks", "ok",
+      `Found ${result.count} notebook(s)`, stepStart));
+
+    return makeSuccess("listNotebooks", log, t0, JSON.stringify(result));
+  } catch (err) {
+    return fail(1, "exception", err instanceof Error ? err.message : String(err));
+  }
+}
+
+// =============================================================================
+// scriptedCreateNotebook (homepage)
+// =============================================================================
+
+export async function scriptedCreateNotebook(
+  cdp: CDPSession,
+  page: Page,
+  uiMap: UIMap,
+): Promise<ScriptResult> {
+  const log: ScriptLogEntry[] = [];
+  const t0 = Date.now();
+  let stepNum = 1;
+  const fail = makeFail("createNotebook", log, t0);
+
+  try {
+    const initialUrl = page.url();
+
+    // Step 1: find "新建" button
+    let stepStart = Date.now();
+    const createEl = await findElementByText(page, uiMap.elements.create_notebook?.text ?? "新建");
+    if (!createEl) return fail(1, "find_create_button", `Not found`, "create_notebook");
+    log.push(createLogEntry(1, "find_create_button", "ok", `Found at (${createEl.center.x}, ${createEl.center.y})`, stepStart));
+
+    // Step 2: click create
+    stepNum = 2;
+    stepStart = Date.now();
+    await dispatchClick(cdp, createEl.center.x, createEl.center.y);
+    log.push(createLogEntry(2, "click_create", "ok", `Clicked`, stepStart));
+
+    // Step 3: wait for navigation to new notebook
+    stepNum = 3;
+    stepStart = Date.now();
+    const nav = await waitForNavigation(page, { notUrl: initialUrl, timeoutMs: 15_000 });
+    if (!nav.navigated) return fail(3, "wait_navigation", `URL did not change`, "navigation");
+    log.push(createLogEntry(3, "wait_navigation", "ok", `Navigated to ${nav.url} in ${nav.elapsedMs}ms`, stepStart));
+
+    // Step 4: wait for page to load (h1 appears)
+    stepNum = 4;
+    stepStart = Date.now();
+    const h1 = await waitForVisible(page, "h1", { timeoutMs: 10_000 });
+    log.push(createLogEntry(4, "wait_page_load", h1.visible ? "ok" : "warn",
+      h1.visible ? `Page loaded in ${h1.elapsedMs}ms` : `h1 not visible yet`, stepStart));
+
+    const title = await page.evaluate(`(() => {
+      const h1 = document.querySelector('h1');
+      return h1 ? h1.textContent.trim() : null;
+    })()`) as string | null;
+
+    return makeSuccess("createNotebook", log, t0, JSON.stringify({ url: nav.url, title }));
+  } catch (err) {
+    return fail(stepNum, "exception", err instanceof Error ? err.message : String(err));
+  }
+}
+
+// =============================================================================
+// scriptedRenameNotebook (homepage)
+// =============================================================================
+
+export async function scriptedRenameNotebook(
+  cdp: CDPSession,
+  page: Page,
+  uiMap: UIMap,
+  newName: string,
+): Promise<ScriptResult> {
+  const log: ScriptLogEntry[] = [];
+  const t0 = Date.now();
+  let stepNum = 1;
+  const fail = makeFail("renameNotebook", log, t0);
+
+  try {
+    // Step 1: open notebook context menu
+    const menu = await openNotebookMenu(cdp, page, log, 1);
+    if (!menu.ok) return fail(menu.stepNum, "open_notebook_menu", "Failed", "notebook_menu");
+    stepNum = menu.stepNum + 1;
+
+    // Find "編輯標題"
+    let stepStart = Date.now();
+    const editEl = await findElementByText(page, uiMap.elements.edit_title?.text ?? "編輯標題");
+    if (!editEl) return fail(stepNum, "find_edit_title", `Not found`, "edit_title");
+    log.push(createLogEntry(stepNum, "find_edit_title", "ok", `Found`, stepStart));
+
+    // Click → dialog
+    stepNum++;
+    stepStart = Date.now();
+    await dispatchClick(cdp, editEl.center.x, editEl.center.y);
+    await new Promise((r) => setTimeout(r, 500));
+    log.push(createLogEntry(stepNum, "click_edit_title", "ok", `Clicked, waiting for dialog`, stepStart));
+
+    // Find input in dialog + select all + paste new name
+    stepNum++;
+    stepStart = Date.now();
+    const inputPos = await page.evaluate(`(() => {
+      const inputs = document.querySelectorAll('input[type="text"], input:not([type])');
+      for (const el of inputs) {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        const s = getComputedStyle(el);
+        if (s.display === 'none' || s.visibility === 'hidden') continue;
+        return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
+      }
+      return null;
+    })()`) as { x: number; y: number } | null;
+    if (!inputPos) return fail(stepNum, "find_dialog_input", `No input in dialog`, "dialog_input");
+    await dispatchClick(cdp, inputPos.x, inputPos.y);
+    await dispatchType(cdp, page, "Ctrl+A");
+    await new Promise((r) => setTimeout(r, 100));
+    await dispatchPaste(cdp, newName);
+    log.push(createLogEntry(stepNum, "type_new_name", "ok", `Typed "${newName}"`, stepStart));
+
+    // Find and click save
+    stepNum++;
+    stepStart = Date.now();
+    const saveEl = await findElementByText(page, uiMap.elements.save_button?.text ?? "儲存");
+    if (!saveEl) return fail(stepNum, "find_save", `Save button not found`, "save_button");
+    await dispatchClick(cdp, saveEl.center.x, saveEl.center.y);
+    await new Promise((r) => setTimeout(r, 1000));
+    log.push(createLogEntry(stepNum, "click_save", "ok", `Saved`, stepStart));
+
+    return makeSuccess("renameNotebook", log, t0, `Notebook renamed to "${newName}"`);
+  } catch (err) {
+    return fail(stepNum, "exception", err instanceof Error ? err.message : String(err));
+  }
+}
+
+// =============================================================================
+// scriptedDeleteNotebook (homepage)
+// =============================================================================
+
+export async function scriptedDeleteNotebook(
+  cdp: CDPSession,
+  page: Page,
+  uiMap: UIMap,
+): Promise<ScriptResult> {
+  const log: ScriptLogEntry[] = [];
+  const t0 = Date.now();
+  let stepNum = 1;
+  const fail = makeFail("deleteNotebook", log, t0);
+
+  try {
+    // Step 1: open notebook context menu
+    const menu = await openNotebookMenu(cdp, page, log, 1);
+    if (!menu.ok) return fail(menu.stepNum, "open_notebook_menu", "Failed", "notebook_menu");
+    stepNum = menu.stepNum + 1;
+
+    // Find "刪除"
+    let stepStart = Date.now();
+    const deleteEl = await findElementByText(page, uiMap.elements.delete_notebook?.text ?? "刪除");
+    if (!deleteEl) return fail(stepNum, "find_delete", `Not found`, "delete_notebook");
+    log.push(createLogEntry(stepNum, "find_delete", "ok", `Found`, stepStart));
+
+    // Click delete → confirmation dialog
+    stepNum++;
+    stepStart = Date.now();
+    await dispatchClick(cdp, deleteEl.center.x, deleteEl.center.y);
+    await new Promise((r) => setTimeout(r, 500));
+    log.push(createLogEntry(stepNum, "click_delete", "ok", `Clicked, waiting for confirmation`, stepStart));
+
+    // Find and click confirmation "刪除" button (Finding #44: explicit)
+    stepNum++;
+    stepStart = Date.now();
+    const confirmEl = await findElementByText(page, "刪除");
+    if (confirmEl) {
+      await dispatchClick(cdp, confirmEl.center.x, confirmEl.center.y);
+      log.push(createLogEntry(stepNum, "confirm_delete", "ok", `Confirmed deletion`, stepStart));
+    } else {
+      log.push(createLogEntry(stepNum, "confirm_delete", "warn", `No confirmation dialog found`, stepStart));
+    }
+
+    // Wait for page update
+    stepNum++;
+    stepStart = Date.now();
+    await new Promise((r) => setTimeout(r, 2000));
+    log.push(createLogEntry(stepNum, "wait_deletion", "ok", `Waited 2s`, stepStart));
+
+    return makeSuccess("deleteNotebook", log, t0, "Notebook deleted");
+  } catch (err) {
+    return fail(stepNum, "exception", err instanceof Error ? err.message : String(err));
   }
 }

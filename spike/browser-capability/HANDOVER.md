@@ -1119,3 +1119,102 @@ Phase G2 spike 驗證項目：
 3. **G2-03**: Corrupt selector → recovery 接手完成 + 產出 error log
 4. **G2-04**: Corrupt selector → 驗證 error log 格式 + suggestedPatch 正確性
 5. **G2-05**: 速度對比 — Phase G（always supervisor）vs Phase G2（skip on success）
+
+---
+
+## 發布架構決策（Finding #58）
+
+### 核心約束
+
+Script 和 UI map 必須是 **runtime 可讀可改的檔案**，不能 compiled 進 binary。原因：
+- Repair agent 需要修改 script/UI map 來修復 selector 變更
+- 使用者不一定有 git 可以還原
+- 舊版本必須保留當作參考點
+
+### 檔案結構
+
+```
+Package (npm install):
+  dist/                  # compiled JS — daemon, tab-manager, agent 等核心
+  default-scripts/       # readable script templates（首次安裝複製到 ~/.nbctl/）
+  default-ui-maps/       # default UI map JSON（首次安裝複製到 ~/.nbctl/）
+
+Runtime (~/.nbctl/):
+  config.json            # 使用者設定
+  ui-maps/
+    zh-TW.json           # UI map（可被 repair 修改）
+    zh-TW.json.bak       # repair 前自動備份 ← 參考點
+    zh-TW.json.bak.2     # 第二次備份
+  scripts/
+    query.js             # scripted flow（可被 repair 修改）
+    query.js.bak         # 備份
+    add-source.js
+    ...
+  repair-logs/           # error logs for offline repair
+```
+
+### 運作機制
+
+1. **安裝時**：`postinstall` 腳本從 `default-scripts/` + `default-ui-maps/` 複製到 `~/.nbctl/`（不覆蓋已存在的）
+2. **Runtime**：讀 `~/.nbctl/scripts/` 和 `~/.nbctl/ui-maps/`，不讀 package 內的
+3. **Repair**：修改前自動 `.bak` 備份，修改 `~/.nbctl/` 內的檔案
+4. **Reset**：`nbctl repair --reset` 從 package `default-*` 重新複製，覆蓋 `~/.nbctl/`
+
+### 動態載入
+
+```typescript
+function loadScript(operation: string): ScriptFunction {
+  const userScript = join(NBCTL_DIR, "scripts", `${operation}.js`);
+  const defaultScript = join(__dirname, "default-scripts", `${operation}.js`);
+  if (existsSync(userScript)) return require(userScript);
+  return require(defaultScript);
+}
+```
+
+### npm package.json
+
+```jsonc
+{
+  "files": [
+    "dist/",              // compiled core
+    "default-scripts/",   // readable script templates
+    "default-ui-maps/"    // default UI maps
+  ]
+}
+```
+
+**核心原則**：compiled core + editable scripts/config。Script 和 UI map 不是 binary 的一部分。
+
+---
+
+## Wait Primitives（Finding #59）
+
+Production 需要一組 wait 原語，不是只有 `pollForAnswer`：
+
+| Primitive | 用途 | 實作 |
+|-----------|------|------|
+| `pollForAnswer(selector)` | query 等答案穩定 | .thinking-message + hash × 3 |
+| `waitForGone(selector)` | dialog 關閉、來源消失、chat 清空 | poll querySelector → null |
+| `waitForVisible(selector)` | dialog 出現、面板可見、h1 載入 | poll getBoundingClientRect > 0 |
+| `waitForEnabled(text)` | 插入按鈕 disabled → enabled | poll findElementByText + !disabled |
+| `waitForNavigation(pattern)` | create notebook URL 跳轉 | poll page.url() |
+| `waitForCountChange(selector, baseline)` | 來源數量 +1/-1 | poll querySelectorAll.length |
+
+全部 Node-side polling + sync `page.evaluate`，0 LLM，不被 Chrome 背景 tab 節流。
+
+## 全操作 Script 清單
+
+| Script | 操作 | 核心 wait | 狀態 |
+|--------|------|-----------|------|
+| scriptedQuery | 提問 + 取答案 | pollForAnswer | ✅ 已寫 + 測試 |
+| scriptedAddSource | 加文字來源 | wait(3) + verify | ✅ 已寫 + 測試 |
+| scriptedListSources | 讀來源列表 | 無（純 read） | ✅ 已寫 |
+| scriptedRemoveSource | 移除來源 | wait(2) | ✅ 已寫 |
+| scriptedRenameSource | 重命名來源 | dialog wait | ✅ 已寫 |
+| scriptedClearChat | 清除對話 | waitForGone | ✅ 已寫 |
+| scriptedListNotebooks | 讀筆記本列表 | 無（純 read） | ✅ 已寫 |
+| scriptedCreateNotebook | 建立筆記本 | waitForNavigation | ✅ 已寫 |
+| scriptedRenameNotebook | 重命名筆記本 | dialog wait | ✅ 已寫 |
+| scriptedDeleteNotebook | 刪除筆記本 | dialog confirm + wait | ✅ 已寫 |
+| scriptedGenerateAudio | 生成語音摘要 | waitForGone("sync") | ❌ 待寫（5+ 分鐘，特殊） |
+| scriptedDownloadAudio | 下載音訊 | CDP download behavior | ❌ 待寫（需 TabManager 層） |

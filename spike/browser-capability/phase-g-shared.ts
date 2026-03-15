@@ -32,7 +32,7 @@ export interface ScriptLogEntry {
 }
 
 export interface ScriptResult {
-  operation: "query" | "addSource";
+  operation: string;
   status: "success" | "partial" | "fail";
   result: string | null;
   log: ScriptLogEntry[];
@@ -279,6 +279,153 @@ export async function findElementByText(
   }
 
   return results[0];
+}
+
+// =============================================================================
+// Wait primitives — Node-side polling, not throttled by Chrome background tabs
+// =============================================================================
+
+interface WaitOptions {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+}
+
+/**
+ * Wait until a CSS selector's elements are all gone (display:none, visibility:hidden, or removed).
+ * Used for: .thinking-message disappear, dialog close, source removal, chat clear.
+ */
+export async function waitForGone(
+  page: Page,
+  selector: string,
+  options?: WaitOptions,
+): Promise<{ gone: boolean; elapsedMs: number }> {
+  const timeout = options?.timeoutMs ?? 30_000;
+  const interval = options?.pollIntervalMs ?? 500;
+  const start = Date.now();
+
+  while (Date.now() - start < timeout) {
+    const visible = await page.evaluate(`(() => {
+      const els = document.querySelectorAll(${JSON.stringify(selector)});
+      for (const el of els) {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) continue;
+        const s = getComputedStyle(el);
+        if (s.display === 'none' || s.visibility === 'hidden') continue;
+        return true;
+      }
+      return false;
+    })()`) as boolean;
+
+    if (!visible) return { gone: true, elapsedMs: Date.now() - start };
+    await new Promise((r) => setTimeout(r, interval));
+  }
+  return { gone: false, elapsedMs: Date.now() - start };
+}
+
+/**
+ * Wait until a CSS selector has at least one visible element.
+ * Used for: dialog appear, source panel visible, h1 loaded.
+ */
+export async function waitForVisible(
+  page: Page,
+  selector: string,
+  options?: WaitOptions,
+): Promise<{ visible: boolean; elapsedMs: number }> {
+  const timeout = options?.timeoutMs ?? 15_000;
+  const interval = options?.pollIntervalMs ?? 300;
+  const start = Date.now();
+
+  while (Date.now() - start < timeout) {
+    const found = await page.evaluate(`(() => {
+      const els = document.querySelectorAll(${JSON.stringify(selector)});
+      for (const el of els) {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        const s = getComputedStyle(el);
+        if (s.display === 'none' || s.visibility === 'hidden') continue;
+        return true;
+      }
+      return false;
+    })()`) as boolean;
+
+    if (found) return { visible: true, elapsedMs: Date.now() - start };
+    await new Promise((r) => setTimeout(r, interval));
+  }
+  return { visible: false, elapsedMs: Date.now() - start };
+}
+
+/**
+ * Wait until a button/element found by text is NOT disabled.
+ * Used for: insert button enable after content paste.
+ */
+export async function waitForEnabled(
+  page: Page,
+  text: string,
+  matchType: "text" | "placeholder" | "aria-label" = "text",
+  options?: WaitOptions,
+): Promise<{ enabled: boolean; element: FoundElement | null; elapsedMs: number }> {
+  const timeout = options?.timeoutMs ?? 10_000;
+  const interval = options?.pollIntervalMs ?? 500;
+  const start = Date.now();
+
+  while (Date.now() - start < timeout) {
+    const el = await findElementByText(page, text, { match: matchType });
+    if (el && !el.disabled) return { enabled: true, element: el, elapsedMs: Date.now() - start };
+    await new Promise((r) => setTimeout(r, interval));
+  }
+  return { enabled: false, element: null, elapsedMs: Date.now() - start };
+}
+
+/**
+ * Wait until page URL matches a pattern (or changes from initial).
+ * Used for: create notebook redirect.
+ */
+export async function waitForNavigation(
+  page: Page,
+  opts?: WaitOptions & { urlContains?: string; notUrl?: string },
+): Promise<{ navigated: boolean; url: string; elapsedMs: number }> {
+  const timeout = opts?.timeoutMs ?? 15_000;
+  const interval = opts?.pollIntervalMs ?? 500;
+  const start = Date.now();
+
+  while (Date.now() - start < timeout) {
+    const url = page.url();
+    if (opts?.urlContains && url.includes(opts.urlContains)) {
+      return { navigated: true, url, elapsedMs: Date.now() - start };
+    }
+    if (opts?.notUrl && url !== opts.notUrl) {
+      return { navigated: true, url, elapsedMs: Date.now() - start };
+    }
+    await new Promise((r) => setTimeout(r, interval));
+  }
+  return { navigated: false, url: page.url(), elapsedMs: Date.now() - start };
+}
+
+/**
+ * Wait for element count to change from a baseline.
+ * Used for: source count after add/remove.
+ */
+export async function waitForCountChange(
+  page: Page,
+  selector: string,
+  baselineCount: number,
+  options?: WaitOptions,
+): Promise<{ changed: boolean; newCount: number; elapsedMs: number }> {
+  const timeout = options?.timeoutMs ?? 15_000;
+  const interval = options?.pollIntervalMs ?? 500;
+  const start = Date.now();
+
+  while (Date.now() - start < timeout) {
+    const count = await page.evaluate(`(() => {
+      return document.querySelectorAll(${JSON.stringify(selector)}).length;
+    })()`) as number;
+
+    if (count !== baselineCount) {
+      return { changed: true, newCount: count, elapsedMs: Date.now() - start };
+    }
+    await new Promise((r) => setTimeout(r, interval));
+  }
+  return { changed: false, newCount: baselineCount, elapsedMs: Date.now() - start };
 }
 
 // =============================================================================
