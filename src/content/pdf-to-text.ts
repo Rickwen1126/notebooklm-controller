@@ -11,8 +11,6 @@ import { join, isAbsolute } from "node:path";
 import { PDFParse } from "pdf-parse";
 import { TMP_DIR } from "../shared/config.js";
 
-/** Maximum character count for NotebookLM text source. */
-const MAX_CHAR_COUNT = 500_000;
 
 export interface PdfToTextResult {
   /** Path to the temp file containing extracted text. */

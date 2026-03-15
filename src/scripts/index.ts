@@ -130,7 +130,6 @@ const SCRIPT_REGISTRY: Record<string, (ctx: ScriptContext, params: Record<string
         // Auto-rename: only if sourceName provided AND exactly 1 "貼上的文字" exists.
         // If multiple unnamed sources exist, skip rename (can't identify which is new).
         if (sourceName) {
-          const pastedTextLabel = ctx.uiMap.elements.paste_source_type?.text ?? "Copied text";
           const defaultSourceName = "貼上的文字"; // NotebookLM's default name for pasted sources
           const unnamedCount = await ctx.page.evaluate(`(() => {
             const panel = document.querySelector('.source-panel');
