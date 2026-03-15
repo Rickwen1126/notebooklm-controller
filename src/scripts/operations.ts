@@ -841,14 +841,25 @@ export async function scriptedRenameNotebook(
     if (!inputSet) return fail(stepNum, "find_dialog_input", `No input in dialog or value set failed`, "dialog_input");
     log.push(createLogEntry(stepNum, "type_new_name", "ok", `Set value "${newName}" via native setter`, stepStart));
 
-    // Find and click save — wait for it to be enabled
+    // Find save button INSIDE dialog (not full page — "儲存" may appear in notebook titles)
     stepNum++;
     stepStart = Date.now();
-    const saveCheck = await helpers.waitForEnabled(page, uiMap.elements.save_button?.text ?? "儲存", "text", { timeoutMs: 5000 });
-    if (!saveCheck.enabled || !saveCheck.element) return fail(stepNum, "find_save", `Save button not found or disabled`, "save_button");
-    await helpers.dispatchClick(cdp, saveCheck.element.center.x, saveCheck.element.center.y);
+    const savePos = await page.evaluate(`(() => {
+      const overlay = document.querySelector('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
+      if (!overlay) return null;
+      const btns = overlay.querySelectorAll('button, [role=button]');
+      for (const b of btns) {
+        if (b.textContent.trim() === '${uiMap.elements.save_button?.text ?? "儲存"}') {
+          const r = b.getBoundingClientRect();
+          if (r.width > 0 && !b.disabled) return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
+        }
+      }
+      return null;
+    })()`) as { x: number; y: number } | null;
+    if (!savePos) return fail(stepNum, "find_save", `Save button not found in dialog overlay`, "save_button");
+    await helpers.dispatchClick(cdp, savePos.x, savePos.y);
     await helpers.waitForGone(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 5000 });
-    log.push(createLogEntry(stepNum, "click_save", "ok", `Saved, dialog closed`, stepStart));
+    log.push(createLogEntry(stepNum, "click_save", "ok", `Saved at (${savePos.x},${savePos.y}), dialog closed`, stepStart));
 
     return makeSuccess("renameNotebook", log, t0, `Notebook renamed to "${newName}"`);
   } catch (err) {
