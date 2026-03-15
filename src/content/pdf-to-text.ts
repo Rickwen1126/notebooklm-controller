@@ -12,7 +12,7 @@ import { PDFParse } from "pdf-parse";
 import { TMP_DIR } from "../shared/config.js";
 
 /** Maximum character count for NotebookLM text source. */
-const MAX_CHAR_COUNT = 5_000_000;
+const MAX_CHAR_COUNT = 500_000;
 
 export interface PdfToTextResult {
   /** Path to the temp file containing extracted text. */
@@ -79,13 +79,7 @@ export async function pdfToText(pdfPath: string): Promise<PdfToTextResult> {
   const charCount = text.length;
   const wordCount = text.split(/\s+/).filter(Boolean).length;
 
-  // 5. Validate size limit.
-  if (charCount > MAX_CHAR_COUNT) {
-    throw new Error(
-      `Content exceeds ${MAX_CHAR_COUNT.toLocaleString()} character limit ` +
-      `(actual: ${charCount.toLocaleString()}). The PDF is too long.`,
-    );
-  }
+  // 5. Size info logged (splitting handled by caller if needed).
 
   // 6. Write to temp file (text never returned in memory to caller).
   await mkdir(TMP_DIR, { recursive: true });

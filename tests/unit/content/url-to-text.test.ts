@@ -2,7 +2,7 @@
  * T080: Unit tests for url-to-text (file-based output).
  *
  * Tests the URL-to-text converter: URL validation, fetch handling,
- * readability extraction, 500K limit, file-based output.
+ * readability extraction, file-based output.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -173,13 +173,13 @@ describe("urlToText", () => {
     );
   });
 
-  it("throws if content exceeds 5M character limit", async () => {
-    const hugeContent = "x".repeat(5_000_001);
+  it("handles content exceeding 500K without throwing (limit enforced at dispatch layer)", async () => {
+    const hugeContent = "x".repeat(500_001);
     mockParseResult = { title: null, textContent: hugeContent, content: hugeContent, length: hugeContent.length, excerpt: null, byline: null, dir: null, siteName: null, lang: null, publishedTime: null };
 
-    await expect(urlToText("https://example.com/huge")).rejects.toThrow(
-      "exceeds 5,000,000 character limit",
-    );
+    const result = await urlToText("https://example.com/huge");
+    expect(result.charCount).toBeGreaterThanOrEqual(500_001);
+    expect(result.filePath).toContain("/tmp/nbctl-test/url-");
   });
 
   it("calculates word count correctly", async () => {

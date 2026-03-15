@@ -13,7 +13,7 @@ import { Readability } from "@mozilla/readability";
 import { TMP_DIR } from "../shared/config.js";
 
 /** Maximum character count for NotebookLM text source. */
-const MAX_CHAR_COUNT = 5_000_000;
+const MAX_CHAR_COUNT = 500_000;
 
 /** Timeout for HTTP fetch (30 seconds). */
 const FETCH_TIMEOUT_MS = 30_000;
@@ -89,13 +89,7 @@ export async function urlToText(url: string): Promise<UrlToTextResult> {
   const charCount = text.length;
   const wordCount = text.split(/\s+/).filter(Boolean).length;
 
-  // 6. Validate size limit.
-  if (charCount > MAX_CHAR_COUNT) {
-    throw new Error(
-      `Content exceeds ${MAX_CHAR_COUNT.toLocaleString()} character limit ` +
-      `(actual: ${charCount.toLocaleString()}). The article is too long.`,
-    );
-  }
+  // 6. Size info logged (splitting handled by caller if needed).
 
   // 7. Write to temp file (text never returned in memory to caller).
   await mkdir(TMP_DIR, { recursive: true });

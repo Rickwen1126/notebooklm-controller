@@ -1,7 +1,7 @@
 /**
  * T069 + T-SB08: Unit tests for repo-to-text (file-based output).
  *
- * Tests the repomix wrapper: git validation, word count, 500K limit,
+ * Tests the repomix wrapper: git validation, word count,
  * file-based output (text written to temp file, filePath returned).
  */
 
@@ -97,8 +97,8 @@ describe("repoToText", () => {
     await expect(repoToText("/fake/repo")).rejects.toThrow("repomix failed");
   });
 
-  it("throws if output exceeds 5M character limit", async () => {
-    const hugeOutput = "x".repeat(5_000_001);
+  it("handles output exceeding 500K without throwing (limit enforced at dispatch layer)", async () => {
+    const hugeOutput = "x".repeat(500_001);
 
     mockExecFile.mockImplementation(
       (_cmd: unknown, _args: unknown, _opts: unknown, callback?: unknown) => {
@@ -109,9 +109,9 @@ describe("repoToText", () => {
       },
     );
 
-    await expect(repoToText("/fake/repo")).rejects.toThrow(
-      "exceeds 5,000,000 character limit",
-    );
+    const result = await repoToText("/fake/repo");
+    expect(result.charCount).toBe(500_001);
+    expect(result.filePath).toContain("/tmp/nbctl-test/repo-");
   });
 
   // T105: Security — repoPath must be absolute

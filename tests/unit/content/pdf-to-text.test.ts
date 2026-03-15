@@ -2,7 +2,7 @@
  * T081: Unit tests for pdf-to-text (file-based output).
  *
  * Tests the PDF-to-text converter: file validation, pdf-parse extraction,
- * 500K limit, file-based output.
+ * file-based output.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -153,13 +153,13 @@ describe("pdfToText", () => {
     );
   });
 
-  it("throws if content exceeds 5M character limit", async () => {
-    const hugeText = "x".repeat(5_000_001);
+  it("handles content exceeding 500K without throwing (limit enforced at dispatch layer)", async () => {
+    const hugeText = "x".repeat(500_001);
     mockGetTextResult = { text: hugeText, total: 1 };
 
-    await expect(pdfToText("/docs/huge.pdf")).rejects.toThrow(
-      "exceeds 5,000,000 character limit",
-    );
+    const result = await pdfToText("/docs/huge.pdf");
+    expect(result.charCount).toBe(500_001);
+    expect(result.filePath).toContain("/tmp/nbctl-test/pdf-");
   });
 
   // T105: Security — pdfPath must be absolute

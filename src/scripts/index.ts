@@ -65,13 +65,86 @@ async function preprocessAddSource(params: Record<string, string>): Promise<stri
   throw new Error(`Unknown sourceType: ${sourceType}`);
 }
 
+/** Max chars per source paste. Content exceeding this is split into multiple sources. */
+const CHUNK_SIZE = 500_000;
+
+/**
+ * Split text into chunks of at most CHUNK_SIZE chars.
+ * Tries to break at newline boundaries for cleaner splits.
+ */
+function splitIntoChunks(text: string, maxSize: number = CHUNK_SIZE): string[] {
+  if (text.length <= maxSize) return [text];
+
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = start + maxSize;
+    if (end >= text.length) {
+      chunks.push(text.slice(start));
+      break;
+    }
+    // Try to break at a newline within the last 10% of the chunk
+    const searchStart = end - Math.floor(maxSize * 0.1);
+    const lastNewline = text.lastIndexOf("\n", end);
+    if (lastNewline > searchStart) {
+      end = lastNewline + 1;
+    }
+    chunks.push(text.slice(start, end));
+    start = end;
+  }
+  return chunks;
+}
+
 /** Map of operation name -> script function. */
 const SCRIPT_REGISTRY: Record<string, (ctx: ScriptContext, params: Record<string, string>) => Promise<ScriptResult>> = {
   query: (ctx, p) => scriptedQuery(ctx, p.question ?? ""),
   addSource: async (ctx, p) => {
     try {
       const content = await preprocessAddSource(p);
-      return scriptedAddSource(ctx, content);
+      const chunks = splitIntoChunks(content);
+
+      if (chunks.length === 1) {
+        // Single chunk — normal paste
+        return scriptedAddSource(ctx, chunks[0]);
+      }
+
+      // Multi-chunk — paste each as separate source
+      contentLog.info("Content split into chunks", { totalChars: content.length, chunks: chunks.length });
+      const allLogs: ScriptResult["log"] = [];
+      const t0 = Date.now();
+
+      for (let i = 0; i < chunks.length; i++) {
+        contentLog.info(`Pasting chunk ${i + 1}/${chunks.length}`, { charCount: chunks[i].length });
+        const result = await scriptedAddSource(ctx, chunks[i]);
+        allLogs.push(...result.log);
+
+        if (result.status !== "success") {
+          return {
+            operation: "addSource",
+            status: "fail" as const,
+            result: `Failed at chunk ${i + 1}/${chunks.length}`,
+            log: allLogs,
+            totalMs: Date.now() - t0,
+            failedAtStep: result.failedAtStep,
+            failedSelector: result.failedSelector,
+          };
+        }
+
+        // Brief pause between chunks to let NotebookLM process
+        if (i < chunks.length - 1) {
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      }
+
+      return {
+        operation: "addSource",
+        status: "success",
+        result: `Added ${chunks.length} source parts (${content.length} chars total)`,
+        log: allLogs,
+        totalMs: Date.now() - t0,
+        failedAtStep: null,
+        failedSelector: null,
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return {

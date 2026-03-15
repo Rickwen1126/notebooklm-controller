@@ -85,20 +85,35 @@
 - **所有 dialog button 搜尋 scope 到 overlay container**：insert, remove confirm, save, delete confirm（5 處）
 - CLAUDE.md 更新：viewport contract, SDK z.record 限制, dialog scope 規則, G2 架構
 
-**State**: Branch `001-mvp` at `47181d1`。678 tests ✅。**MVP 開發完成。**
+**Done (continued)**:
+- Merged 001-mvp → main
+- `agents/*.md` 刪除（11 files）
+- Spec 對齊：implementation status section 加到 spec.md（15 DONE / 4 PARTIAL / 3 NOT STARTED）
+- `runDualSession` → `runPipeline`, `DualSessionOptions` → `PipelineOptions`
+- i18n 修復：所有 hardcoded 中文 → UIMap elements（ensure.ts + operations.ts 7 處）
+- Locale config override：`~/.nbctl/config.json` { "locale": "zh-TW" }
+- Dialog overlay：`querySelector` → `querySelectorAll`（多 overlay 疊加問題，7 處）
+- Tab URL 驗證：createRunTask acquire tab 後檢查 URL，不 match 就 navigate（S12 delete 後 query 不再 fail）
+- Real test 全部重跑：S01-S12 ✅, Phase 4 ✅ (S12 後 query 也 pass), Phase 5-6 ✅
 
-**ALL PHASES PASS (8/8):**
-```
-Phase 0: Pre-flight                ✅
-Phase 1: Notebook Mgmt             ✅
-Phase 2: All-Ops S01-S12           ✅ 12/12 + ISO verified
-Phase 3: Recovery                  ✅ (corrupt → recovery → repair log + patch)
-Phase 4: Planner NL                ✅ 3/3 (single + multi + reject)
-Phase 5: Async                     ✅ (submit + poll)
-Phase 6: Error Handling            ✅ 2/2
-Phase 7: Multi-Notebook Concurrent ✅ (2 notebooks parallel, tab pool + scheduler OK)
-```
+**Done (continued)**:
+- Content pipeline 整合完成：`src/scripts/index.ts` preprocessAddSource + submitPlan fields
+- Real test CP02 (URL source: Wikipedia TypeScript) ✅, CP04 (plain text regression) ✅
+- Content size limit 500K → 5M chars（三個 converter 都改了）
+- 686 tests pass (8 new for content pipeline)
+
+**Discoveries:**
+- CP01 repo source (1.9M chars): repomix 轉換成功 (1.8s) 但 paste 1.9M chars 到 textarea hang — 需要分段上傳
+- NotebookLM textarea 的 `Input.insertText` 大量文字 paste 可能 hang 或超時
+
+**State**: Branch `main` at `c65311a`。686 tests ✅。Content pipeline code done, real test partial (URL ✅, text ✅, repo hang, PDF untested)。
 
 **Next**:
-- [ ] Cleanup: 移除 `agents/*.md`，commit
-- [ ] 考慮 merge 001-mvp → main
+- [ ] 自動分段上傳：內容 > N chars 自動切 chunk，分批 paste 成多個來源，命名 `{name} (part 1/3)`
+- [ ] CP01 repo source 驗證（分段後）
+- [ ] CP03 PDF source 驗證
+
+**User Notes**:
+- 用戶要求 500K → 5MB 解放限制
+- 用戶要求自動分段上傳：超過上限自動切成多個來源，分批 paste，妥善命名（e.g. 15MB → 3 個 5MB parts）
+- 分段適用於 repo/URL/PDF 所有類型

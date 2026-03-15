@@ -93,6 +93,36 @@ describe("addSource preprocessing", () => {
   });
 });
 
+describe("chunked addSource", () => {
+  it("single chunk: content under 500K passes through directly", async () => {
+    const smallContent = "a".repeat(100);
+    await runScript("addSource", { content: smallContent }, mockCtx);
+    expect(scriptedAddSource).toHaveBeenCalledTimes(1);
+    expect(scriptedAddSource).toHaveBeenCalledWith(mockCtx, smallContent);
+  });
+
+  it("multi chunk: content over 500K calls scriptedAddSource multiple times", async () => {
+    vi.useFakeTimers();
+
+    // Mock repoToText to return a large file
+    vi.mocked(repoToText).mockResolvedValue({ filePath: "/tmp/big.txt", charCount: 1_200_000, wordCount: 200_000 });
+    // Mock readFileSync to return large content
+    vi.mocked(readFileSync).mockReturnValue("x".repeat(1_200_000));
+
+    const promise = runScript("addSource", { sourceType: "repo", sourcePath: "/abs/big-repo" }, mockCtx);
+
+    // Advance past the 3s pauses between chunks
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await promise;
+
+    // Should call scriptedAddSource 3 times (1.2M / 500K = 2.4 → 3 chunks)
+    expect(vi.mocked(scriptedAddSource).mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    vi.useRealTimers();
+  });
+});
+
 describe("buildScriptCatalog", () => {
   it("includes source type info in addSource description", () => {
     const catalog = buildScriptCatalog();

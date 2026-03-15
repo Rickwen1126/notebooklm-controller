@@ -15,7 +15,7 @@ import { TMP_DIR } from "../shared/config.js";
 const execFileAsync = promisify(execFile);
 
 /** Maximum character count for NotebookLM text source. */
-const MAX_CHAR_COUNT = 5_000_000;
+const MAX_CHAR_COUNT = 500_000;
 
 export interface RepoToTextResult {
   /** Path to the temp file containing converted text. */
@@ -72,13 +72,7 @@ export async function repoToText(repoPath: string): Promise<RepoToTextResult> {
   const charCount = text.length;
   const wordCount = text.split(/\s+/).filter(Boolean).length;
 
-  // 4. Validate size limit.
-  if (charCount > MAX_CHAR_COUNT) {
-    throw new Error(
-      `Content exceeds ${MAX_CHAR_COUNT.toLocaleString()} character limit ` +
-      `(actual: ${charCount.toLocaleString()}). Please split manually.`,
-    );
-  }
+  // 4. Size info logged (splitting handled by caller if needed).
 
   // 5. Write to temp file (text never returned in memory to caller).
   await mkdir(TMP_DIR, { recursive: true });
