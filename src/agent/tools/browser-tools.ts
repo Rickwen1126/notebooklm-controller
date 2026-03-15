@@ -413,89 +413,63 @@ export function createBrowserTools(tabHandle: TabHandle): Tool[] {
       interval: z.number().optional().describe("Seconds between checks (default: 1)"),
       stableCount: z.number().optional().describe("Consecutive identical reads to consider stable (default: 3)"),
       timeout: z.number().optional().describe("Maximum seconds to wait (default: 60)"),
-      rejectIf: z.string().optional().describe("Regex pattern — if content matches, keep waiting (e.g. 'Thinking|Refining')"),
+      rejectIf: z.string().optional().describe("Regex pattern — if content matches, keep waiting (default: 'Thinking|Refining|正在思考|正在整理')"),
       lastOnly: z.boolean().optional().describe("If multiple elements match, only check the last one (default: true)"),
     }),
     handler: async (args) => {
       const interval = (args.interval ?? 1) * 1000;
       const stableCount = args.stableCount ?? 3;
       const timeout = (args.timeout ?? 60) * 1000;
-      const rejectIf = args.rejectIf ?? "";
+      // Default: reject transitional states so we don't stabilize on "Thinking..."
+      const rejectIf = args.rejectIf ?? "Thinking|Refining|正在思考|正在整理";
       const lastOnly = args.lastOnly ?? true;
 
       const startTime = Date.now();
 
-      // Phase 1: Poll with hash comparison IN the browser (fast, no serialization)
-      const pollResult = await page.evaluate(
-        async (
-          sel: string,
-          intervalMs: number,
-          stableN: number,
-          timeoutMs: number,
-          rejectPattern: string,
-          last: boolean,
-        ) => {
-          const rejectRe = rejectPattern ? new RegExp(rejectPattern, "i") : null;
-          const start = Date.now();
-          let lastHash = "";
-          let sameCount = 0;
+      // Phase 1: Poll with hash comparison IN the browser (fast, no serialization).
+      // Uses string-form evaluate to avoid esbuild __name injection breaking serialized functions.
+      const pollResult = await page.evaluate(`(async () => {
+        const sel = ${JSON.stringify(args.selector)};
+        const intervalMs = ${interval};
+        const stableN = ${stableCount};
+        const timeoutMs = ${timeout};
+        const rejectRe = ${rejectIf ? `new RegExp(${JSON.stringify(rejectIf)}, "i")` : "null"};
+        const last = ${lastOnly};
+        const start = Date.now();
+        let lastHash = "";
+        let sameCount = 0;
 
-          // Simple hash function (djb2)
-          const hash = (s: string): string => {
-            let h = 5381;
-            for (let i = 0; i < s.length; i++) {
-              h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
-            }
-            return h.toString(36);
-          };
-
-          while (Date.now() - start < timeoutMs) {
-            await new Promise((r) => setTimeout(r, intervalMs));
-
-            const els = document.querySelectorAll(sel);
-            if (els.length === 0) { sameCount = 0; lastHash = ""; continue; }
-
-            const target = last ? els[els.length - 1] : els[0];
-            const text = target.textContent?.trim() ?? "";
-
-            if (!text || (rejectRe && rejectRe.test(text))) {
-              sameCount = 0;
-              lastHash = "";
-              continue;
-            }
-
-            const h = hash(text);
-            if (h === lastHash) {
-              sameCount++;
-              if (sameCount >= stableN) {
-                return { stable: true, elapsed: Date.now() - start };
-              }
-            } else {
-              lastHash = h;
-              sameCount = 1;
-            }
+        function hash(s) {
+          let h = 5381;
+          for (let i = 0; i < s.length; i++) {
+            h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
           }
-          return { stable: false, elapsed: Date.now() - start };
-        },
-        args.selector,
-        interval,
-        stableCount,
-        timeout,
-        rejectIf,
-        lastOnly,
-      );
+          return h.toString(36);
+        }
+
+        while (Date.now() - start < timeoutMs) {
+          await new Promise(r => setTimeout(r, intervalMs));
+          const els = document.querySelectorAll(sel);
+          if (els.length === 0) { sameCount = 0; lastHash = ""; continue; }
+          const target = last ? els[els.length - 1] : els[0];
+          const text = (target.textContent || "").trim();
+          if (!text || (rejectRe && rejectRe.test(text))) { sameCount = 0; lastHash = ""; continue; }
+          const h = hash(text);
+          if (h === lastHash) {
+            sameCount++;
+            if (sameCount >= stableN) return { stable: true, elapsed: Date.now() - start };
+          } else { lastHash = h; sameCount = 1; }
+        }
+        return { stable: false, elapsed: Date.now() - start };
+      })()`) as { stable: boolean; elapsed: number };
 
       // Phase 2: Fetch the final stable text (one serialization)
-      const text = await page.evaluate(
-        (sel: string, last: boolean) => {
-          const els = document.querySelectorAll(sel);
-          if (els.length === 0) return "";
-          const target = last ? els[els.length - 1] : els[0];
-          return (target.textContent?.trim() ?? "").slice(0, 5000);
-        },
-        args.selector,
-        lastOnly,
-      );
+      const text = await page.evaluate(`(() => {
+        const els = document.querySelectorAll(${JSON.stringify(args.selector)});
+        if (els.length === 0) return "";
+        const target = ${lastOnly} ? els[els.length - 1] : els[0];
+        return ((target.textContent || "").trim()).slice(0, 5000);
+      })()`) as string;
 
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 
