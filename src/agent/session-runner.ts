@@ -3,16 +3,14 @@
  *
  * Two-level API:
  *   - `runSession()` — low-level primitive: single session lifecycle
- *   - `runDualSession()` — high-level: Planner+Executor orchestration
+ *   - `runDualSession()` — high-level: Planner → Script → Recovery orchestration
  *
- * The dual-session architecture (Phase 5.5) replaces the original CustomAgent
- * sub-agent approach because sub-agents cannot access defineTool() custom tools
- * (Finding #39). Instead:
- *   - Planner session: NL intent → structured ExecutionPlan (via submitPlan tool)
- *   - Executor session(s): per-step browser automation with filtered tools
+ * G2 architecture: deterministic scripts replace LLM Executor sessions.
+ * Happy path = 0 LLM (script only). Failure = Recovery session (GPT-5-mini).
  */
 
 import type { CopilotSession } from "@github/copilot-sdk";
+import type { CDPSession, Page } from "puppeteer-core";
 import type {
   CustomAgentConfig,
   Tool,
@@ -22,10 +20,16 @@ import type {
 import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import type { CopilotClientSingleton } from "./client.js";
-import { buildPlannerCatalog } from "./agent-loader.js";
-import { DEFAULT_SESSION_TIMEOUT_MS, PLANNER_MODEL, EXECUTOR_MODEL, DEFAULT_AGENT_MODEL, NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
+import { buildScriptCatalog, runScript } from "../scripts/index.js";
+import { runRecoverySession } from "./recovery-session.js";
+import { saveRepairLog, saveScreenshot } from "./repair-log.js";
+import { DEFAULT_SESSION_TIMEOUT_MS, PLANNER_MODEL, DEFAULT_AGENT_MODEL } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
-import type { AgentConfig, ExecutionPlan, ExecutionStep } from "../shared/types.js";
+import type { ExecutionPlan, ExecutionStep, UIMap } from "../shared/types.js";
+import type { ScriptContext } from "../scripts/types.js";
+import { findElementByText } from "../scripts/find-element.js";
+import { pollForAnswer, waitForGone, waitForVisible, waitForEnabled, waitForNavigation, waitForCountChange } from "../scripts/wait-primitives.js";
+import { ensureChatPanel, ensureSourcePanel, ensureHomepage } from "../scripts/ensure.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -198,26 +202,24 @@ export async function runSession(
 
 export interface DualSessionOptions {
   client: CopilotClientSingleton;
-  /** All available browser + state tools (will be filtered per step). */
+  /** All available browser + state tools (Recovery session uses these). */
   tools: Tool<any>[];
-  /** Loaded agent configs (Planner reads catalog, Executor reads prompt). */
-  agentConfigs: AgentConfig[];
-  /** Hooks forwarded to Executor sessions. */
-  hooks?: SessionConfig['hooks'];
+  /** CDP session for deterministic scripts. */
+  cdpSession: CDPSession;
+  /** Puppeteer page for deterministic scripts. */
+  page: Page;
+  /** Loaded UIMap for the current locale. */
+  uiMap: UIMap;
   /** Resolved locale string (e.g. "zh-TW"). */
   locale: string;
-  /** Target notebook alias — injected as canonical context into Executor prompt. */
+  /** Target notebook alias — injected as canonical context. */
   notebookAlias: string;
-  /** Current tab URL — used for pre-navigate anchor check. */
-  tabUrl?: string;
-  /** Model for Planner session. Defaults to DEFAULT_AGENT_MODEL. */
+  /** Task ID for screenshot persistence. */
+  taskId?: string;
+  /** Model for Planner session. Defaults to PLANNER_MODEL. */
   plannerModel?: string;
-  /** Model for Executor sessions. Defaults to DEFAULT_AGENT_MODEL. */
-  executorModel?: string;
   /** Timeout for Planner. Defaults to 60s. */
   plannerTimeoutMs?: number;
-  /** Timeout per Executor step. Defaults to DEFAULT_SESSION_TIMEOUT_MS. */
-  executorTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +262,6 @@ export async function runPlannerSession(
 ): Promise<PlannerResult> {
   const {
     client,
-    agentConfigs,
     locale,
     plannerModel = PLANNER_MODEL,
     plannerTimeoutMs = PLANNER_TIMEOUT_MS,
@@ -268,58 +269,50 @@ export async function runPlannerSession(
 
   const log = logger.child({ module: "session-runner:planner" });
 
-  // Build agent catalog for the Planner's system message.
-  const agentCatalog = buildPlannerCatalog(agentConfigs);
+  // Build script catalog for the Planner's system message.
+  const scriptCatalog = buildScriptCatalog();
 
   // Canonical notebook context for Planner (T-HF03)
   const notebookAlias = options.notebookAlias;
 
-  const plannerSystemMessage = `You are the Planner for a NotebookLM controller. Your task is to analyze the user's natural-language instruction, select the correct agent config, and assemble a structured prompt for the Executor to carry out.
+  const plannerSystemMessage = `You are the Planner for a NotebookLM controller. Your task is to analyze the user's natural-language instruction and select the correct scripted operation(s) with parameters.
 
 ## Target Notebook
 
 Target: ${notebookAlias}
 (This notebook alias has already been resolved by the system — do not guess it from the user's instruction.)
 
-## Available Agent Configs
+## Available Operations
 
-${agentCatalog}
+${scriptCatalog}
 
 ## Your Output
 
 Call the submitPlan tool to submit an execution plan. Each step contains:
-- agentName: the name of the agent config to use
-- executorPrompt: a clear, specific instruction for the Executor (include concrete parameter values)
-- tools: the list of tool names needed for this step (taken from the agent config's tools field)
+- operation: the name of the scripted operation to run
+- params: a JSON object with the required parameters for that operation
 
 ## Rules
 
 1. A single operation produces exactly 1 step.
 2. A compound operation (e.g. "add a source then ask a question") produces multiple steps in order.
-3. executorPrompt describes **WHAT to achieve**, not HOW to operate the UI. Examples:
-   - Good: "建立新筆記本，標題為 nbctl-test"
-   - Good: "把 https://example.com 的內容加入來源"
-   - Bad: "點擊新建按鈕，然後回首頁找到 more_vert 選單..." (不要指定 UI 操作步驟)
-   The Executor's agent prompt defines the operation method — your job is only to specify the goal and parameters.
-4. executorPrompt must include concrete parameter values. For example, not "ask a question" but "Ask NotebookLM: What are the advantages of TypeScript?"
-5. Do not execute operations yourself — only plan.
-6. If the user's request is unrelated to NotebookLM operations, harmful, ambiguous, missing required context, or unsupported, call the rejectInput tool with a category and reason. Do not call submitPlan.
-7. The user's input may be in any language. Always understand their intent regardless of language.
-8. Current locale: ${locale}`;
+3. params must include concrete values. For example, not just "ask a question" but \`{ "question": "What are the advantages of TypeScript?" }\`.
+4. Do not execute operations yourself — only plan.
+5. If the user's request is unrelated to NotebookLM operations, harmful, ambiguous, missing required context, or unsupported, call the rejectInput tool with a category and reason. Do not call submitPlan.
+6. The user's input may be in any language. Always understand their intent regardless of language.
+7. Current locale: ${locale}`;
 
   // Capture plan or rejection via closure.
-  // Use `as` to preserve full union type — TS control flow can't track closure assignments.
   let capturedPlan = null as ExecutionPlan | null;
   let capturedRejection = null as { category: RejectionCategory; reason: string } | null;
 
   const submitPlanTool = defineTool("submitPlan", {
-    description: "Submit the execution plan for the Executor to carry out.",
+    description: "Submit the execution plan with scripted operations.",
     parameters: z.object({
       reasoning: z.string().describe("Brief explanation of why these steps were chosen"),
       steps: z.array(z.object({
-        agentName: z.string().describe("Name of the agent config to use"),
-        executorPrompt: z.string().describe("Clear instruction for the Executor"),
-        tools: z.array(z.string()).describe("Tool names needed for this step"),
+        operation: z.string().describe("Name of the scripted operation to run"),
+        params: z.record(z.string()).describe("Parameters for the operation"),
       })),
     }),
     handler: async (args: { reasoning: string; steps: ExecutionStep[] }) => {
@@ -348,18 +341,9 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
 
   log.info("Starting Planner session", {
     promptLength: prompt.length,
-    agentCount: agentConfigs.length,
     locale,
   });
-  log.debug("Planner input", {
-    prompt: prompt.slice(0, 1000),
-    systemMessageLength: plannerSystemMessage.length,
-    agentCatalog: agentCatalog.slice(0, 1000),
-  });
 
-  // Run Planner as a single session with submitPlan + rejectInput tools.
-  // System message is passed via createSession({ systemMessage }) to separate
-  // session-level policy from step-level instruction (T-HF04).
   await runSession(
     {
       client,
@@ -373,7 +357,6 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
     prompt,
   );
 
-  // Check rejection first — if the Planner rejected, return early.
   if (capturedRejection) {
     log.info("Planner rejected input", {
       category: capturedRejection.category,
@@ -393,143 +376,95 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
   log.info("Planner completed", {
     reasoning: capturedPlan.reasoning,
     stepCount: capturedPlan.steps.length,
-    steps: capturedPlan.steps.map((s) => s.agentName),
+    steps: capturedPlan.steps.map((s) => s.operation),
   });
 
   return { kind: "plan", plan: capturedPlan };
 }
 
 // ---------------------------------------------------------------------------
-// Dual Session: Executor
+// Dual Session: ScriptContext builder
 // ---------------------------------------------------------------------------
 
-/** Tool constraint preamble prepended to Executor systemMessage. */
-const TOOL_CONSTRAINT_PREAMBLE = `## 重要：工具限制
-
-你只能使用以下 browser tools 完成任務：{TOOL_LIST}
-**禁止使用** bash, view, edit, grep 等任何其他內建工具。所有操作必須透過上述 browser tools 完成。
-如果你覺得需要讀取檔案或執行 shell 命令，那是錯誤的方向 — 你操作的是瀏覽器，不是檔案系統。
-
-`;
-
 /**
- * Run a single Executor session for one step of the plan.
- *
- * Looks up the agent config by name, filters tools to what the step needs,
- * and prepends the tool constraint preamble to the agent's prompt.
+ * Build a ScriptContext from DualSessionOptions.
+ * Injects all CDP helpers + wait primitives + ensure helpers into ctx.
  */
-export async function runExecutorSession(
-  options: DualSessionOptions,
-  step: ExecutionStep,
-): Promise<SessionResult> {
-  const {
-    client,
-    tools: allTools,
-    agentConfigs,
-    hooks,
-    executorModel = EXECUTOR_MODEL,
-    executorTimeoutMs = DEFAULT_SESSION_TIMEOUT_MS,
-  } = options;
+function buildScriptContext(options: DualSessionOptions): ScriptContext {
+  const { cdpSession: cdp, page, uiMap } = options;
 
-  const log = logger.child({ module: "session-runner:executor", agent: step.agentName });
-
-  // 1. Look up the agent config.
-  const agentConfig = agentConfigs.find((c) => c.name === step.agentName);
-  if (!agentConfig) {
-    return {
-      success: false,
-      error: `Unknown agent: ${step.agentName}`,
-      durationMs: 0,
+  // CDP helpers (imported from tab-manager pattern)
+  const dispatchClick = async (c: CDPSession, x: number, y: number) => {
+    await c.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+    await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+  };
+  const dispatchPaste = async (c: CDPSession, text: string) => {
+    await c.send("Input.insertText", { text });
+  };
+  const dispatchType = async (c: CDPSession, p: Page, text: string) => {
+    const specialKeys: Record<string, { key: string; code: string; keyCode: number }> = {
+      Escape: { key: "Escape", code: "Escape", keyCode: 27 },
+      Enter: { key: "Enter", code: "Enter", keyCode: 13 },
+      Tab: { key: "Tab", code: "Tab", keyCode: 9 },
+      Backspace: { key: "Backspace", code: "Backspace", keyCode: 8 },
     };
-  }
-
-  // 2. Filter tools to only what this step needs.
-  const toolNameSet = new Set(step.tools);
-  const filteredTools = allTools.filter(
-    (t) => toolNameSet.has((t as { name?: string }).name ?? ""),
-  );
-  // Always include screenshot for observability.
-  if (!toolNameSet.has("screenshot")) {
-    const screenshotTool = allTools.find(
-      (t) => (t as { name?: string }).name === "screenshot",
-    );
-    if (screenshotTool) filteredTools.push(screenshotTool);
-  }
-
-  // Warn if any requested tools (excluding auto-included "screenshot") were not found.
-  const matchedNames = new Set(
-    filteredTools.map((t) => (t as { name?: string }).name ?? ""),
-  );
-  const expectedCount = Array.from(toolNameSet).filter((n) => n !== "screenshot").length;
-  const foundCount = Array.from(toolNameSet).filter((n) => n !== "screenshot" && matchedNames.has(n)).length;
-  if (foundCount < expectedCount) {
-    const unmatched = Array.from(toolNameSet).filter(
-      (n) => n !== "screenshot" && !matchedNames.has(n),
-    );
-    log.warn("Executor tool filtering: unmatched tool names (possible typo in plan)", {
-      agentName: step.agentName,
-      unmatched,
-    });
-  }
-
-  // 3. Build Executor systemMessage: tool constraint + canonical context + agent prompt.
-  const toolList = [...step.tools, "screenshot"].join(", ");
-  const constraint = TOOL_CONSTRAINT_PREAMBLE.replace("{TOOL_LIST}", toolList);
-
-  // Canonical notebook context (explicitly injected so agent knows target)
-  const notebookContext = `## 系統背景\n\n目標 Notebook: ${options.notebookAlias}\n\n`;
-
-  // FR-179: Pre-navigate hint (O(1) URL exact match, hint not assertion)
-  let navigateHint = "";
-  if (options.tabUrl && agentConfig.startPage) {
-    const expectHomepage = agentConfig.startPage === "homepage";
-    const isOnHomepage = options.tabUrl === NOTEBOOKLM_HOMEPAGE || options.tabUrl === NOTEBOOKLM_HOMEPAGE + "/";
-    const isOnNotebook = options.tabUrl.startsWith(NOTEBOOKLM_HOMEPAGE + "/notebook/");
-
-    if (expectHomepage && !isOnHomepage) {
-      navigateHint = `[系統提示: 此 agent 預期在 homepage 操作，但目前頁面為 ${options.tabUrl}。建議先 navigate 至 ${NOTEBOOKLM_HOMEPAGE}]\n\n`;
-    } else if (!expectHomepage && !isOnNotebook) {
-      navigateHint = `[系統提示: 此 agent 預期在 notebook 頁面操作，但目前頁面為 ${options.tabUrl}]\n\n`;
+    if (text === "Ctrl+A" || text === "ctrl+a") {
+      await p.evaluate(`(() => {
+        const el = document.activeElement;
+        if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) { el.select(); return; }
+        const sel = window.getSelection();
+        if (sel && document.activeElement) sel.selectAllChildren(document.activeElement);
+      })()`);
+      return;
     }
-  }
+    const special = specialKeys[text];
+    if (special) {
+      await c.send("Input.dispatchKeyEvent", { type: "keyDown", key: special.key, code: special.code, windowsVirtualKeyCode: special.keyCode });
+      await c.send("Input.dispatchKeyEvent", { type: "keyUp", key: special.key, code: special.code, windowsVirtualKeyCode: special.keyCode });
+      return;
+    }
+    for (const char of text) {
+      await c.send("Input.dispatchKeyEvent", { type: "keyDown", text: char });
+      await c.send("Input.dispatchKeyEvent", { type: "keyUp", text: char });
+    }
+  };
+  const captureScreenshot = async (c: CDPSession) => {
+    const result = await c.send("Page.captureScreenshot", { format: "png" }) as { data: string };
+    return result.data;
+  };
 
-  const systemMessage = constraint + notebookContext + navigateHint + agentConfig.prompt;
-
-  log.info("Starting Executor session", {
-    agentName: step.agentName,
-    toolCount: filteredTools.length,
-    promptLength: step.executorPrompt.length,
-  });
-  log.debug("Executor input", {
-    executorPrompt: step.executorPrompt.slice(0, 1000),
-    systemMessageLength: systemMessage.length,
-    tools: filteredTools.map((t) => (t as { name?: string }).name ?? "?"),
-  });
-
-  // 4. Run via the low-level runSession primitive.
-  //    Session-level policy (tool constraints, notebook context, agent prompt) is
-  //    passed via createSession({ systemMessage }); step-level instruction goes
-  //    as the sendAndWait prompt (T-HF04).
-  return runSession(
-    {
-      client,
-      tools: filteredTools,
-      customAgents: [],
-      hooks,
-      model: executorModel,
-      systemMessage,
-      timeoutMs: executorTimeoutMs,
+  return {
+    cdp,
+    page,
+    uiMap,
+    helpers: {
+      findElementByText,
+      dispatchClick,
+      dispatchPaste,
+      dispatchType,
+      captureScreenshot,
+      pollForAnswer,
+      waitForGone,
+      waitForVisible,
+      waitForEnabled,
+      waitForNavigation,
+      waitForCountChange,
+      ensureChatPanel,
+      ensureSourcePanel,
+      ensureHomepage,
     },
-    step.executorPrompt,
-  );
+  };
 }
 
 // ---------------------------------------------------------------------------
-// Dual Session: Orchestrator
+// Dual Session: Orchestrator (G2: Planner → Script → Recovery)
 // ---------------------------------------------------------------------------
 
 /**
- * Run the full dual-session flow: Planner → Executor(s) → aggregate result.
+ * Run the full G2 flow: Planner → Script(s) → Recovery-on-fail → aggregate result.
+ *
+ * Happy path: Planner → deterministic script → done (0 LLM for execution).
+ * Failure:    Script fails → Recovery LLM session completes + analyzes + patches.
  *
  * This is the main entry point called by the Scheduler's `runTask`.
  */
@@ -544,7 +479,6 @@ export async function runDualSession(
     // 1. Planner: parse intent → ExecutionPlan or rejection.
     const plannerResult = await runPlannerSession(options, prompt);
 
-    // 1a. If Planner rejected the input, return early with rejection metadata.
     if (plannerResult.kind === "rejected") {
       const durationMs = Date.now() - startTime;
       log.info("Planner rejected input", {
@@ -562,33 +496,84 @@ export async function runDualSession(
     }
 
     const plan = plannerResult.plan;
+    const ctx = buildScriptContext(options);
 
-    // 2. Executor: run each step sequentially.
-    const stepResults: SessionResult[] = [];
+    // 2. Execute each step: Script → (fail? Recovery) → continue.
+    const stepResults: Array<{ result?: unknown }> = [];
     for (const [i, step] of plan.steps.entries()) {
       log.info("Executing step", {
         stepIndex: i + 1,
         totalSteps: plan.steps.length,
-        agentName: step.agentName,
+        operation: step.operation,
       });
 
-      const stepResult = await runExecutorSession(options, step);
-      stepResults.push(stepResult);
+      // 2a. Run deterministic script (0 LLM cost).
+      const scriptResult = await runScript(step.operation, step.params, ctx);
 
-      // If a step fails, stop and propagate the error.
-      if (!stepResult.success) {
-        const durationMs = Date.now() - startTime;
-        log.error("Executor step failed", {
-          stepIndex: i + 1,
-          agentName: step.agentName,
-          error: stepResult.error,
-        });
-        return {
-          success: false,
-          error: `Step ${i + 1}/${plan.steps.length} [${step.agentName}] failed: ${stepResult.error}`,
-          durationMs,
-        };
+      // Persist screenshot after each step (if taskId available).
+      if (options.taskId) {
+        try {
+          const ss = await ctx.helpers.captureScreenshot(ctx.cdp);
+          saveScreenshot(ss, options.taskId, `step${i + 1}_${step.operation}`);
+        } catch { /* non-critical */ }
       }
+
+      if (scriptResult.status === "success") {
+        log.info("Script succeeded", {
+          stepIndex: i + 1,
+          operation: step.operation,
+          totalMs: scriptResult.totalMs,
+        });
+        stepResults.push({ result: scriptResult.result });
+        continue;
+      }
+
+      // 2b. Script failed → Recovery session.
+      log.warn("Script failed, starting Recovery", {
+        stepIndex: i + 1,
+        operation: step.operation,
+        failedAtStep: scriptResult.failedAtStep,
+        failedSelector: scriptResult.failedSelector,
+      });
+
+      const goal = `Operation: ${step.operation}, Params: ${JSON.stringify(step.params)}`;
+      const recoveryResult = await runRecoverySession({
+        client: options.client,
+        cdp: ctx.cdp,
+        page: ctx.page,
+        scriptResult,
+        goal,
+      });
+
+      // Always save repair log (for learning + UIMap patching).
+      try {
+        saveRepairLog(scriptResult, options.uiMap, recoveryResult);
+      } catch { /* non-critical */ }
+
+      if (recoveryResult.success) {
+        log.info("Recovery succeeded", {
+          stepIndex: i + 1,
+          operation: step.operation,
+          toolCalls: recoveryResult.toolCalls,
+          durationMs: recoveryResult.durationMs,
+        });
+        stepResults.push({ result: recoveryResult.result });
+        continue;
+      }
+
+      // 2c. Recovery also failed → propagate error.
+      const durationMs = Date.now() - startTime;
+      log.error("Recovery failed", {
+        stepIndex: i + 1,
+        operation: step.operation,
+        error: recoveryResult.analysis ?? "No analysis",
+      });
+      return {
+        success: false,
+        error: `Step ${i + 1}/${plan.steps.length} [${step.operation}] failed: script error at step ${scriptResult.failedAtStep} (${scriptResult.failedSelector}), recovery also failed`,
+        errorScreenshot: recoveryResult.finalScreenshot ?? undefined,
+        durationMs,
+      };
     }
 
     // 3. Aggregate results.

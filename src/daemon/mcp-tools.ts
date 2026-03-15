@@ -16,7 +16,7 @@ import type { Scheduler } from "./scheduler.js";
 import type { StateManager } from "../state/state-manager.js";
 import type { NetworkGate } from "../network-gate/network-gate.js";
 import type { TaskStore } from "../state/task-store.js";
-import type { DaemonStatusResult, AgentConfig } from "../shared/types.js";
+import type { DaemonStatusResult } from "../shared/types.js";
 import { MAX_TABS, NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
 
 // ---------------------------------------------------------------------------
@@ -29,7 +29,6 @@ export interface ToolRegistrationDeps {
   stateManager: StateManager;
   networkGate: NetworkGate;
   taskStore: TaskStore;
-  agentConfigs?: AgentConfig[];
   googleSession?: { valid: boolean };
 }
 
@@ -289,46 +288,34 @@ function registerReauth(
 }
 
 // ---------------------------------------------------------------------------
-// T100: list_agents
+// T100: list_agents → list_operations (G2: script-first)
 // ---------------------------------------------------------------------------
 
 function registerListAgents(
   server: NbctlMcpServer,
-  deps: ToolRegistrationDeps,
+  _deps: ToolRegistrationDeps,
 ): void {
   server.registerTool(
     "list_agents",
     {
       description:
-        "List all available agent configurations with their names, descriptions, " +
-        "available tools, and parameters. Useful for discovering what operations " +
+        "List all available scripted operations with their names, descriptions, " +
+        "and parameters. Useful for discovering what operations " +
         "can be performed via the exec tool.",
       annotations: {
         readOnlyHint: true,
       },
     },
     async () => {
-      const configs = deps.agentConfigs ?? [];
-
-      const agents = configs.map((config) => ({
-        name: config.name,
-        displayName: config.displayName,
-        description: config.description,
-        tools: config.tools,
-        startPage: config.startPage,
-        parameters: Object.fromEntries(
-          Object.entries(config.parameters).map(([key, param]) => [
-            key,
-            { type: param.type, description: param.description },
-          ]),
-        ),
-      }));
+      const { getAvailableOperations, buildScriptCatalog } = await import("../scripts/index.js");
+      const operations = getAvailableOperations();
+      const catalog = buildScriptCatalog();
 
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(agents),
+            text: JSON.stringify({ operations, catalog }),
           },
         ],
       };

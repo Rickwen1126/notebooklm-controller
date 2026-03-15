@@ -30,13 +30,15 @@
 - ✅ Copilot SDK `defineTool` 不支援 `z.record()` — 用展開的 optional fields
 - ~~NotebookLM UI 改了三欄→tab~~ — **誤判，是 viewport 800x600 觸發 mobile view**
 
-**State**: Branch `001-mvp` at `9569066`。642 unit tests ✅。Spike 全驗證通過：happy path 11/12, recovery 9/10, planner 10/10。
+**State**: Branch `001-mvp`（未 commit）。678 unit tests ✅ (44 files)。0 lint errors。
 
 **Next**:
-- [ ] spike → main 整合（scripts + wait primitives + recovery + planner port 到 `src/`）
+- [ ] Commit all G2 changes（一個大 commit 或分 chunk commit）
+- [ ] Task 13: Acceptance testing — real daemon + Chrome 驗收 S01-S12 + Recovery + Planner NL
 - [ ] 發布架構實作（`~/.nbctl/` 動態載入 + install 腳本）
 - [ ] Content pipeline（crawl4AI / PDF / repo 分段）
 - [ ] generateAudio + downloadAudio（特殊案例）
+- [ ] 移除 `agents/*.md`（10 files，已不被引用）
 
 **User Notes**:
 - Viewport 800x600 陷阱已撞多次，`Emulation.setDeviceMetricsOverride` 是正解 — 記到 memory
@@ -44,3 +46,26 @@
 - 用戶要求視覺+DOM 排查不要推論 — 發現是 viewport 問題不是 Google 改 UI
 - Copilot SDK 不支援 `z.record()` — 需要記住，production 也不能用
 - S12 是 test harness 問題（notebook 排序），production 有 Planner 指定 notebook 不會有此問題
+
+---
+
+## 2026-03-15 16:41 — G2 Script-first Integration (Chunks 1-5 完成)
+
+**Goal**: 將 spike 的 Script-first + Recovery 架構整合到主線 `src/`
+
+**Done**:
+- T1-T6 (Chunks 1-3): 新增 `src/scripts/` 模組 — types, find-element, wait-primitives, ensure, operations, index
+- T7: 10 scripted operations (query, addSource, listSources, removeSource, renameSource, clearChat, listNotebooks, createNotebook, renameNotebook, deleteNotebook) + runScript dispatcher + buildScriptCatalog
+- T8: `src/agent/recovery-session.ts` — GPT-5-mini Recovery session (browser tools + submitResult + 10-call limit)
+- T9: `src/agent/repair-log.ts` — saveRepairLog + saveScreenshot + cleanupScreenshots
+- T10 (Big Switch): `session-runner.ts` 完全改寫 — Planner → Script → Recovery 流程。submitPlan schema 改為 `{ operation, params }`。刪除 `runExecutorSession`。32 tests rewritten。
+- T11: `daemon/index.ts` — 傳 cdpSession+page+uiMap 給 runDualSession。加 viewport override (1440x900)。移除 agentConfigs 依賴。
+- T12: Dead code removal — EXECUTOR_MODEL → RECOVERY_MODEL, mcp-tools list_agents 改用 script catalog
+
+**Decisions**:
+- ExecutionStep 直接改 schema（`{ operation, params }`），不新增 ScriptStep
+- DualSessionOptions 加 cdpSession/page/uiMap，移除 agentConfigs/executorModel/tabUrl
+- `agents/*.md` 尚未刪除（仍在 repo 但不被引用，留給用戶確認後刪除）
+- `waitForContent` browser tool 保留（Recovery agent 可能用到，非急）
+
+**State**: Branch `001-mvp`（未 commit）。678 tests ✅ across 44 files。0 lint errors。Plan Chunks 1-5 完成，Chunk 6 (acceptance testing) 待用戶驗收。

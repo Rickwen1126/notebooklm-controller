@@ -254,12 +254,8 @@ vi.mock("node:fs", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Mock: agent-loader (loadAllAgentConfigs)
+// Mock: agent-loader (no longer used by daemon, but mock to prevent import errors)
 // ---------------------------------------------------------------------------
-
-vi.mock("../../../src/agent/agent-loader.js", () => ({
-  loadAllAgentConfigs: vi.fn().mockResolvedValue([]),
-}));
 
 // ---------------------------------------------------------------------------
 // Mock: session-runner (runDualSession)
@@ -337,7 +333,7 @@ describe("Daemon entry point", () => {
       expect(runtime).toHaveProperty("cacheManager");
       expect(runtime).toHaveProperty("notifier");
       expect(runtime).toHaveProperty("networkGate");
-      expect(runtime).toHaveProperty("agentConfigs");
+      // agentConfigs removed in G2 — scripts replace agent configs
       expect(runtime).toHaveProperty("locale");
       expect(runtime).toHaveProperty("uiMap");
 

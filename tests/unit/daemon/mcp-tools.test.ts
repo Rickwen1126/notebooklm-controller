@@ -225,60 +225,18 @@ describe("registerDaemonTools", () => {
   // -----------------------------------------------------------------------
 
   describe("list_agents", () => {
-    it("returns empty array when no agent configs provided", async () => {
+    it("returns operations and catalog from script registry", async () => {
       const handler = server.getHandler("list_agents");
       const result = await handler({}) as { content: Array<{ text: string }> };
 
       const parsed = JSON.parse(result.content[0].text);
-      expect(parsed).toEqual([]);
-    });
-
-    it("returns agent configs with name, description, tools, and parameters", async () => {
-      // Re-create server with agent configs in deps
-      server = createMockServer();
-      deps = createMockDeps({
-        agentConfigs: [
-          {
-            name: "add-source",
-            displayName: "Add Source",
-            description: "Add content to a NotebookLM notebook as a source",
-            tools: ["find", "click", "paste", "type", "read", "wait", "screenshot"],
-            prompt: "test prompt",
-            infer: true,
-            startPage: "notebook",
-            parameters: {
-              sourceType: { type: "string", description: "Source type: text | url | repo | pdf", default: "text" },
-              sourceContent: { type: "string", description: "Content to add", default: "" },
-            },
-          },
-          {
-            name: "query",
-            displayName: "Query Notebook",
-            description: "Ask a question to NotebookLM",
-            tools: ["find", "click", "paste", "read", "wait", "screenshot"],
-            prompt: "test prompt",
-            infer: true,
-            startPage: "notebook",
-            parameters: {
-              question: { type: "string", description: "The question to ask", default: "" },
-            },
-          },
-        ] as unknown as ToolRegistrationDeps["agentConfigs"],
-      });
-      registerDaemonTools(server as never, deps);
-
-      const handler = server.getHandler("list_agents");
-      const result = await handler({}) as { content: Array<{ text: string }> };
-
-      const parsed = JSON.parse(result.content[0].text);
-      expect(parsed).toHaveLength(2);
-      expect(parsed[0].name).toBe("add-source");
-      expect(parsed[0].displayName).toBe("Add Source");
-      expect(parsed[0].description).toContain("Add content");
-      expect(parsed[0].tools).toContain("find");
-      expect(parsed[0].startPage).toBe("notebook");
-      expect(parsed[0].parameters.sourceType.type).toBe("string");
-      expect(parsed[1].name).toBe("query");
+      expect(parsed.operations).toBeDefined();
+      expect(Array.isArray(parsed.operations)).toBe(true);
+      expect(parsed.operations.length).toBeGreaterThan(0);
+      expect(parsed.operations).toContain("query");
+      expect(parsed.operations).toContain("addSource");
+      expect(parsed.catalog).toBeDefined();
+      expect(typeof parsed.catalog).toBe("string");
     });
 
     it("has readOnlyHint annotation", () => {

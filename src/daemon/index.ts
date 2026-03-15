@@ -19,16 +19,14 @@ import { CacheManager } from "../state/cache-manager.js";
 import { Notifier } from "../notification/notifier.js";
 import { NetworkGate } from "../network-gate/network-gate.js";
 import { resolveLocale, loadUIMap } from "../shared/locale.js";
-import { loadAllAgentConfigs } from "../agent/agent-loader.js";
 import { runDualSession } from "../agent/session-runner.js";
 import { buildToolsForTab } from "../agent/tools/index.js";
-import { createSessionHooks } from "../agent/hooks.js";
-import { MCP_PORT, AGENTS_DIR_USER, AGENTS_DIR_BUNDLED, NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
+import { MCP_PORT, NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
 import { enforcePermissions } from "../shared/permissions.js";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, unlinkSync } from "node:fs";
-import type { UIMap, AgentConfig, AsyncTask, OperationActionType, OperationLogEntry } from "../shared/types.js";
+import type { UIMap, AsyncTask, OperationActionType, OperationLogEntry } from "../shared/types.js";
 import { TMP_DIR } from "../shared/config.js";
 
 // ---------------------------------------------------------------------------
@@ -45,7 +43,6 @@ export interface DaemonRuntime {
   cacheManager: CacheManager;
   notifier: Notifier;
   networkGate: NetworkGate;
-  agentConfigs: AgentConfig[];
   locale: string;
   uiMap: UIMap;
   /** Mutable Google session state — updated by startup check and reauth. */
@@ -62,8 +59,8 @@ interface RunTaskDeps {
   stateManager: StateManager;
   networkGate: NetworkGate;
   cacheManager: CacheManager;
-  agentConfigs: AgentConfig[];
   locale: string;
+  uiMap: UIMap;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +102,7 @@ function createRunTask(
   const log = logger.child({ module: "daemon:runTask" });
 
   return async (task: AsyncTask): Promise<SchedulerSessionResult> => {
-    const { copilotClient, tabManager, stateManager, networkGate, cacheManager, agentConfigs, locale } = deps;
+    const { copilotClient, tabManager, stateManager, networkGate, cacheManager, locale, uiMap } = deps;
     const startTime = Date.now();
 
     // 1. Resolve notebook URL from state (or homepage for __homepage__).
@@ -135,29 +132,29 @@ function createRunTask(
     }
 
     try {
-      // 3. Build tools for this tab.
+      // 3. Set viewport to 1440x900 — MUST use Emulation.setDeviceMetricsOverride
+      //    (not setViewport). 800x600 triggers mobile tab view.
+      await tabHandle.cdpSession.send("Emulation.setDeviceMetricsOverride", {
+        width: 1440, height: 900, deviceScaleFactor: 2, mobile: false,
+      });
+
+      // 4. Build tools for this tab (Recovery session uses these).
       const tools = buildToolsForTab(tabHandle, task.notebookAlias, {
         networkGate,
         cacheManager,
       });
 
-      // 4. Create session hooks.
-      const hooks = createSessionHooks({
-        networkGate,
-        taskId: task.taskId,
-        notebookAlias: task.notebookAlias,
-      });
-
-      // 5. Run dual session with canonical notebook context.
+      // 5. Run dual session: Planner → Script → Recovery-on-fail.
       const result = await runDualSession(
         {
           client: copilotClient,
           tools,
-          agentConfigs,
-          hooks,
+          cdpSession: tabHandle.cdpSession,
+          page: tabHandle.page,
+          uiMap,
           locale,
           notebookAlias: task.notebookAlias,
-          tabUrl: tabHandle.page.url(),
+          taskId: task.taskId,
         },
         task.command,
       );
@@ -310,34 +307,23 @@ export async function startDaemon(options?: {
   log.info("Starting Copilot CLI client...");
   await copilotClient.start();
 
-  // 5. Load agent configs
-  const agentsDir = existsSync(AGENTS_DIR_USER)
-    ? AGENTS_DIR_USER
-    : AGENTS_DIR_BUNDLED;
-  const agentConfigs = await loadAllAgentConfigs(agentsDir, locale);
-  log.info("Agent configs loaded", {
-    dir: agentsDir,
-    count: agentConfigs.length,
-    agents: agentConfigs.map((c) => c.name),
-  });
-
-  // 6. Create MCP Server
+  // 5. Create MCP Server
   const mcpServer = new NbctlMcpServer();
 
-  // 7. Create Scheduler with dual-session runTask wiring
+  // 6. Create Scheduler with G2 script-first runTask wiring
   const scheduler = new Scheduler({
     taskStore,
     runTask: createRunTask({
       copilotClient, tabManager, stateManager, networkGate, cacheManager,
-      agentConfigs, locale,
+      locale, uiMap,
     }),
     onTaskComplete: (task) => notifier.notify(task),
   });
 
-  // 8. Register MCP tools
+  // 7. Register MCP tools
   registerDaemonTools(mcpServer, {
     tabManager, scheduler, stateManager, networkGate, taskStore,
-    agentConfigs, googleSession,
+    googleSession,
   });
   registerNotebookTools(mcpServer, {
     stateManager, tabManager, cacheManager, scheduler, taskStore,
@@ -376,7 +362,6 @@ export async function startDaemon(options?: {
     cacheManager,
     notifier,
     networkGate,
-    agentConfigs,
     locale,
     uiMap,
     googleSession,
