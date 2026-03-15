@@ -139,6 +139,15 @@ function createRunTask(
         width: 1920, height: 1080, deviceScaleFactor: 2, mobile: false,
       });
 
+      // 3.5. Ensure tab is on the correct page (tab pool reuse may leave
+      //      tab on a different URL, e.g. homepage after S12 deleteNotebook).
+      const currentUrl = tabHandle.page.url();
+      if (!isHomepage && !currentUrl.startsWith(targetUrl)) {
+        await tabHandle.page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+        await new Promise((r) => setTimeout(r, 2000));
+        log.info("Tab navigated to correct URL", { from: currentUrl.slice(0, 60), to: targetUrl.slice(0, 60) });
+      }
+
       // 4. Build tools for this tab (Recovery session uses these).
       const tools = buildToolsForTab(tabHandle, task.notebookAlias, {
         networkGate,
