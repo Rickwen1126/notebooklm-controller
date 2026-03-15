@@ -97,23 +97,25 @@
 - Real test 全部重跑：S01-S12 ✅, Phase 4 ✅ (S12 後 query 也 pass), Phase 5-6 ✅
 
 **Done (continued)**:
-- Content pipeline 整合完成：`src/scripts/index.ts` preprocessAddSource + submitPlan fields
-- Real test CP02 (URL source: Wikipedia TypeScript) ✅, CP04 (plain text regression) ✅
-- Content size limit 500K → 5M chars（三個 converter 都改了）
-- 686 tests pass (8 new for content pipeline)
+- Content pipeline 整合 + auto-split chunking 完成
+- Converter limit 移除（不再 throw > 500K，由 dispatch 分段）
+- `splitIntoChunks(text, 100K)` — newline 邊界切割，每 chunk 間隔 3s
+- Chunk size 500K → 100K（500K paste 102s + hang，100K ~8s 穩定）
+- CP01 repo (1.9M → 20 chunks × 100K): ✅ 165s，20/20 全成功，ISO verified
+- CP02 URL (Wikipedia): ✅
+- CP04 plain text: ✅
+- ISO Browser 手動驗證：連續 2 次 addSource 沒有 state 殘留
+- 688 tests pass
 
 **Discoveries:**
-- CP01 repo source (1.9M chars): repomix 轉換成功 (1.8s) 但 paste 1.9M chars 到 textarea hang — 需要分段上傳
-- NotebookLM textarea 的 `Input.insertText` 大量文字 paste 可能 hang 或超時
+- 500K paste via `Input.insertText` 要 102s 且 Angular change detection 失敗（insert button disabled）
+- 100K paste ~8s 穩定可靠
+- NotebookLM file upload 用 `showOpenFilePicker()`（File System Access API），CDP 無法攔截
+- drag-and-drop upload 理論可行但 CDP 模擬複雜，暫不實作
+- Converter 不應拒絕大內容 — splitting 是 dispatch 層責任
 
-**State**: Branch `main` at `c65311a`。686 tests ✅。Content pipeline code done, real test partial (URL ✅, text ✅, repo hang, PDF untested)。
+**State**: Branch `main` at `dd213e4`。688 tests ✅。Content pipeline 完整：repo ✅, URL ✅, text ✅, PDF untested (code ready)。
 
 **Next**:
-- [ ] 自動分段上傳：內容 > N chars 自動切 chunk，分批 paste 成多個來源，命名 `{name} (part 1/3)`
-- [ ] CP01 repo source 驗證（分段後）
-- [ ] CP03 PDF source 驗證
-
-**User Notes**:
-- 用戶要求 500K → 5MB 解放限制
-- 用戶要求自動分段上傳：超過上限自動切成多個來源，分批 paste，妥善命名（e.g. 15MB → 3 個 5MB parts）
-- 分段適用於 repo/URL/PDF 所有類型
+- [ ] CP03 PDF source 驗證（需要測試用 PDF）
+- [ ] Source 自動命名（`{name} (part 1/20)` 格式，目前都叫「貼上的文字」）
