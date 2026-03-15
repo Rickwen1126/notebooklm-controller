@@ -128,7 +128,7 @@ TypeScript 5.x, Node.js 22 LTS, @github/copilot-sdk, puppeteer-core (CDP), @mode
 
 ## Roadmap
 
-- **Self-repair CLI** (`nbctl repair`) — Recovery Agent 失敗時產生 repair log（問題分析 + suggestedPatch）。CLI 工具讀取 log，自動修補 script 並替換 happy path。可行因為 script 用 ctx injection 零依賴設計，可直接熱替換。刻意不做成 MCP tool — 修改 happy path script 必須 human-in-the-loop。
+**Self-repair CLI** (`nbctl repair`) — When Recovery Agent fails, it produces a repair log with root cause analysis and a `suggestedPatch`. The CLI reads these logs and auto-patches the failing script, hot-swapping the happy path. Feasible because scripts use ctx injection (zero imports) and can be replaced at runtime. Intentionally not an MCP tool — modifying happy path scripts requires human-in-the-loop.
 
 ## License
 
