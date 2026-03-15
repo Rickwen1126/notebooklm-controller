@@ -260,9 +260,11 @@ export async function startDaemon(options?: {
   let locale = "en";
   let uiMap: UIMap;
   try {
-    const tempPage = await tabManager.openTab("__locale-detect__", "about:blank");
-    const browserLang = await tempPage.page.evaluate(() => navigator.language) as string;
-    await tabManager.closeTab(tempPage.tabId);
+    const browserLang = await tabManager.withTempTab(
+      "__locale-detect__",
+      "about:blank",
+      async (tab) => await tab.page.evaluate(() => navigator.language) as string,
+    );
     locale = resolveLocale(browserLang);
     log.info("Chrome locale detected", { browserLang, resolvedLocale: locale });
   } catch (err) {

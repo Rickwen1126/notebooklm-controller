@@ -214,14 +214,15 @@ function registerReauth(
       // can see the login page (or confirm they're already logged in).
       if (!targetHeadless) {
         try {
-          const tab = await deps.tabManager.openTab(
+          const currentUrl = await deps.tabManager.withTempTab(
             "__reauth__",
             NOTEBOOKLM_HOMEPAGE,
+            async (tab) => {
+              // Brief wait for page to settle (redirects, login check).
+              await new Promise((resolve) => setTimeout(resolve, 3_000));
+              return tab.page.url();
+            },
           );
-          // Brief wait for page to settle (redirects, login check).
-          await new Promise((resolve) => setTimeout(resolve, 3_000));
-          const currentUrl = tab.page.url();
-          await deps.tabManager.closeTab(tab.tabId);
 
           const isLoggedIn =
             currentUrl.startsWith(NOTEBOOKLM_HOMEPAGE) &&

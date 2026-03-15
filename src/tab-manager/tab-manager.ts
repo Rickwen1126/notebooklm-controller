@@ -219,6 +219,24 @@ export class TabManager extends EventEmitter {
   }
 
   /**
+   * Open a temporary tab, run a callback, and guarantee cleanup.
+   * For system-level operations (locale detect, session check, reauth)
+   * that need a short-lived tab outside the pool lifecycle.
+   */
+  async withTempTab<T>(
+    alias: string,
+    url: string,
+    fn: (tab: TabHandle) => Promise<T>,
+  ): Promise<T> {
+    const tab = await this.openTab(alias, url);
+    try {
+      return await fn(tab);
+    } finally {
+      await this.closeTab(tab.tabId);
+    }
+  }
+
+  /**
    * Release a tab back to the pool (mark idle, keep open for reuse).
    */
   async releaseTab(tabId: string): Promise<void> {

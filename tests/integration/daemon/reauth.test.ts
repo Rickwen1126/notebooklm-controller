@@ -73,15 +73,23 @@ function createMockDeps(
   overrides?: Partial<ToolRegistrationDeps>,
 ): ToolRegistrationDeps {
   return {
-    tabManager: {
-      listTabs: vi.fn().mockReturnValue([]),
-      switchMode: vi.fn().mockResolvedValue(undefined),
-      openTab: vi.fn().mockResolvedValue({
+    tabManager: (() => {
+      const openTab = vi.fn().mockResolvedValue({
         tabId: "mock-tab",
         page: { url: () => "https://notebooklm.google.com/" },
-      }),
-      closeTab: vi.fn().mockResolvedValue(undefined),
-    } as unknown as ToolRegistrationDeps["tabManager"],
+      });
+      const closeTab = vi.fn().mockResolvedValue(undefined);
+      return {
+        listTabs: vi.fn().mockReturnValue([]),
+        switchMode: vi.fn().mockResolvedValue(undefined),
+        openTab,
+        closeTab,
+        withTempTab: vi.fn(async (_alias: string, _url: string, fn: (tab: any) => Promise<any>) => {
+          const tab = await openTab(_alias, _url);
+          try { return await fn(tab); } finally { await closeTab(tab.tabId); }
+        }),
+      };
+    })() as unknown as ToolRegistrationDeps["tabManager"],
     scheduler: {
       getQueueSize: vi.fn().mockReturnValue(0),
     } as unknown as ToolRegistrationDeps["scheduler"],

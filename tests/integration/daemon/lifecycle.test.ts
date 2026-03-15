@@ -35,6 +35,10 @@ const mockTabManagerInstance = {
   launch: vi.fn().mockResolvedValue(undefined),
   openTab: vi.fn(),
   closeTab: vi.fn().mockResolvedValue(undefined),
+  withTempTab: vi.fn(async (_alias: string, _url: string, fn: (tab: any) => Promise<any>) => {
+    const tab = await mockTabManagerInstance.openTab(_alias, _url);
+    try { return await fn(tab); } finally { await mockTabManagerInstance.closeTab(tab.tabId); }
+  }),
   shutdown: vi.fn().mockResolvedValue(undefined),
   isConnected: vi.fn().mockReturnValue(true),
   listTabs: vi.fn().mockReturnValue([]),

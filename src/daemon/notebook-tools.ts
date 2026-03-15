@@ -188,53 +188,65 @@ function registerCreateNotebook(
 
         // 2. Extract notebook URL by clicking into it from the homepage.
         //    The click may open a new tab (target=_blank) — handle both cases.
+        //    Uses acquireTab/releaseTab so this tab participates in the pool.
         log.info("Extracting notebook URL: navigate into notebook from homepage");
 
-        const tab = await deps.tabManager.openTab("__create-extract__", NOTEBOOKLM_HOMEPAGE);
-        await new Promise((resolve) => setTimeout(resolve, 4_000));
-
-        // Track pages before click so we can detect new tabs
-        const browser = tab.page.browser();
-        const pagesBefore = await browser.pages();
-
-        // Click on the notebook row matching the title (or first row if title not found)
-        const clicked = await tab.page.evaluate((searchTitle: string) => {
-          const rows = document.querySelectorAll("tr[tabindex], [role='row'], a[href*='/notebook/']");
-          for (const row of rows) {
-            if (row.textContent?.includes(searchTitle)) {
-              (row as HTMLElement).click();
-              return "title-match";
-            }
-          }
-          if (rows.length > 0) {
-            (rows[0] as HTMLElement).click();
-            return "first-row";
-          }
-          return null;
-        }, title);
-
-        if (!clicked) {
-          await deps.tabManager.closeTab(tab.tabId);
-          return errorResult("Could not find any notebook on the homepage to extract URL");
+        let tabHandle;
+        try {
+          tabHandle = await deps.tabManager.acquireTab({
+            notebookAlias: "__create-extract__",
+            url: NOTEBOOKLM_HOMEPAGE,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return errorResult(`Tab pool at capacity during URL extraction: ${msg}`);
         }
-
-        await new Promise((resolve) => setTimeout(resolve, 5_000));
-
-        // Check if a new tab was opened
-        const pagesAfter = await browser.pages();
-        const newPage = pagesAfter.find((p) => !pagesBefore.includes(p));
 
         let notebookUrl: string;
-        if (newPage && newPage.url().includes("/notebook/")) {
-          // New tab opened — get URL from it, close it
-          notebookUrl = newPage.url();
-          await newPage.close();
-        } else {
-          // Same-tab navigation
-          notebookUrl = tab.page.url();
-        }
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 4_000));
 
-        await deps.tabManager.closeTab(tab.tabId);
+          // Track pages before click so we can detect new tabs
+          const browser = tabHandle.page.browser();
+          const pagesBefore = await browser.pages();
+
+          // Click on the notebook row matching the title (or first row if title not found)
+          const clicked = await tabHandle.page.evaluate((searchTitle: string) => {
+            const rows = document.querySelectorAll("tr[tabindex], [role='row'], a[href*='/notebook/']");
+            for (const row of rows) {
+              if (row.textContent?.includes(searchTitle)) {
+                (row as HTMLElement).click();
+                return "title-match";
+              }
+            }
+            if (rows.length > 0) {
+              (rows[0] as HTMLElement).click();
+              return "first-row";
+            }
+            return null;
+          }, title);
+
+          if (!clicked) {
+            return errorResult("Could not find any notebook on the homepage to extract URL");
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 5_000));
+
+          // Check if a new tab was opened
+          const pagesAfter = await browser.pages();
+          const newPage = pagesAfter.find((p) => !pagesBefore.includes(p));
+
+          if (newPage && newPage.url().includes("/notebook/")) {
+            // New tab opened — get URL from it, close it
+            notebookUrl = newPage.url();
+            await newPage.close();
+          } else {
+            // Same-tab navigation
+            notebookUrl = tabHandle.page.url();
+          }
+        } finally {
+          await deps.tabManager.releaseTab(tabHandle.tabId);
+        }
 
         // Normalize: strip query params, hash, trailing slash
         notebookUrl = normalizeUrl(notebookUrl);
