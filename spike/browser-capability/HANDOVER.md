@@ -1218,3 +1218,30 @@ Production 需要一組 wait 原語，不是只有 `pollForAnswer`：
 | scriptedDeleteNotebook | 刪除筆記本 | dialog confirm + wait | ✅ 已寫 |
 | scriptedGenerateAudio | 生成語音摘要 | waitForGone("sync") | ❌ 待寫（5+ 分鐘，特殊） |
 | scriptedDownloadAudio | 下載音訊 | CDP download behavior | ❌ 待寫（需 TabManager 層） |
+
+### ⚠️ Viewport 陷阱（Finding #60，已撞多次）
+
+**800x600 viewport 會觸發 NotebookLM responsive mobile layout**（三欄 → tab 切換）。所有 script 都會壞。
+
+**三層 viewport 機制（重要，容易搞混）**：
+
+| 機制 | API | 改什麼 | 持久性 |
+|------|-----|--------|--------|
+| 物理視窗 | `Browser.setWindowBounds` | Chrome 視窗大小（含標題列） | 永久直到改回 |
+| Emulation override | `Emulation.setDeviceMetricsOverride` | **content area rendering 尺寸** | per-CDPSession |
+| puppeteer viewport | `page.setViewport()` | **底層也是 Emulation override** | **persistent！** 跨 session 殘留 |
+
+**正確做法**：`Emulation.setDeviceMetricsOverride`（per-CDPSession，不殘留）
+
+```typescript
+// connectToChrome 裡：
+const cdp = await page.createCDPSession();
+await cdp.send("Emulation.setDeviceMetricsOverride", {
+  width: 1440, height: 900, deviceScaleFactor: 2, mobile: false,
+});
+```
+
+**錯誤做法**：
+- `page.setViewport()` — 會留 persistent emulation，後續 connect 的 session 也被影響
+- `Browser.setWindowBounds` — 只改物理視窗邊框，不改 content area
+- `defaultViewport: null` — 只是不覆蓋，不保證尺寸

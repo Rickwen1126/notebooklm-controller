@@ -136,6 +136,15 @@ export async function connectToChrome(): Promise<{ browser: Browser; page: Page;
   const page = pages.find((p) => p.url().includes("notebooklm.google.com")) ?? pages[0];
   if (!page) throw new Error("No pages found in Chrome");
   const cdp = await page.createCDPSession();
+
+  // Ensure viewport is 1440x900 for 3-column layout.
+  // 800x600 triggers responsive mobile view (tabs instead of columns).
+  // Must use Emulation.setDeviceMetricsOverride — Browser.setWindowBounds only
+  // changes physical window frame, not content area. This override is per-CDPSession.
+  await cdp.send("Emulation.setDeviceMetricsOverride", {
+    width: 1440, height: 900, deviceScaleFactor: 2, mobile: false,
+  });
+
   return { browser, page, cdp };
 }
 
