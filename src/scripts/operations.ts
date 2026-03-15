@@ -85,17 +85,16 @@ async function openSourceMenu(
   await helpers.dispatchClick(cdp, sourceMenus[0].x, sourceMenus[0].y);
 
   // Wait for menu to render — menu items are plain BUTTONs, not [role=menuitem].
-  // Wait for known menu item text to appear instead of CSS selector.
   let menuRendered = false;
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 15; i++) {
     await new Promise((r) => setTimeout(r, 300));
     const item = await helpers.findElementByText(page, "移除來源");
     if (item) { menuRendered = true; break; }
   }
-  log.push(createLogEntry(stepNum, "click_source_menu", menuRendered ? "ok" : "warn",
-    `Clicked menu at (${sourceMenus[0].x}, ${sourceMenus[0].y}), menu ${menuRendered ? "rendered" : "not detected"}`, clickStart));
+  log.push(createLogEntry(stepNum, "click_source_menu", menuRendered ? "ok" : "fail",
+    `Clicked menu at (${sourceMenus[0].x}, ${sourceMenus[0].y}), menu ${menuRendered ? "rendered" : "not detected (4.5s)"}`, clickStart));
 
-  return { ok: true, stepNum };
+  return { ok: menuRendered, stepNum };
 }
 
 // =============================================================================
@@ -135,17 +134,22 @@ async function openNotebookMenu(
   await helpers.dispatchClick(cdp, menuIcons[0].x, menuIcons[0].y);
 
   // Wait for menu to render — items are plain BUTTONs, not [role=menuitem].
-  // Wait for known menu item text ("刪除" or "編輯標題") to appear.
   let menuRendered = false;
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 15; i++) {
     await new Promise((r) => setTimeout(r, 300));
     const item = await helpers.findElementByText(page, "刪除");
-    if (item) { menuRendered = true; break; }
+    if (!item) {
+      // Also try "編輯標題" as alternate indicator
+      const alt = await helpers.findElementByText(page, "編輯標題");
+      if (alt) { menuRendered = true; break; }
+    } else {
+      menuRendered = true; break;
+    }
   }
-  log.push(createLogEntry(stepNum, "click_notebook_menu", menuRendered ? "ok" : "warn",
-    `Clicked menu at (${menuIcons[0].x}, ${menuIcons[0].y}), menu ${menuRendered ? "rendered" : "not detected"}`, stepStart));
+  log.push(createLogEntry(stepNum, "click_notebook_menu", menuRendered ? "ok" : "fail",
+    `Clicked menu at (${menuIcons[0].x}, ${menuIcons[0].y}), menu ${menuRendered ? "rendered" : "not detected (4.5s)"}`, stepStart));
 
-  return { ok: true, stepNum };
+  return { ok: menuRendered, stepNum };
 }
 
 // =============================================================================
