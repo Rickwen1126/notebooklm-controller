@@ -817,28 +817,26 @@ export async function scriptedRenameNotebook(
     log.push(createLogEntry(stepNum, "wait_dialog", dialogReady.visible ? "ok" : "warn",
       dialogReady.visible ? `Dialog ready in ${dialogReady.elapsedMs}ms` : "Dialog not detected, retried", stepStart));
 
-    // Find input in dialog + select all + paste new name
+    // Find input in dialog, focus via JS (not CDP click — headless may not focus),
+    // select all, clear, then paste new name.
     stepNum++;
     stepStart = Date.now();
-    // Wait for input to appear inside dialog, then find it
     await helpers.waitForVisible(page, '[role=dialog] input, mat-dialog-container input, [role=dialog] textarea, .cdk-overlay-pane input', { timeoutMs: 5000 });
-    const inputPos = await page.evaluate(`(() => {
-      const inputs = document.querySelectorAll('input[type="text"], input:not([type]), textarea, [contenteditable="true"]');
-      for (const el of inputs) {
-        const r = el.getBoundingClientRect();
-        if (r.width === 0 || r.height === 0) continue;
-        const s = getComputedStyle(el);
-        if (s.display === 'none' || s.visibility === 'hidden') continue;
-        return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
+    const inputReady = await page.evaluate(`(() => {
+      const sels = ['[role=dialog] input', 'mat-dialog-container input', '.cdk-overlay-pane input', 'input:not([type])', 'input[type="text"]'];
+      for (const sel of sels) {
+        const el = document.querySelector(sel);
+        if (el && el.getBoundingClientRect().width > 0) {
+          el.focus();
+          el.select();
+          return true;
+        }
       }
-      return null;
-    })()`) as { x: number; y: number } | null;
-    if (!inputPos) return fail(stepNum, "find_dialog_input", `No input/textarea in dialog`, "dialog_input");
-    await helpers.dispatchClick(cdp, inputPos.x, inputPos.y);
-    await new Promise((r) => setTimeout(r, 200));
-    await helpers.dispatchType(cdp, page, "Ctrl+A");
+      return false;
+    })()`) as boolean;
+    if (!inputReady) return fail(stepNum, "find_dialog_input", `No input in dialog or focus failed`, "dialog_input");
     await helpers.dispatchPaste(cdp, newName);
-    log.push(createLogEntry(stepNum, "type_new_name", "ok", `Typed "${newName}"`, stepStart));
+    log.push(createLogEntry(stepNum, "type_new_name", "ok", `Focused + pasted "${newName}"`, stepStart));
 
     // Find and click save — wait for it to be enabled
     stepNum++;
