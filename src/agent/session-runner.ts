@@ -23,7 +23,7 @@ import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import type { CopilotClientSingleton } from "./client.js";
 import { buildPlannerCatalog } from "./agent-loader.js";
-import { DEFAULT_SESSION_TIMEOUT_MS, DEFAULT_AGENT_MODEL, NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
+import { DEFAULT_SESSION_TIMEOUT_MS, PLANNER_MODEL, EXECUTOR_MODEL, DEFAULT_AGENT_MODEL, NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
 import type { AgentConfig, ExecutionPlan, ExecutionStep } from "../shared/types.js";
 
@@ -262,7 +262,7 @@ export async function runPlannerSession(
     client,
     agentConfigs,
     locale,
-    plannerModel = DEFAULT_AGENT_MODEL,
+    plannerModel = PLANNER_MODEL,
     plannerTimeoutMs = PLANNER_TIMEOUT_MS,
   } = options;
 
@@ -427,7 +427,7 @@ export async function runExecutorSession(
     tools: allTools,
     agentConfigs,
     hooks,
-    executorModel = DEFAULT_AGENT_MODEL,
+    executorModel = EXECUTOR_MODEL,
     executorTimeoutMs = DEFAULT_SESSION_TIMEOUT_MS,
   } = options;
 

@@ -125,4 +125,6 @@ export const CIRCUIT_BREAKER_THRESHOLD = 3 as const;
 // Agent model
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_AGENT_MODEL = "gpt-5-mini" as const;
+export const PLANNER_MODEL = "gpt-4.1" as const;
+export const EXECUTOR_MODEL = "gpt-5-mini" as const;
+export const DEFAULT_AGENT_MODEL = EXECUTOR_MODEL;
