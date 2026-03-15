@@ -62,10 +62,43 @@
 - T11: `daemon/index.ts` — 傳 cdpSession+page+uiMap 給 runDualSession。加 viewport override (1440x900)。移除 agentConfigs 依賴。
 - T12: Dead code removal — EXECUTOR_MODEL → RECOVERY_MODEL, mcp-tools list_agents 改用 script catalog
 
-**Decisions**:
-- ExecutionStep 直接改 schema（`{ operation, params }`），不新增 ScriptStep
-- DualSessionOptions 加 cdpSession/page/uiMap，移除 agentConfigs/executorModel/tabUrl
-- `agents/*.md` 尚未刪除（仍在 repo 但不被引用，留給用戶確認後刪除）
-- `waitForContent` browser tool 保留（Recovery agent 可能用到，非急）
+**Done (continued)**:
+- 13 commits on `001-mvp` (d6fe180..e0ea444)
+- NetworkGate per-operation acquirePermit
+- `/test-real` skill 更新：8 phases + ISO Browser 獨立 DOM 驗證
+- `z.record()` runtime crash 修復 → expanded optional fields
+- Viewport 1440→1920（homepage list view more_vert 在 x=1507 超出 1440px）
+- openSourceMenu / openNotebookMenu: `ok:false` when menu 沒 render + waitForVisible 取代 hardcode sleep
+- renameNotebook: find+click atomic（menu 會因 focus loss 自動關閉）
+- Real test 迭代到 11/12 pass（S11 renameNotebook script false positive 待修）
 
-**State**: Branch `001-mvp`（未 commit）。678 tests ✅ across 44 files。0 lint errors。Plan Chunks 1-5 完成，Chunk 6 (acceptance testing) 待用戶驗收。
+**Decisions**:
+- submitPlan 不能用 `z.record()` → expanded optional fields（Copilot SDK `_zod` error）
+- ISO Browser 獨立驗證 = 標準驗收方式
+- Viewport 1920x1080（homepage list 需要 > 1500px 寬）
+- Menu 等待用 waitForVisible/waitForEnabled，不用 hardcode sleep loop
+- Menu item find+click 必須 atomic（不分兩步，避免 focus loss 關 menu）
+
+**Done (continued)**:
+- S11 renameNotebook false positive 根因：`findElementByText("儲存")` match 到 notebook 名稱「儲存庫操作」(y=3828) 在 dialog save button (y=595) 之前 → dialog 內搜尋修復
+- Angular Material input 需要 native value setter + dispatchEvent('input')，CDP `Input.insertText` 不觸發 change detection
+- **所有 dialog button 搜尋 scope 到 overlay container**：insert, remove confirm, save, delete confirm（5 處）
+- CLAUDE.md 更新：viewport contract, SDK z.record 限制, dialog scope 規則, G2 架構
+
+**State**: Branch `001-mvp` at `47181d1`。678 tests ✅。**MVP 開發完成。**
+
+**ALL PHASES PASS (8/8):**
+```
+Phase 0: Pre-flight                ✅
+Phase 1: Notebook Mgmt             ✅
+Phase 2: All-Ops S01-S12           ✅ 12/12 + ISO verified
+Phase 3: Recovery                  ✅ (corrupt → recovery → repair log + patch)
+Phase 4: Planner NL                ✅ 3/3 (single + multi + reject)
+Phase 5: Async                     ✅ (submit + poll)
+Phase 6: Error Handling            ✅ 2/2
+Phase 7: Multi-Notebook Concurrent ✅ (2 notebooks parallel, tab pool + scheduler OK)
+```
+
+**Next**:
+- [ ] Cleanup: 移除 `agents/*.md`，commit
+- [ ] 考慮 merge 001-mvp → main

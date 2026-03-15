@@ -183,7 +183,7 @@ export interface AgentParameter {
   default: string | number | boolean;
 }
 
-/** Agent configuration loaded from agents/*.md YAML frontmatter + Markdown prompt body. */
+/** Agent configuration (legacy — G2 uses scripts instead). */
 export interface AgentConfig {
   name: string;
   displayName: string;
