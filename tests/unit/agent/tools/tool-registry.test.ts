@@ -79,7 +79,7 @@ function createMockCacheManager() {
 // ---------------------------------------------------------------------------
 
 /** Browser tools: screenshot, click, type, scroll, paste, find, read, navigate, wait */
-const BROWSER_TOOL_NAMES = ["screenshot", "click", "type", "scroll", "paste", "find", "read", "navigate", "wait"];
+const BROWSER_TOOL_NAMES = ["screenshot", "click", "type", "scroll", "paste", "find", "read", "navigate", "wait", "waitForContent"];
 
 /** State tools: reportRateLimit, updateCache, writeFile */
 const STATE_TOOL_NAMES = ["reportRateLimit", "updateCache", "writeFile"];
@@ -146,7 +146,7 @@ describe("tool-registry (buildToolsForTab)", () => {
     }
   });
 
-  it("tools count matches expected total (9 browser + 3 state = 12)", () => {
+  it("tools count matches expected total (10 browser + 3 state + 3 content = 16)", () => {
     const tabHandle = createMockTabHandle();
     const tools = buildToolsForTab(tabHandle, "my-notebook", {
       networkGate: createMockNetworkGate() as any,
@@ -154,7 +154,7 @@ describe("tool-registry (buildToolsForTab)", () => {
     });
 
     expect(tools).toHaveLength(BROWSER_TOOL_NAMES.length + STATE_TOOL_NAMES.length + CONTENT_TOOL_NAMES.length);
-    expect(tools).toHaveLength(15);
+    expect(tools).toHaveLength(16);
   });
 
   it("browser tools appear before state tools in the returned array", () => {
@@ -166,10 +166,10 @@ describe("tool-registry (buildToolsForTab)", () => {
 
     const names = tools.map((t) => t.name);
 
-    // First 9 should be browser tools, next 3 state tools, last 3 content tools
-    expect(names.slice(0, 9)).toEqual(BROWSER_TOOL_NAMES);
-    expect(names.slice(9, 12)).toEqual(STATE_TOOL_NAMES);
-    expect(names.slice(12)).toEqual(CONTENT_TOOL_NAMES);
+    // First 10 should be browser tools, next 3 state tools, last 3 content tools
+    expect(names.slice(0, 10)).toEqual(BROWSER_TOOL_NAMES);
+    expect(names.slice(10, 13)).toEqual(STATE_TOOL_NAMES);
+    expect(names.slice(13)).toEqual(CONTENT_TOOL_NAMES);
   });
 
   it("each tool has name, description, parameters, and handler", () => {

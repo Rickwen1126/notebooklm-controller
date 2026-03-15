@@ -248,7 +248,7 @@ DOM queries are faster and cheaper than screenshots; prefer them when sufficient
 | Create notebook | find("${e.create_notebook?.text ?? "Create new"}") → click |
 | Add source (text) | find("${e.add_source?.text ?? "Add source"}") → click → wait(2) → find("${e.paste_source_type?.text ?? "Copied text"}") → click → find("${e.paste_textarea?.text ?? "Paste text here"}") → click → paste(content) → find("${e.insert_button?.text ?? "Insert"}") → click |
 | Ask question | find("${e.chat_input?.text ?? "Start typing"}") → click → paste(question) → find("${e.submit_button?.text ?? "Submit"}") → click (y>400) |
-| Read answer | wait(15) → read("${s.answer ?? ".to-user-container .message-content"}") |
+| Read answer | waitForContent("${s.answer ?? ".to-user-container .message-content"}", rejectIf="Thinking|Refining") |
 | Collapse sources | find("${e.collapse_source?.text ?? "collapse_content"}") → click |
 
 ### CSS Selectors

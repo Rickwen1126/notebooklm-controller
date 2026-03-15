@@ -112,11 +112,11 @@ describe("browser-tools", () => {
     tools = createBrowserTools(tabHandle);
   });
 
-  it("creates all nine tools", () => {
+  it("creates all ten tools", () => {
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
       "click", "find", "navigate", "paste", "read",
-      "screenshot", "scroll", "type", "wait",
+      "screenshot", "scroll", "type", "wait", "waitForContent",
     ]);
   });
 

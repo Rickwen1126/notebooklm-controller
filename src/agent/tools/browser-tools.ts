@@ -397,6 +397,124 @@ export function createBrowserTools(tabHandle: TabHandle): Tool[] {
     },
   });
 
+  // ---------------------------------------------------------------------------
+  // waitForContent — poll until element content is stable
+  // ---------------------------------------------------------------------------
+
+  const waitForContentTool = defineTool("waitForContent", {
+    description:
+      "Poll a CSS selector until its text content is stable (no changes across multiple checks). " +
+      "Returns the stable content directly — no need for a separate read() call. " +
+      "Use this instead of wait() + read() for any scenario where you need to wait for content: " +
+      "query answers, source panel updates, dialog appearance, page loads, etc. " +
+      "Much faster than fixed wait() — returns as soon as content stabilizes.",
+    parameters: z.object({
+      selector: z.string().describe("CSS selector to monitor (e.g. '.to-user-container .message-content')"),
+      interval: z.number().optional().describe("Seconds between checks (default: 1)"),
+      stableCount: z.number().optional().describe("Consecutive identical reads to consider stable (default: 3)"),
+      timeout: z.number().optional().describe("Maximum seconds to wait (default: 60)"),
+      rejectIf: z.string().optional().describe("Regex pattern — if content matches, keep waiting (e.g. 'Thinking|Refining')"),
+      lastOnly: z.boolean().optional().describe("If multiple elements match, only check the last one (default: true)"),
+    }),
+    handler: async (args) => {
+      const interval = (args.interval ?? 1) * 1000;
+      const stableCount = args.stableCount ?? 3;
+      const timeout = (args.timeout ?? 60) * 1000;
+      const rejectIf = args.rejectIf ?? "";
+      const lastOnly = args.lastOnly ?? true;
+
+      const startTime = Date.now();
+
+      // Phase 1: Poll with hash comparison IN the browser (fast, no serialization)
+      const pollResult = await page.evaluate(
+        async (
+          sel: string,
+          intervalMs: number,
+          stableN: number,
+          timeoutMs: number,
+          rejectPattern: string,
+          last: boolean,
+        ) => {
+          const rejectRe = rejectPattern ? new RegExp(rejectPattern, "i") : null;
+          const start = Date.now();
+          let lastHash = "";
+          let sameCount = 0;
+
+          // Simple hash function (djb2)
+          const hash = (s: string): string => {
+            let h = 5381;
+            for (let i = 0; i < s.length; i++) {
+              h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+            }
+            return h.toString(36);
+          };
+
+          while (Date.now() - start < timeoutMs) {
+            await new Promise((r) => setTimeout(r, intervalMs));
+
+            const els = document.querySelectorAll(sel);
+            if (els.length === 0) { sameCount = 0; lastHash = ""; continue; }
+
+            const target = last ? els[els.length - 1] : els[0];
+            const text = target.textContent?.trim() ?? "";
+
+            if (!text || (rejectRe && rejectRe.test(text))) {
+              sameCount = 0;
+              lastHash = "";
+              continue;
+            }
+
+            const h = hash(text);
+            if (h === lastHash) {
+              sameCount++;
+              if (sameCount >= stableN) {
+                return { stable: true, elapsed: Date.now() - start };
+              }
+            } else {
+              lastHash = h;
+              sameCount = 1;
+            }
+          }
+          return { stable: false, elapsed: Date.now() - start };
+        },
+        args.selector,
+        interval,
+        stableCount,
+        timeout,
+        rejectIf,
+        lastOnly,
+      );
+
+      // Phase 2: Fetch the final stable text (one serialization)
+      const text = await page.evaluate(
+        (sel: string, last: boolean) => {
+          const els = document.querySelectorAll(sel);
+          if (els.length === 0) return "";
+          const target = last ? els[els.length - 1] : els[0];
+          return (target.textContent?.trim() ?? "").slice(0, 5000);
+        },
+        args.selector,
+        lastOnly,
+      );
+
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+      if (pollResult.stable && text) {
+        return textResult(
+          `Content stable after ${elapsed}s:\n\n${text}`,
+        );
+      }
+      if (text) {
+        return textResult(
+          `Timeout after ${elapsed}s. Last content (may be incomplete):\n\n${text}`,
+        );
+      }
+      return textResult(
+        `Timeout after ${elapsed}s. No content found for "${args.selector}".`,
+      );
+    },
+  });
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return [screenshotTool, clickTool, typeTool, scrollTool, pasteTool, findTool, readTool, navigateTool, waitTool] as any as Tool<unknown>[];
+  return [screenshotTool, clickTool, typeTool, scrollTool, pasteTool, findTool, readTool, navigateTool, waitTool, waitForContentTool] as any as Tool<unknown>[];
 }

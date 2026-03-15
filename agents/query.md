@@ -9,6 +9,7 @@ tools:
   - read
   - wait
   - screenshot
+  - waitForContent
 infer: true
 startPage: notebook
 parameters:
@@ -31,14 +32,11 @@ parameters:
 1. find("{{chat_input}}") → click 聚焦輸入框
 2. paste("{{question}}") 貼入問題
 3. find("{{submit_button}}") → 選 y > 400 的（Chat 區域）→ click
-4. wait(15) 等待 Gemini 回答
-5. read(".to-user-container .message-content") 取回答案
-6. 如果答案太短或仍在生成 → wait(5) → 再次 read（最多 3 次）
+4. waitForContent(".to-user-container .message-content", rejectIf="Thinking|Refining") → 自動等到回答穩定並回傳
 
 ## 關鍵注意
 - 「{{submit_button}}」有 2 個，**選 y > 400 的**（Chat 區域那個）
-- 回答可能需要 15-20 秒，耐心等待後再 read
-- 如果 read 結果包含 "Refining"、"Thinking" → 還在生成，wait 後重試
-- **read 可能回傳多個結果（對話歷史）— 取最後一個，那是最新回答**
+- `waitForContent` 會自動 poll 到回答不再變化，不需要手動 wait + read
+- 它預設只取**最後一個**匹配元素（最新回答），不會拿到舊對話
 - 回答中的引用標記（如 ¹²³）對應來源段落
-- **必須用 read 取回完整答案文字**，不要只回報「已完成」
+- **必須回傳 waitForContent 取得的完整答案文字**，不要只回報「已完成」

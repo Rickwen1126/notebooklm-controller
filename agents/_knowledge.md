@@ -14,7 +14,8 @@
 | `read(selector)` | CSS selector 讀取 DOM | `Found N element(s): [1] TAG: text...` |
 | `scroll(x, y, dx, dy)` | 滾動頁面 | 確認 |
 | `navigate(url)` | 跳轉 URL | 確認 |
-| `wait(seconds)` | 等待 N 秒 | 確認 |
+| `wait(seconds)` | 固定等待 N 秒 | 確認 |
+| `waitForContent(selector)` | Poll 直到內容穩定（取代 wait+read）| 穩定後的文字內容 |
 | `screenshot()` | 截圖（視覺分析用） | base64 image |
 
 ## 核心操作原則
