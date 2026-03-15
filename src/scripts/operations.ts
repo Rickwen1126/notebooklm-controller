@@ -132,8 +132,8 @@ async function openNotebookMenu(
       if (r.width === 0 || r.height === 0) continue;
       const s = getComputedStyle(el);
       if (s.display === 'none' || s.visibility === 'hidden') continue;
-      // Only include icons in the visible viewport (y < 900)
-      if (r.y + r.height / 2 > 900) continue;
+      // Only include icons in the visible viewport
+      if (r.y + r.height / 2 > 1080) continue;
       results.push({ x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) });
     }
     return results;

@@ -132,10 +132,11 @@ function createRunTask(
     }
 
     try {
-      // 3. Set viewport to 1440x900 — MUST use Emulation.setDeviceMetricsOverride
+      // 3. Set viewport — MUST use Emulation.setDeviceMetricsOverride
       //    (not setViewport). 800x600 triggers mobile tab view.
+      //    1920x1080: homepage list view's more_vert column needs > 1500px.
       await tabHandle.cdpSession.send("Emulation.setDeviceMetricsOverride", {
-        width: 1440, height: 900, deviceScaleFactor: 2, mobile: false,
+        width: 1920, height: 1080, deviceScaleFactor: 2, mobile: false,
       });
 
       // 4. Build tools for this tab (Recovery session uses these).
