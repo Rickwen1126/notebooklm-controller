@@ -152,23 +152,31 @@ ${goal}
 
     // Iterative loop: keep sending prompts until submitResult is called
     // or max iterations reached. Each iteration continues the conversation.
+    // Per-iteration timeout doesn't kill the session — agent continues in next iteration.
     for (let iteration = 1; iteration <= maxIterations; iteration++) {
       const prompt = iteration === 1
         ? goal
-        : "繼續執行任務。如果已完成，請呼叫 submitResult。";
+        : "繼續執行任務。如果 TODO list 所有項目都完成了，請呼叫 submitResult 提交結果。";
 
-      log.info("Agent iteration", { iteration, maxIterations, agent: agentConfig.name });
+      log.info("Agent iteration", { iteration, maxIterations, agent: agentConfig.name, toolCalls: toolCallCount });
 
-      await session.sendAndWait({ prompt }, timeoutMs);
+      try {
+        await session.sendAndWait({ prompt }, timeoutMs);
+      } catch (iterErr) {
+        // Timeout or error in this iteration — don't kill the session.
+        // The conversation context is preserved, agent can continue.
+        const msg = iterErr instanceof Error ? iterErr.message : String(iterErr);
+        log.warn("Agent iteration timeout/error, continuing", { iteration, error: msg });
+      }
 
-      // Check if submitResult was called
+      // Check if submitResult was called (may have been called during this or any previous iteration)
       if (capturedResult !== null) {
-        log.info("Agent completed via submitResult", { iteration });
+        log.info("Agent completed via submitResult", { iteration, toolCalls: toolCallCount });
         break;
       }
 
       if (iteration === maxIterations) {
-        log.warn("Agent reached max iterations without submitResult", { maxIterations });
+        log.warn("Agent reached max iterations without submitResult", { maxIterations, toolCalls: toolCallCount });
       }
     }
   } catch (err) {
