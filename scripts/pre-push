@@ -1,0 +1,8 @@
+#!/bin/sh
+echo "🔨 Pre-push: build check..."
+npm run build 2>&1 | tail -3
+if [ $? -ne 0 ]; then
+  echo "❌ Build failed — push blocked"
+  exit 1
+fi
+echo "✅ Build passed"

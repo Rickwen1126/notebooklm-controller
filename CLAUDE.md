@@ -113,6 +113,12 @@ Before starting any new feature:
 
 ---
 
+## Git Hooks
+
+Pre-push hook blocks push if `npm run build` fails. Install: `sh scripts/install-hooks.sh`
+
+---
+
 ## E2E Testing Protocol
 
 **Any change to core functionality MUST run `/test-real` before commit.**
