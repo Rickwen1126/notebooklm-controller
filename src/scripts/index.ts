@@ -9,13 +9,13 @@ import {
   scriptedQuery,
   scriptedAddSource,
   scriptedListSources,
-  scriptedRemoveSource,
+  // scriptedRemoveSource, // DISABLED — destructive
   scriptedRenameSource,
   scriptedClearChat,
   scriptedListNotebooks,
   scriptedCreateNotebook,
   scriptedRenameNotebook,
-  scriptedDeleteNotebook,
+  // scriptedDeleteNotebook, // DISABLED — destructive
 } from "./operations.js";
 import { repoToText } from "../content/repo-to-text.js";
 import { urlToText } from "../content/url-to-text.js";
