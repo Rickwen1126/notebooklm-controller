@@ -295,7 +295,8 @@ ${scriptCatalog}
 ## Your Output
 
 Call the submitPlan tool to submit an execution plan. Each step contains:
-- operation: the name of the scripted operation to run
+- operation: the name of the operation to run
+- mode: "script" (default) or "agent" — **must match the mode listed in Available Operations**. If an operation has \`mode: agent\`, you MUST set mode to "agent".
 - params: a JSON object with the required parameters for that operation
 
 ## Rules
