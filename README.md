@@ -126,6 +126,22 @@ npm run lint
 
 TypeScript 5.x, Node.js 22 LTS, @github/copilot-sdk, puppeteer-core (CDP), @modelcontextprotocol/sdk, repomix, zod, Vitest
 
+## Runtime Data
+
+All persistent data lives in `~/.nbctl/` (outside the repo):
+
+| Path | Purpose |
+|------|---------|
+| `state.json` | Daemon state, registered notebooks |
+| `config.json` | User config (locale override) |
+| `tasks/` | Async task records |
+| `cache/<alias>/` | Per-notebook sources, artifacts, operation logs |
+| `screenshots/` | Operation screenshots (auto-cleanup, 200 max) |
+| `repair-logs/` | Recovery failure analysis + UIMap patch suggestions |
+| `ui-maps/` | User UIMap overrides (repair agent editable) |
+| `tmp/` | Content pipeline temp files (auto-cleaned) |
+| `chrome-profile/` | Chrome session (Google login cookies) |
+
 ## Roadmap
 
 **Self-repair CLI** (`nbctl repair`) — When Recovery Agent fails, it produces a repair log with root cause analysis and a `suggestedPatch`. The CLI reads these logs and auto-patches the failing script, hot-swapping the happy path. Feasible because scripts use ctx injection (zero imports) and can be replaced at runtime. Intentionally not an MCP tool — modifying happy path scripts requires human-in-the-loop.
