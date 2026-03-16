@@ -32,8 +32,10 @@ export interface AgentSessionOptions {
   goal: string;
   /** Model override. Defaults to gpt-4.1. */
   model?: string;
-  /** Timeout in ms. Defaults to DEFAULT_SESSION_TIMEOUT_MS (5 min). */
+  /** Timeout per iteration in ms. Defaults to DEFAULT_SESSION_TIMEOUT_MS (5 min). */
   timeoutMs?: number;
+  /** Max iterations (multi-turn loop). Defaults to 10. */
+  maxIterations?: number;
 }
 
 export interface AgentSessionResult {
@@ -64,6 +66,7 @@ export async function runAgentSession(
     goal,
     model = "gpt-4.1",
     timeoutMs = DEFAULT_SESSION_TIMEOUT_MS,
+    maxIterations = 10,
   } = options;
 
   const log = logger.child({ module: "agent-session", agent: agentConfig.name });
@@ -147,7 +150,27 @@ ${goal}
       }
     });
 
-    await session.sendAndWait({ prompt: goal }, timeoutMs);
+    // Iterative loop: keep sending prompts until submitResult is called
+    // or max iterations reached. Each iteration continues the conversation.
+    for (let iteration = 1; iteration <= maxIterations; iteration++) {
+      const prompt = iteration === 1
+        ? goal
+        : "繼續執行任務。如果已完成，請呼叫 submitResult。";
+
+      log.info("Agent iteration", { iteration, maxIterations, agent: agentConfig.name });
+
+      await session.sendAndWait({ prompt }, timeoutMs);
+
+      // Check if submitResult was called
+      if (capturedResult !== null) {
+        log.info("Agent completed via submitResult", { iteration });
+        break;
+      }
+
+      if (iteration === maxIterations) {
+        log.warn("Agent reached max iterations without submitResult", { maxIterations });
+      }
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error("Agent session failed", { error: msg });
