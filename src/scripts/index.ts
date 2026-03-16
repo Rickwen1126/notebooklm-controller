@@ -239,6 +239,8 @@ interface ScriptCatalogEntry {
   description: string;
   params: Record<string, string>;
   startPage: "notebook" | "homepage";
+  /** Execution mode. Default "script" (deterministic). "agent" = LLM + browser tools. */
+  mode?: "script" | "agent";
 }
 
 const SCRIPT_CATALOG: ScriptCatalogEntry[] = [
@@ -263,6 +265,8 @@ const SCRIPT_CATALOG: ScriptCatalogEntry[] = [
   { operation: "createNotebook", description: "Create a new notebook", params: {}, startPage: "homepage" },
   { operation: "renameNotebook", description: "Rename the first notebook on the homepage", params: { newName: "New name for the notebook" }, startPage: "homepage" },
   // deleteNotebook: DISABLED — destructive operation, manual only
+  // --- Agent-mode operations (LLM + browser tools) ---
+  { operation: "scanNotebooks", description: "Scan NotebookLM homepage and list all notebooks with names and URLs (uses LLM vision)", params: {}, startPage: "homepage", mode: "agent" },
 ];
 
 /**
@@ -274,7 +278,8 @@ export function buildScriptCatalog(): string {
     const paramStr = Object.keys(entry.params).length > 0
       ? `\n    params: ${JSON.stringify(entry.params)}`
       : "";
-    return `  - operation: ${entry.operation}\n    description: ${entry.description}\n    startPage: ${entry.startPage}${paramStr}`;
+    const modeStr = entry.mode === "agent" ? `\n    mode: agent` : "";
+    return `  - operation: ${entry.operation}\n    description: ${entry.description}\n    startPage: ${entry.startPage}${modeStr}${paramStr}`;
   }).join("\n");
 }
 
