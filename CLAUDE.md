@@ -101,6 +101,15 @@ Auto-rename after addSource only works when exactly 1 unnamed source ("貼上的
 
 ---
 
+## CRITICAL: Never Kill User's Chrome
+
+**NEVER run `pkill -f "Google Chrome"` or any command that kills the user's main Chrome browser.**
+
+To stop the daemon: `pkill -f "tsx src/daemon/launcher"` only.
+If Chrome profile is locked, wait or use a different `userDataDir` — do NOT kill Chrome processes.
+
+---
+
 ## Development Workflow
 
 Before starting any new feature:
