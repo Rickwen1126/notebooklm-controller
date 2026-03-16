@@ -53,8 +53,8 @@
 
 | Status | Count | Stories |
 |--------|-------|---------|
-| DONE | 15 | US1, US2, US7, US8, US9, US10, US11, US13, US14, US15, US17, US20, US21, US22, US23 |
-| PARTIAL | 4 | US3, US4, US5, US18 |
+| DONE | 18 | US1, US2, US3, US4, US5, US7, US8, US9, US10, US11, US13, US14, US15, US17, US20, US21, US22, US23 |
+| PARTIAL | 1 | US18 |
 | NOT STARTED | 3 | US6, US12, US19 |
 
 ### DONE — fully implemented + tested
@@ -77,14 +77,19 @@
 | US22 | 操作歷程 | OperationLogEntry recording per task |
 | US23 | Notebook 標題管理 | scriptedRenameNotebook, scriptedDeleteNotebook via exec |
 
-### PARTIAL — code exists but not fully integrated into G2 script flow
+### DONE (newly completed)
 
 | Story | Title | Notes |
 |-------|-------|-------|
-| US3 | Repo → source | `src/content/repo-to-text.ts` exists (uses repomix), but addSource script only supports plain text paste. Not wired to Planner dispatch. |
-| US4 | URL → source | `src/content/url-to-text.ts` exists (uses @mozilla/readability), but not wired to addSource script. NotebookLM native URL import not scripted. |
-| US5 | PDF → source | `src/content/pdf-to-text.ts` exists (uses pdf-parse), but not wired to addSource script. |
-| US18 | Agent Config 參數化 | Legacy agent-loader.ts exists but G2 uses scripts instead. Partially relevant as scripts are externalized. |
+| US3 | Repo → source | Content pipeline integrated: repomix → auto-split 100K chunks → paste. 1.9M repo tested (20 chunks, 165s). |
+| US4 | URL → source | Content pipeline integrated: readability → paste. Wikipedia tested. |
+| US5 | PDF → source | Content pipeline integrated: pdf-parse → paste. 43-page PDF tested. |
+
+### PARTIAL
+
+| Story | Title | Notes |
+|-------|-------|-------|
+| US18 | Agent Config 參數化 | Agent configs being revived for G2.5 Agent Session path (see Architecture Change below). |
 
 ### NOT STARTED
 
@@ -100,9 +105,25 @@ The implementation diverged from the original Agent Executor approach to a **G2 
 
 - **Planner LLM → deterministic Script → Recovery LLM** (only on failure). Happy path = 0 LLM cost.
 - **Recovery session** — GPT-5-mini completes failed operations + analyzes cause + suggests UIMap patches.
+- **Content pipeline** — repo (repomix), URL (readability), PDF (pdf-parse) → auto-split 100K chunks → paste + auto-rename.
+- **Destructive ops disabled** — removeSource, deleteNotebook removed from Planner catalog (manual only).
 - **Repair log + screenshot persistence** — `~/.nbctl/repair-logs/`, `~/.nbctl/screenshots/`
 - **NetworkGate per-operation** — `acquirePermit()` before each script run.
 - **Viewport 1920x1080 contract** — All scripts tested at this resolution.
+
+### Architecture Change: G2.5 Agent Session path (planned)
+
+Adding a second execution path alongside Script for operations that require LLM judgment:
+
+```
+Planner → step mode check
+  ├── mode: "script" → runScript() (deterministic, 0 LLM)
+  └── mode: "agent"  → runAgentSession() (LLM + browser tools)
+```
+
+Agent Session uses the same browser tools as Recovery but with task-specific prompts (revived agent configs from `agents/*.md`). Use cases: scan notebooks (scroll + screenshot + vision), smart rename (read source content → decide name), audio generation (complex state monitoring).
+
+Multi-step plans can mix script and agent steps freely.
 
 ---
 
