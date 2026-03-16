@@ -50,6 +50,14 @@ vi.mock("../../../src/agent/repair-log.js", () => ({
   saveScreenshot: vi.fn(),
 }));
 
+vi.mock("../../../src/agent/agent-session.js", () => ({
+  runAgentSession: vi.fn(),
+}));
+
+vi.mock("../../../src/agent/agent-loader.js", () => ({
+  loadAgentConfig: vi.fn().mockResolvedValue(null),
+}));
+
 // Import module under test after mocks are established.
 import {
   runSession,
@@ -165,6 +173,7 @@ function mockPlannerResponse(plan: {
       // Convert params Record to expanded fields (matching real submitPlan schema)
       const expandedSteps = plan.steps.map((s) => ({
         operation: s.operation,
+        mode: s.mode,
         question: s.params.question,
         content: s.params.content,
         newName: s.params.newName,
