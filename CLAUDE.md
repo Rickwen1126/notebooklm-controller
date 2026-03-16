@@ -101,6 +101,18 @@ Auto-rename after addSource only works when exactly 1 unnamed source ("貼上的
 
 ---
 
+## Development Workflow
+
+Before starting any new feature:
+1. **Check git status** — clean working tree? On correct branch?
+2. **Decide branching** — new feature branch or continue on main?
+3. **Update spec** — record the feature in `specs/` before coding. The main spec (`specs/001-mvp/spec.md`) is the living reference for all features.
+4. **Update improvement.md** — if the feature addresses a known limitation, mark it
+
+`specs/001-mvp/` contains the canonical spec, improvement notes, and checklists. Treat it as project-level documentation, not branch-specific.
+
+---
+
 ## E2E Testing Protocol
 
 **Any change to core functionality MUST run `/test-real` before commit.**
