@@ -184,10 +184,13 @@ Agent 的 recovery response 用於：
 - `sourceCount` 不萃取 — 現有 code 取出來也存 `0`，是 dead data
 - **不進 `SCRIPT_REGISTRY`、不進 `SCRIPT_CATALOG`** — runner-internal operation
 
-**`scriptedGetNotebookUrl`（已有）：**
-- 保留在 `operations.ts`
-- **保留在 `SCRIPT_REGISTRY` 和 `SCRIPT_CATALOG`** — 一般用途操作，Planner 可透過 `exec` dispatch（例如使用者說「get the URL for notebook named X」）
-- scanAllNotebooks runner 也直接 import 呼叫（雙重用途：Planner-accessible + runner-internal）
+**`scriptedGetNotebookUrl`（spike 新建）：**
+- 保留在 `operations.ts`（UI automation primitive 集中）
+- **從 `SCRIPT_REGISTRY` 和 `SCRIPT_CATALOG` 移除** — 100% runner-internal，無既有 MCP tool 或 pipeline 依賴
+- **從 Planner schema 移除 `notebookName` param**（`session-runner.ts` 的 submitPlan tool）
+- scanAllNotebooks runner 直接 import 呼叫
+
+清查確認：`register_notebook` 接收使用者直接給的 URL，`create_notebook` 有自己的 inline URL extraction，`exec-tools`/`mcp-tools`/`recovery-session` 均無引用。
 
 **`generateAlias` + `deduplicateAlias` 遷移：**
 從 `notebook-tools.ts` 搬到 `scan-notebooks-runner.ts`。`create_notebook` 有自己的 inline alias 生成（line 150-155），是 existing tech debt，不在此次統一 scope。
