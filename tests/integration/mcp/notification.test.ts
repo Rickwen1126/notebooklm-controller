@@ -55,6 +55,8 @@ function createMockTaskStore() {
           notebookAlias: params.notebookAlias,
           command: params.command,
           context: params.context ?? null,
+          runner: "pipeline",
+          runnerInput: null,
           status: "queued",
           result: null,
           error: null,

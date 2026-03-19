@@ -125,6 +125,10 @@ export interface TaskStatusChange {
 export interface AsyncTask {
   taskId: string;
   notebookAlias: string;
+  /** Runner identifier; defaults to "pipeline" for backwards compatibility. */
+  runner: string;
+  /** Runner-specific input parameters; null when not applicable. */
+  runnerInput: Record<string, unknown> | null;
   command: string;
   context: string | null;
   status: TaskStatus;

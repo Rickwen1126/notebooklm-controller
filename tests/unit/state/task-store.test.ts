@@ -55,6 +55,42 @@ describe("TaskStore", () => {
 
       expect(task.context).toBe("user wants a summary");
     });
+
+    it("defaults runner to 'pipeline' when omitted", async () => {
+      const task = await store.create({
+        notebookAlias: "my-notebook",
+        command: "add-source https://example.com",
+      });
+
+      expect(task.runner).toBe("pipeline");
+      expect(task.runnerInput).toBeNull();
+    });
+
+    it("stores provided runner and runnerInput", async () => {
+      const task = await store.create({
+        notebookAlias: "my-notebook",
+        command: "scan",
+        runner: "scanAllNotebooks",
+        runnerInput: { force: true },
+      });
+
+      expect(task.runner).toBe("scanAllNotebooks");
+      expect(task.runnerInput).toEqual({ force: true });
+    });
+
+    it("persists runner and runnerInput to disk and reads them back", async () => {
+      const created = await store.create({
+        notebookAlias: "nb",
+        command: "cmd",
+        runner: "customRunner",
+        runnerInput: { key: "value" },
+      });
+
+      const fetched = await store.get(created.taskId);
+      expect(fetched).not.toBeNull();
+      expect(fetched!.runner).toBe("customRunner");
+      expect(fetched!.runnerInput).toEqual({ key: "value" });
+    });
   });
 
   // -----------------------------------------------------------------------

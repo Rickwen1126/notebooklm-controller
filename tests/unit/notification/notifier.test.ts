@@ -17,6 +17,8 @@ function makeTask(overrides: Partial<AsyncTask> = {}): AsyncTask {
     notebookAlias: "my-notebook",
     command: "add-source",
     context: "user asked to add a repo",
+    runner: "pipeline",
+    runnerInput: null,
     status: "completed",
     result: { summary: "done" },
     error: null,

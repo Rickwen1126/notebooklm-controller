@@ -52,6 +52,8 @@ export class TaskStore {
     notebookAlias: string;
     command: string;
     context?: string;
+    runner?: string;
+    runnerInput?: Record<string, unknown>;
   }): Promise<AsyncTask> {
     await this.ensureDir();
 
@@ -68,6 +70,8 @@ export class TaskStore {
     const task: AsyncTask = {
       taskId,
       notebookAlias: params.notebookAlias,
+      runner: params.runner ?? "pipeline",
+      runnerInput: params.runnerInput ?? null,
       command: params.command,
       context: params.context ?? null,
       status: "queued",
