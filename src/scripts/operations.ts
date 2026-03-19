@@ -945,6 +945,46 @@ export async function scriptedGetNotebookUrl(
 }
 
 // =============================================================================
+// 10. scriptedExtractNotebookNames — extract all notebook names from homepage
+// =============================================================================
+
+export async function scriptedExtractNotebookNames(
+  ctx: ScriptContext,
+): Promise<ScriptResult> {
+  const { page, helpers } = ctx;
+  const log: ScriptLogEntry[] = [];
+  const t0 = Date.now();
+  const fail = makeFail("extractNotebookNames", log, t0);
+
+  try {
+    // Step 0: Ensure homepage + wait for rows to stabilize
+    const homeOk = await helpers.ensureHomepage(ctx, log, t0);
+    if (!homeOk) return fail(0, "ensure_homepage", "Could not navigate to homepage");
+
+    const stepStart0 = Date.now();
+    const rowCount = await waitForRowsStable(page);
+    log.push(createLogEntry(0, "rows_stable", "ok",
+      `${rowCount} rows rendered in ${Date.now() - stepStart0}ms`, stepStart0));
+
+    // Step 1: Extract names from .project-table-title
+    const stepStart = Date.now();
+    const names = await page.evaluate(`(() => {
+      const titles = document.querySelectorAll('.project-table-title');
+      return Array.from(titles).map(t => ({
+        name: t.getAttribute('title') || (t.textContent || '').trim(),
+      }));
+    })()`) as Array<{ name: string }>;
+
+    log.push(createLogEntry(1, "extract_names", "ok",
+      `Extracted ${names.length} notebook names`, stepStart));
+
+    return makeSuccess("extractNotebookNames", log, t0, JSON.stringify(names));
+  } catch (err) {
+    return fail(1, "exception", err instanceof Error ? err.message : String(err));
+  }
+}
+
+// =============================================================================
 // 9. scriptedRenameNotebook
 // =============================================================================
 
