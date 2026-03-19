@@ -234,8 +234,6 @@ export interface DaemonStatusResult {
 export interface ExecutionStep {
   operation: string;
   params: Record<string, string>;
-  /** Execution mode: "script" (deterministic, 0 LLM) or "agent" (LLM + browser tools). Default: "script". */
-  mode?: "script" | "agent";
 }
 
 /** Structured execution plan captured from the Planner session via submitPlan tool. */
