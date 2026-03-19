@@ -186,8 +186,8 @@ Agent 的 recovery response 用於：
 
 **`scriptedGetNotebookUrl`（已有）：**
 - 保留在 `operations.ts`
-- **從 `SCRIPT_REGISTRY` 和 `SCRIPT_CATALOG` 移除** — 特化操作，不應被 Planner dispatch
-- Runner 直接 import 呼叫
+- **保留在 `SCRIPT_REGISTRY` 和 `SCRIPT_CATALOG`** — 一般用途操作，Planner 可透過 `exec` dispatch（例如使用者說「get the URL for notebook named X」）
+- scanAllNotebooks runner 也直接 import 呼叫（雙重用途：Planner-accessible + runner-internal）
 
 **`generateAlias` + `deduplicateAlias` 遷移：**
 從 `notebook-tools.ts` 搬到 `scan-notebooks-runner.ts`。`create_notebook` 有自己的 inline alias 生成（line 150-155），是 existing tech debt，不在此次統一 scope。
