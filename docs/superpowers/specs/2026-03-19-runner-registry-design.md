@@ -116,10 +116,9 @@ Runner 拿到已準備好的 `tabHandle`，只操作 `tabHandle.page` / `tabHand
 1. 從 dispatcher 拿到已準備好的 `tabHandle`
 2. 內部建 ScriptContext（`buildScriptContext` 是 runner family 共用的 internal helper）
 3. 呼叫 `scriptedExtractNotebookNames(ctx)` 萃取 notebook names
-4. Script-only 快速 loop：逐本呼叫 `scriptedGetNotebookUrl(ctx, name)`
-5. 滾動窗口 recovery：每累積 5 個 failure → 逐本跑 `runRecoverySession()`
-6. 成功的寫 `stateManager.addNotebook()`
-7. 回傳結構化結果 + 錯誤報告
+4. 逐本執行：script → fail? → 即時 recovery → 下一本
+5. 成功的寫 `stateManager.addNotebook()`
+6. 回傳結構化結果 + 錯誤報告
 
 ### 流程
 
@@ -132,20 +131,17 @@ scriptedExtractNotebookNames(ctx) → names[]
     ↓
 for each name:
   ├─ scriptedGetNotebookUrl(ctx, name)
-  ├─ success → stateManager.addNotebook() → registered[]
+  ├─ success → extract URL from browser → stateManager.addNotebook() → registered[]
   ├─ skip (URL already exists) → skipped[]
-  └─ fail → failedBatch[] (累積)
-      └─ if failedBatch.length >= 5:
-           for each in failedBatch:
-             runRecoverySession(operation, scriptLog, ...)
-             success → recovered[]
-             fail → finalFailed[] + saveRepairLog()
-           clear failedBatch
-    ↓
-(loop 結束後，剩餘 failedBatch < 5 也跑 recovery)
+  └─ fail → 立即 runRecoverySession()
+       ├─ recovery success → extract URL from browser → recovered[]
+       └─ recovery fail → finalFailed[] + saveRepairLog()
     ↓
 return ScanAllNotebooksResult
 ```
+
+**為什麼不做 batched/delayed recovery：**
+Recovery agent 需要在首頁點擊 notebook，跟 script 做的事一樣。如果累積 5 本再批次 recovery，每次 recovery 都要先回首頁再找 notebook，連續 5 次 agent 操作首頁的失敗率遠高於一本一本各自 recovery。逐本即時 recovery 讓 agent 在 script 剛失敗的當下狀態（可能已經在首頁或已 scroll 到目標附近）嘗試修復，context 最新鮮、成功率最高。
 
 ### Recovery 銜接
 
@@ -153,23 +149,48 @@ return ScanAllNotebooksResult
 
 Recovery 需要 `CopilotClientSingleton`，透過 `deps.copilotClient` 取得（已在 `RunTaskDeps` 中）。呼叫方式：`runRecoverySession({ client: deps.copilotClient, cdp: tabHandle.cdpSession, page: tabHandle.page, ... })`。
 
-### 新增 Scripted Operations
+### Recovery 結果權威來源
 
-所有 DOM 操作在 `src/scripts/operations.ts`，runner 裡 0 行 DOM 操作。
+Recovery 成功後，結構化結果（URL）以 **browser state 為權威來源**：
+- URL = `tabHandle.page.url()`（直接從瀏覽器讀）
+- 不信任 agent 自然語言輸出作為結構化結果
 
-**`scriptedExtractNotebookNames`：**
-- 住在 `operations.ts`，跟 `scriptedListNotebooks`、`scriptedGetNotebookUrl` 同級
+Agent 的 recovery response 用於：
+- 分析：什麼操作失敗、為什麼
+- 補充說明：agent 觀察到的 UI 狀態
+- Patch 建議：`suggestedPatch`（UIMap 修正建議）
+
+這跟現有 `runRecoverySession` 的設計一致 — recovery result 裡的 `analysis` 和 `suggestedPatch` 是 metadata，不是操作結果。
+
+### Scripted Operations — registry 與 catalog 分離
+
+所有 UI automation primitive 集中在 `src/scripts/operations.ts`，runner 裡 0 行 DOM 操作。
+
+**核心原則：script execution registry 與 planner-visible catalog 必須分離。**
+
+- `SCRIPT_REGISTRY`（`index.ts`）= Planner 可 dispatch 的操作 + `runScript()` 路由
+- `SCRIPT_CATALOG`（`index.ts`）= Planner system prompt 看到的操作清單
+- Runner-internal scripts = 從 `operations.ts` 直接 import，**不進 SCRIPT_REGISTRY、不進 SCRIPT_CATALOG**
+
+這兩者不綁定。一個 script 可以：
+- 在 `operations.ts` 裡有實作（UI automation primitive）
+- 被 runner 直接 import 呼叫
+- 但不暴露給 Planner 或一般 agent
+
+**`scriptedExtractNotebookNames`（新增）：**
+- 住在 `operations.ts`，跟 `scriptedListNotebooks` 同級
 - 用 `waitForRowsStable` + `.project-table-title[title]` query
 - 回傳 `ScriptResult`，result 是 `JSON.stringify(names)`（`names: Array<{ name: string }>`）
 - `sourceCount` 不萃取 — 現有 code 取出來也存 `0`，是 dead data
-- 進 `SCRIPT_REGISTRY`，可被 Planner dispatch 也可被 runner 直接呼叫
+- **不進 `SCRIPT_REGISTRY`、不進 `SCRIPT_CATALOG`** — runner-internal operation
+
+**`scriptedGetNotebookUrl`（已有）：**
+- 保留在 `operations.ts`
+- **從 `SCRIPT_REGISTRY` 和 `SCRIPT_CATALOG` 移除** — 特化操作，不應被 Planner dispatch
+- Runner 直接 import 呼叫
 
 **`generateAlias` + `deduplicateAlias` 遷移：**
 從 `notebook-tools.ts` 搬到 `scan-notebooks-runner.ts`。`create_notebook` 有自己的 inline alias 生成（line 150-155），是 existing tech debt，不在此次統一 scope。
-
-**`scriptedGetNotebookUrl`：**
-- 已有，保持現狀
-- 已在 `SCRIPT_REGISTRY`
 
 ## Section 4: notebook-tools.ts — submitter only
 
