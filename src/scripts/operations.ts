@@ -8,9 +8,10 @@
  *   scriptedQuery, scriptedAddSource, scriptedListSources,
  *   scriptedRemoveSource, scriptedRenameSource, scriptedClearChat
  *
- * Homepage operations (4):
+ * Homepage operations (5):
  *   scriptedListNotebooks, scriptedCreateNotebook,
- *   scriptedRenameNotebook, scriptedDeleteNotebook
+ *   scriptedRenameNotebook, scriptedDeleteNotebook,
+ *   scriptedGetNotebookUrl
  */
 
 import type { ScriptContext, ScriptLogEntry, ScriptResult } from "./types.js";
@@ -828,6 +829,116 @@ export async function scriptedCreateNotebook(
     })()`) as string | null;
 
     return makeSuccess("createNotebook", log, t0, JSON.stringify({ url: nav.url, title }));
+  } catch (err) {
+    return fail(stepNum, "exception", err instanceof Error ? err.message : String(err));
+  }
+}
+
+// =============================================================================
+// 9. scriptedGetNotebookUrl — click notebook by name → capture URL → back
+// =============================================================================
+
+/**
+ * Wait for notebook rows to stabilize (all rendered).
+ * Polls tr[tabindex] count until it stops changing for 500ms.
+ * Prevents cold-start race where ensureHomepage sees 1 row but 90 exist.
+ */
+async function waitForRowsStable(
+  page: ScriptContext["page"],
+  maxWaitMs = 5_000,
+): Promise<number> {
+  const deadline = Date.now() + maxWaitMs;
+  let lastCount = 0;
+  let stableRounds = 0;
+
+  while (Date.now() < deadline) {
+    const count = await page.evaluate(
+      `document.querySelectorAll('tr[tabindex]').length`,
+    ) as number;
+    if (count === lastCount && count > 0) {
+      stableRounds++;
+      if (stableRounds >= 2) return count; // stable for 2 rounds (~500ms)
+    } else {
+      stableRounds = 0;
+    }
+    lastCount = count;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return lastCount;
+}
+
+export async function scriptedGetNotebookUrl(
+  ctx: ScriptContext,
+  notebookName: string,
+): Promise<ScriptResult> {
+  const { cdp, page, helpers } = ctx;
+  const log: ScriptLogEntry[] = [];
+  const t0 = Date.now();
+  let stepNum = 1;
+  const fail = makeFail("getNotebookUrl", log, t0);
+
+  try {
+    // Step 0: Ensure homepage + wait for all rows to render
+    const homeOk = await helpers.ensureHomepage(ctx, log, t0);
+    if (!homeOk) return fail(0, "ensure_homepage", "Could not navigate to homepage");
+
+    const stepStart0 = Date.now();
+    const rowCount = await waitForRowsStable(page);
+    log.push(createLogEntry(0, "rows_stable", "ok",
+      `${rowCount} rows rendered in ${Date.now() - stepStart0}ms`, stepStart0));
+
+    const initialUrl = page.url();
+
+    // Step 1: find notebook row by name
+    let stepStart = Date.now();
+    const el = await helpers.findElementByText(page, notebookName);
+    if (!el) return fail(1, "find_notebook", `Notebook "${notebookName}" not found (${rowCount} rows on page)`, "notebook_row");
+    log.push(createLogEntry(1, "find_notebook", "ok",
+      `Found "${notebookName}" at (${el.center.x}, ${el.center.y})`, stepStart));
+
+    // Step 2: scroll into view if outside viewport, then click
+    stepNum = 2;
+    stepStart = Date.now();
+
+    // Scroll the matching row into view and get its post-scroll position.
+    // Uses tr[tabindex] (notebook row selector) — avoids duplicating findElementByText internals.
+    const pos = await page.evaluate(`(() => {
+      const text = ${JSON.stringify(notebookName)};
+      for (const row of document.querySelectorAll('tr[tabindex]')) {
+        if ((row.textContent || '').includes(text)) {
+          row.scrollIntoView({ block: 'center' });
+          const r = row.getBoundingClientRect();
+          return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+        }
+      }
+      return null;
+    })()`) as { x: number; y: number } | null;
+
+    const clickX = pos?.x ?? el.center.x;
+    const clickY = pos?.y ?? el.center.y;
+
+    await helpers.dispatchClick(cdp, clickX, clickY);
+    log.push(createLogEntry(2, "click_notebook", "ok",
+      `Clicked at (${clickX}, ${clickY})`, stepStart));
+
+    // Step 3: wait for navigation to /notebook/{id}
+    stepNum = 3;
+    stepStart = Date.now();
+    const nav = await helpers.waitForNavigation(page, { notUrl: initialUrl, timeoutMs: 15_000 });
+    if (!nav.navigated) return fail(3, "wait_navigation", `URL did not change`, "navigation");
+    log.push(createLogEntry(3, "wait_navigation", "ok",
+      `Navigated to ${nav.url} in ${nav.elapsedMs}ms`, stepStart));
+
+    // Step 4: go back to homepage + wait for rows to re-render
+    stepNum = 4;
+    stepStart = Date.now();
+    await page.goBack();
+    const backRowCount = await waitForRowsStable(page);
+    log.push(createLogEntry(4, "go_back", backRowCount > 0 ? "ok" : "warn",
+      `Back to homepage, ${backRowCount} rows in ${Date.now() - stepStart}ms`, stepStart));
+
+    return makeSuccess("getNotebookUrl", log, t0,
+      JSON.stringify({ name: notebookName, url: nav.url }));
   } catch (err) {
     return fail(stepNum, "exception", err instanceof Error ? err.message : String(err));
   }
