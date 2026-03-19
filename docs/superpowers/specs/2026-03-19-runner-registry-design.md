@@ -54,6 +54,24 @@ export interface AsyncTask {
 - `runnerInput` 預設 `null`
 - 影響範圍：`TaskStore.create()`、`Scheduler.submit()`、task JSON 持久化
 
+**`Scheduler.submit()` 新簽名：**
+```typescript
+async submit(params: {
+  notebookAlias: string;
+  command: string;
+  context?: string;
+  runner?: string;                          // NEW — defaults to "pipeline"
+  runnerInput?: Record<string, unknown>;    // NEW — defaults to null
+}): Promise<AsyncTask>
+```
+
+**`TaskStore.create()` 對應更新：**
+接受並透傳 `runner` + `runnerInput`，寫入 task JSON。
+預設值在 `create()` 裡補：`runner ?? "pipeline"`、`runnerInput ?? null`。
+
+**測試影響：**
+現有測試中構造 `AsyncTask` fixture 的地方需補 `runner: "pipeline"`（或依賴 `TaskStore.create()` 預設值）。`Scheduler` 測試不受影響 — `SchedulerDeps.runTask` 簽名不變。
+
 ## Section 2: Runner Registry Dispatch
 
 ```typescript
@@ -71,19 +89,23 @@ const RUNNER_REGISTRY: Record<string, TaskRunner> = {
 };
 ```
 
+**Scheduler 介面不變：**
+`SchedulerDeps.runTask` 維持 `(task: AsyncTask) => Promise<SessionResult>`。所有 runner dispatch 邏輯封裝在 `createRunTask()` 閉包內。`TaskRunner` 是 dispatcher 內部型別，Scheduler 不知道它的存在。
+
 **Dispatcher 職責（`createRunTask` 重構後）：**
 1. 查 `task.runner`，從 registry 找 runner（unknown → fail fast）
 2. Resolve URL：`__homepage__` → `NOTEBOOKLM_HOMEPAGE`，其他 → state 查 notebook URL
 3. `tabManager.acquireTab()` — 統一 tab 資源管理
 4. `setDeviceMetricsOverride(1920×1080)` — 統一 viewport contract
 5. 呼叫 runner，傳入 `(task, tabHandle, deps)`
-6. `finally { tabManager.releaseTab() }` — 統一釋放
+6. Record `OperationLogEntry` via `cacheManager.addOperation()`（同現有 T096 行為）
+7. `finally { tabManager.releaseTab() + cleanup TMP_DIR temp files }`
 
 **Runner 不碰 tab lifecycle：**
 Runner 拿到已準備好的 `tabHandle`，只操作 `tabHandle.page` / `tabHandle.cdpSession`。不 acquire，不 release。
 
 **`runPipelineTask`：**
-現有 `createRunTask` 裡面的邏輯（pre-navigate check → runPipeline → operation log），搬進 named function。
+現有 `createRunTask` 裡面的邏輯（pre-navigate check → runPipeline），搬進 named function。Operation log 和 tab lifecycle 留在 dispatcher。
 
 ## Section 3: scan-notebooks-runner.ts
 
@@ -129,6 +151,8 @@ return ScanAllNotebooksResult
 
 每本失敗的 `scriptedGetNotebookUrl` 回傳 `ScriptResult`（含 `failedAtStep`, `failedSelector`, `log`）。這些直接餵進 `runRecoverySession()` — 跟 pipeline 裡 script fail 進 recovery 完全一樣。Recovery agent 拿到 screenshot + script log，用 browser tools 嘗試完成操作。
 
+Recovery 需要 `CopilotClientSingleton`，透過 `deps.copilotClient` 取得（已在 `RunTaskDeps` 中）。呼叫方式：`runRecoverySession({ client: deps.copilotClient, cdp: tabHandle.cdpSession, page: tabHandle.page, ... })`。
+
 ### 新增 Scripted Operations
 
 所有 DOM 操作在 `src/scripts/operations.ts`，runner 裡 0 行 DOM 操作。
@@ -136,8 +160,12 @@ return ScanAllNotebooksResult
 **`scriptedExtractNotebookNames`：**
 - 住在 `operations.ts`，跟 `scriptedListNotebooks`、`scriptedGetNotebookUrl` 同級
 - 用 `waitForRowsStable` + `.project-table-title[title]` query
-- 回傳 `ScriptResult`，result 是 `JSON.stringify(names)`
+- 回傳 `ScriptResult`，result 是 `JSON.stringify(names)`（`names: Array<{ name: string }>`）
+- `sourceCount` 不萃取 — 現有 code 取出來也存 `0`，是 dead data
 - 進 `SCRIPT_REGISTRY`，可被 Planner dispatch 也可被 runner 直接呼叫
+
+**`generateAlias` + `deduplicateAlias` 遷移：**
+從 `notebook-tools.ts` 搬到 `scan-notebooks-runner.ts`。`create_notebook` 有自己的 inline alias 生成（line 150-155），是 existing tech debt，不在此次統一 scope。
 
 **`scriptedGetNotebookUrl`：**
 - 已有，保持現狀
@@ -208,4 +236,8 @@ interface ScanAllNotebooksResult {
 
 ## `__homepage__` 語意
 
-`__homepage__` 代表「操作對象是整個帳號」。碰巧映射到首頁 tab，但 URL 解析是 dispatcher 的事。如果未來 `__homepage__` 被濫用成「任何需要首頁 tab 的操作都塞進來」，那時再考慮拆分 queue domain。
+`__homepage__` 代表「操作對象是整個帳號」。碰巧映射到首頁 tab，但 URL 解析是 dispatcher 的事。
+
+所有 homepage 操作（`createNotebook`、`scanAllNotebooks` 等）共用 `__homepage__` queue，序列化執行。這是有意的 — 並行的 homepage 操作會互相衝突。
+
+如果未來 `__homepage__` 被濫用成「任何需要首頁 tab 的操作都塞進來」，那時再考慮拆分 queue domain。
