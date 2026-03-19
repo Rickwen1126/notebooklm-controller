@@ -26,7 +26,7 @@ import { logger } from "../shared/logger.js";
 import { enforcePermissions } from "../shared/permissions.js";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, unlinkSync } from "node:fs";
-import type { UIMap, AsyncTask, OperationActionType, OperationLogEntry } from "../shared/types.js";
+import type { UIMap, AsyncTask, TabHandle, OperationActionType, OperationLogEntry } from "../shared/types.js";
 import { TMP_DIR } from "../shared/config.js";
 
 // ---------------------------------------------------------------------------
@@ -53,7 +53,7 @@ export interface DaemonRuntime {
 // T068J: runTask factory — wires dual session to scheduler
 // ---------------------------------------------------------------------------
 
-interface RunTaskDeps {
+export interface RunTaskDeps {
   copilotClient: CopilotClientSingleton;
   tabManager: TabManager;
   stateManager: StateManager;
@@ -92,7 +92,82 @@ function inferActionType(command: string): OperationActionType {
 }
 
 // ---------------------------------------------------------------------------
-// T068J: runTask factory — wires dual session to scheduler
+// TaskRunner type + RUNNER_REGISTRY
+// ---------------------------------------------------------------------------
+
+/** A runner receives a task + acquired tab + deps, returns session result. */
+export type TaskRunner = (
+  task: AsyncTask,
+  tabHandle: TabHandle,
+  deps: RunTaskDeps,
+) => Promise<SchedulerSessionResult>;
+
+// ---------------------------------------------------------------------------
+// runPipelineTask — the default runner (G2 script-first pipeline)
+// ---------------------------------------------------------------------------
+
+async function runPipelineTask(
+  task: AsyncTask,
+  tabHandle: TabHandle,
+  deps: RunTaskDeps,
+): Promise<SchedulerSessionResult> {
+  const log = logger.child({ module: "daemon:runPipelineTask" });
+
+  // 1. Ensure tab is on the correct page (tab pool reuse may leave
+  //    tab on a different URL, e.g. homepage after S12 deleteNotebook).
+  const isHomepage = task.notebookAlias === "__homepage__";
+  const currentUrl = tabHandle.page.url();
+  const targetUrl = tabHandle.url;
+  if (!isHomepage && !currentUrl.startsWith(targetUrl)) {
+    await tabHandle.page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+    await new Promise((r) => setTimeout(r, 2000));
+    log.info("Tab navigated to correct URL", { from: currentUrl.slice(0, 60), to: targetUrl.slice(0, 60) });
+  }
+
+  // 2. Build tools for this tab (Recovery session uses these).
+  const tools = buildToolsForTab(tabHandle, task.notebookAlias, {
+    networkGate: deps.networkGate,
+    cacheManager: deps.cacheManager,
+  });
+
+  // 3. Run dual session: Planner → Script → Recovery-on-fail.
+  const result = await runPipeline(
+    {
+      client: deps.copilotClient,
+      tools,
+      cdpSession: tabHandle.cdpSession,
+      page: tabHandle.page,
+      uiMap: deps.uiMap,
+      locale: deps.locale,
+      notebookAlias: task.notebookAlias,
+      taskId: task.taskId,
+      networkGate: deps.networkGate,
+    },
+    task.command,
+  );
+
+  // 4. Map pipeline result to scheduler result.
+  return {
+    success: result.success,
+    result: result.result as object | undefined,
+    error: result.error
+      ?? (result.rejected
+        ? `Rejected (${result.rejectionCategory}): ${result.rejectionReason}`
+        : undefined),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// RUNNER_REGISTRY — maps runner name → TaskRunner function
+// ---------------------------------------------------------------------------
+
+export const RUNNER_REGISTRY: Record<string, TaskRunner> = {
+  pipeline: runPipelineTask,
+  // scanAllNotebooks: added in Task 6
+};
+
+// ---------------------------------------------------------------------------
+// T068J: createRunTask — dispatcher (shared concerns + runner dispatch)
 // (with T096: operation log recording)
 // ---------------------------------------------------------------------------
 
@@ -102,8 +177,18 @@ function createRunTask(
   const log = logger.child({ module: "daemon:runTask" });
 
   return async (task: AsyncTask): Promise<SchedulerSessionResult> => {
-    const { copilotClient, tabManager, stateManager, networkGate, cacheManager, locale, uiMap } = deps;
+    const { tabManager, stateManager, cacheManager } = deps;
     const startTime = Date.now();
+
+    // 0. Look up runner — fail fast if unknown.
+    const runnerName = task.runner ?? "pipeline";
+    const runner = RUNNER_REGISTRY[runnerName];
+    if (!runner) {
+      return {
+        success: false,
+        error: `Unknown runner: ${runnerName}`,
+      };
+    }
 
     // 1. Resolve notebook URL from state (or homepage for __homepage__).
     const isHomepage = task.notebookAlias === "__homepage__";
@@ -139,36 +224,8 @@ function createRunTask(
         width: 1920, height: 1080, deviceScaleFactor: 2, mobile: false,
       });
 
-      // 3.5. Ensure tab is on the correct page (tab pool reuse may leave
-      //      tab on a different URL, e.g. homepage after S12 deleteNotebook).
-      const currentUrl = tabHandle.page.url();
-      if (!isHomepage && !currentUrl.startsWith(targetUrl)) {
-        await tabHandle.page.goto(targetUrl, { waitUntil: "domcontentloaded" });
-        await new Promise((r) => setTimeout(r, 2000));
-        log.info("Tab navigated to correct URL", { from: currentUrl.slice(0, 60), to: targetUrl.slice(0, 60) });
-      }
-
-      // 4. Build tools for this tab (Recovery session uses these).
-      const tools = buildToolsForTab(tabHandle, task.notebookAlias, {
-        networkGate,
-        cacheManager,
-      });
-
-      // 5. Run dual session: Planner → Script → Recovery-on-fail.
-      const result = await runPipeline(
-        {
-          client: copilotClient,
-          tools,
-          cdpSession: tabHandle.cdpSession,
-          page: tabHandle.page,
-          uiMap,
-          locale,
-          notebookAlias: task.notebookAlias,
-          taskId: task.taskId,
-          networkGate,
-        },
-        task.command,
-      );
+      // 4. Dispatch to runner.
+      const result = await runner(task, tabHandle, deps);
 
       const durationMs = Date.now() - startTime;
 
@@ -206,19 +263,12 @@ function createRunTask(
         });
       }
 
-      return {
-        success: result.success,
-        result: result.result as object | undefined,
-        error: result.error
-          ?? (result.rejected
-            ? `Rejected (${result.rejectionCategory}): ${result.rejectionReason}`
-            : undefined),
-      };
+      return result;
     } finally {
-      // 6. Release tab back to pool.
+      // 5. Release tab back to pool.
       await tabManager.releaseTab(tabHandle.tabId);
 
-      // 7. Cleanup temp files from content tools (T-SB13).
+      // 6. Cleanup temp files from content tools (T-SB13).
       try {
         if (existsSync(TMP_DIR)) {
           for (const f of readdirSync(TMP_DIR)) {
