@@ -1,0 +1,52 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "05 - Module Overview: register_all_notebooks — 0 LLM Cost Batch Scan",
+  "steps": [
+    {
+      "title": "Context",
+      "description": "## 白話導讀\n\n這條 tour 其實是在看：**一個 MCP tool 如何繞過 LLM Planner，直接用確定性腳本掃描 90 個 NotebookLM notebook 並全部註冊**。\n\n如果先記不住細節，先抓住每個 step 只是在回答「怎麼讓批次操作不花 LLM token」。\n\n## notebooklm-controller 是什麼\n\n一個 MCP Server，讓 Claude Code 透過瀏覽器自動化操作 Google NotebookLM。核心架構是 G2 Script-first：Planner LLM 做意圖分類 → 確定性腳本執行 → 失敗才用 Recovery LLM。\n\n## 錨定已知\n\n如果你用過 Puppeteer 做 web scraping，這裡的 `scriptedGetNotebookUrl` 就是一個 Puppeteer 腳本，只是它被包在 `ScriptContext` injection pattern 裡。如果你用過 CLI 的 `register` 命令（像 `npm link`），`register_all_notebooks` 就是一次性的批次 `register_notebook`。\n\n## 這條路徑在解決什麼問題\n\n使用者有 90 個 notebook，但 NotebookLM 首頁的 notebook 列表沒有 `<a href>` 連結可以直接抓 URL。唯一取得 URL 的方式是：點擊 → 等待導航 → 讀取 URL → 返回首頁。如果每次都走 Planner LLM（~8-12s），90 個要 18 分鐘且花 LLM token。\n\n## 這條路徑展示什麼 mental model\n\n**Script-first 架構的 escape hatch**：當 MCP tool 需要高頻率重複執行同一腳本時，可以繞過 Planner，直接建 ScriptContext 呼叫腳本。這是 G2 架構的「底層 API 直接用」模式。\n\n## 為什麼值得讀\n\n1. 看到 `buildScriptContext` 如何從 pipeline-only 變成 reusable primitive\n2. 理解 CDP click 在 viewport 外元素的限制和 scrollIntoView 解法\n3. 學到 DOM polling stabilization 取代 hardcode sleep 的模式"
+    },
+    {
+      "file": "src/daemon/notebook-tools.ts",
+      "line": 430,
+      "ref": "5f65dec16aa696efc1030107a0cc6e02f3f208a2",
+      "title": "1. MCP Tool Entry — acquire tab + set viewport",
+      "description": "## Insight\n\n**機制**：MCP tool handler 直接取得 tab handle，設定 1920×1080 viewport，然後用 dynamic import 拉進 `buildScriptContext` 和腳本函式。這繞過了整個 Planner → Script → Recovery pipeline。\n\n**故障模式**：如果不設 viewport 到 1920×1080，800×600 會觸發 NotebookLM mobile tab view，所有 script 的 coordinate-based click 全部壞掉（這已經撞過三次了）。\n\n**設計取捨**：用 dynamic import 而非 top-level import 來拉 `buildScriptContext` 和 `scriptedGetNotebookUrl`，避免 `notebook-tools.ts` 和 `session-runner.ts` 形成循環依賴。代價是第一次呼叫有 import 開銷，但只發生一次。\n\n## 白話解析\n\n這段是 `register_all_notebooks` 的入口。它其實就是在做「自己開一個 tab，自己建 script 環境，完全不碰 LLM」。你在 Claude Code 呼叫這個 MCP tool 時，90 個 notebook 的掃描都不會出現 Planner session 的 log。\n\n## Code Detail\n\n**這段在幹嘛**：取得瀏覽器 tab、設定 viewport、建構 ScriptContext、偵測 locale。\n\n**為什麼這樣寫**：\n- 好處：0 LLM cost，90 notebooks 只花 ~2.8 分鐘\n- 好處：用 `navigator.language` 自動偵測 locale，不需要額外參數\n- 壞處：dynamic import 讓依賴關係不透明，grep 看不出 notebook-tools 依賴 session-runner\n\n**思考問題**：\n1. 如果 `buildScriptContext` 改成 static import，circular dependency 會從哪裡來？\n2. 為什麼 `__register-all__` alias 不會和真正的 notebook alias 衝突？"
+    },
+    {
+      "file": "src/agent/session-runner.ts",
+      "line": 422,
+      "ref": "5f65dec16aa696efc1030107a0cc6e02f3f208a2",
+      "title": "2. ScriptContextOptions — pipeline 的 escape hatch",
+      "description": "## Insight\n\n**機制**：`ScriptContextOptions` 是 `PipelineOptions` 的子集，只保留腳本真正需要的三個欄位（cdpSession、page、uiMap）。`buildScriptContext` 把 CDP 底層操作（dispatchClick、waitForNavigation 等）注入成 helpers，讓腳本函式不需要知道 CDP protocol 細節。\n\n**故障模式**：如果不 export `buildScriptContext`，每個想直接呼叫腳本的 caller 都得自己重建整套 helpers（dispatchClick、pollForAnswer、ensureHomepage...），極易遺漏或不一致。\n\n**設計取捨**：選擇 export 現有函式 + 窄介面（ScriptContextOptions），而非建立新的 factory 或 service。代價是 session-runner.ts 的 API 表面積增加了，但保持單一來源。\n\n## 白話解析\n\n這段是讓「非 pipeline 的 caller」也能跑腳本的關鍵。它其實就是在說「你只要給我 CDP session、Page 物件、和 UIMap，我就能幫你組裝出完整的腳本執行環境」。register_all_notebooks 就是第一個用這個 escape hatch 的 caller。\n\n## Code Detail\n\n**這段在幹嘛**：定義 `ScriptContextOptions` interface，export `buildScriptContext`。\n\n**為什麼這樣寫**：\n- 好處：單一來源 — 所有 caller（pipeline + 直接呼叫）共用同一套 helpers\n- 好處：窄介面 — caller 不需要知道 CopilotClient、tools、locale 等 pipeline 才需要的東西\n- 壞處：`buildScriptContext` 裡面 inline 定義了所有 helpers（~60 行），如果 helper 邏輯需要調整，改動集中在這一個函式裡，但也意味著這個函式很長\n\n**思考問題**：\n1. PipelineOptions 是 ScriptContextOptions 的超集 — TypeScript 結構型別系統怎麼保證 `buildScriptContext(pipelineOpts)` 也能通過？\n2. 如果未來有更多 non-pipeline caller，是否該把 helpers 抽成獨立模組？"
+    },
+    {
+      "file": "src/scripts/operations.ts",
+      "line": 846,
+      "ref": "5f65dec16aa696efc1030107a0cc6e02f3f208a2",
+      "title": "3. waitForRowsStable — polling 取代 hardcode sleep",
+      "description": "## Insight\n\n**機制**：用 polling loop 每 250ms 查一次 `tr[tabindex]` 數量，連續 2 輪不變（~500ms）就判定穩定。這解決了 cold start 時 `ensureHomepage` 只等一個 row 就回來、但 90 rows 還沒全部 render 的 race condition。\n\n**故障模式**：如果用 `sleep(3000)` 取代 polling，在快的機器上浪費 2.5 秒，在慢的連線上 3 秒不夠（90 rows render 可能要 4-5 秒）。polling 自適應，兩者都處理。\n\n**設計取捨**：用 row count 穩定性而非「等到 row count = 90」，因為我們不知道預期的 row 數量。代價是如果 NotebookLM 是「先 render 10 rows，等 2 秒再 render 剩下」的 chunked rendering，polling 可能會在第一批後就誤判為穩定。實測 90 notebooks 沒有此問題。\n\n## 白話解析\n\n這段是防止「首頁還沒載完就去找 notebook」的守門員。它其實就是在做「每 250ms 數一次 table 有幾行，連續兩次一樣就代表載完了」。如果沒有這段，cold start 時搜尋 viewport 外的 notebook 會直接 not found。\n\n## Code Detail\n\n**這段在幹嘛**：polling `tr[tabindex]` 數量直到穩定，最多等 5 秒。\n\n**為什麼這樣寫**：\n- 好處：自適應 — 快的載入 500ms 就過，慢的最多等 5s\n- 好處：不依賴魔術數字（不是 sleep(3000) 這種）\n- 壞處：如果 NotebookLM 改成 virtual scroll（只 render 可見區域），row count 可能永遠是 ~15 而非 90，此函式行為正確但 findElementByText 會找不到 below-fold 的 notebook\n\n**思考問題**：\n1. `stableRounds >= 2` 為什麼用 2 而不是 1？1 輪就穩定不夠嗎？\n2. 如果 maxWaitMs 到了但 count 還在變，回傳 lastCount 而非 throw — 這是 best-effort 設計，什麼場景下這個決定會出問題？"
+    },
+    {
+      "file": "src/scripts/operations.ts",
+      "line": 899,
+      "ref": "5f65dec16aa696efc1030107a0cc6e02f3f208a2",
+      "title": "4. scrollIntoView — CDP click 的 viewport 限制",
+      "description": "## Insight\n\n**機制**：CDP `Input.dispatchMouseEvent` 用 viewport 座標。如果元素在 viewport 外（y > 1080），click 打不到。這段先用 `scrollIntoView({ block: 'center' })` 把 row 捲到畫面中央，再取新的 `getBoundingClientRect()` 座標來 click。\n\n**故障模式**：沒有 scroll 的話，首頁第 ~15 個之後的 notebook 全部 click 失敗 — `findElementByText` 能找到（因為 DOM query 不受 viewport 限制），但 `dispatchClick` 打到空處。Spike 時「FFmpeg 文件流操作指南」在 y=2632 就踩到這個問題。\n\n**設計取捨**：用 `tr[tabindex]` 做 selector（notebook row 的 selector）而非重用 `findElementByText` 的 16 個 interactive selectors。好處是精準只找 notebook row，壞處是如果 NotebookLM 改了 row 的 HTML 結構（拿掉 `tabindex`），這段和 `ensureHomepage` 的 `waitForVisible('tr[tabindex]')` 會同時壞掉。\n\n## 白話解析\n\n這段在處理「找到了但點不到」的問題。它其實就是在做「先把 notebook row 捲到畫面中間，再去點」。你在首頁有 90 個 notebook 時，只有前 ~15 個在畫面上，剩下 75 個都需要這段 scroll 邏輯才能被點到。\n\n## Code Detail\n\n**這段在幹嘛**：scroll element into view + re-query coordinates + CDP click。\n\n**為什麼這樣寫**：\n- 好處：每次都 scroll（不判斷是否需要），邏輯簡單、no conditional branch\n- 好處：用 `block: 'center'` 而非 `block: 'nearest'`，確保元素在 viewport 中央而非邊緣（避免被 header 遮擋）\n- 壞處：每次都做 scroll + re-query 是兩次 `page.evaluate`，即使元素已經在 viewport 內。微小效能浪費（~5ms per call）\n\n**思考問題**：\n1. `findElementByText` 回傳的座標是 viewport-relative（`getBoundingClientRect`），為什麼 scroll 之後要重新 query 而不是用原座標？\n2. 如果兩個 notebook 名字完全相同，`includes(text)` 會 match 到第一個 — 這在 batch scan 時為什麼不是問題？（提示：URL dedup）"
+    },
+    {
+      "file": "src/daemon/notebook-tools.ts",
+      "line": 486,
+      "ref": "5f65dec16aa696efc1030107a0cc6e02f3f208a2",
+      "title": "5. DOM 萃取 — .project-table-title 的 title attribute",
+      "description": "## Insight\n\n**機制**：用 `.project-table-title` CSS class + `title` attribute 取得乾淨的 notebook 名稱（不含 emoji）。`textContent` 包含 emoji（「🎬 FFmpeg 文件流操作指南」），但 `title` attribute 只有純文字（「FFmpeg 文件流操作指南」）。`findElementByText` 用 `includes()` 比對 `textContent`，所以用 `title` attribute 值來搜也能 match。\n\n**故障模式**：如果改用 `textContent` 帶 emoji 作為搜尋字串，`findElementByText` 仍能 match。但 alias 生成（`generateAlias`）會把 emoji 全部變成 `-`，造成不必要的前綴 hyphen。\n\n**設計取捨**：依賴 Angular 內部 CSS class `.project-table-title`。這比用 `tr[tabindex]` 的 raw `textContent` 再 regex 解析更穩定（不用處理 locale-dependent 的「N 個來源」文字），但如果 Google 改 class name 就壞了。\n\n## 白話解析\n\n這段是從首頁 DOM 萃取 90 個 notebook 名字的地方。它其實就是在做「去 table 裡面找 .project-table-title 元素，讀它的 title attribute」。這個 attribute 恰好給了不帶 emoji 的乾淨名字，省了後續很多清理工作。\n\n## Code Detail\n\n**這段在幹嘛**：`page.evaluate` 查 DOM，萃取 `{ name, sourceCount }` 陣列。\n\n**為什麼這樣寫**：\n- 好處：一次 evaluate 拿到全部 90 個名字（vs. 90 次個別查詢）\n- 好處：用 `t.closest('tr')` 做 upward traversal 取同 row 的 source count，不需要硬算 index\n- 壞處：`sourceCount` 欄位取出來但目前沒用到（loop 裡 destructure 時被省略），是 dead data\n\n**思考問題**：\n1. 如果 NotebookLM 改成 virtual scroll（只 render 可見 rows），這段 `querySelectorAll` 會拿到幾個元素？\n2. `t.getAttribute('title')` 回傳 null 時 fallback 到 `textContent` — 這個 fallback 什麼時候會觸發？"
+    },
+    {
+      "file": "src/daemon/notebook-tools.ts",
+      "line": 535,
+      "ref": "5f65dec16aa696efc1030107a0cc6e02f3f208a2",
+      "title": "6. Alias dedup + State persistence — idempotent 批次註冊",
+      "description": "## Insight\n\n**機制**：用兩個 `Set`（existingUrls、existingAliases）做 in-memory dedup。URL 用 `normalizeUrl` 正規化後比對（strip query params/hash/trailing slash）。Alias 用 counter suffix 去重（`notebook` → `notebook-2` → `notebook-3`）。每成功一筆就 `add` 到兩個 Set + 呼叫 `stateManager.addNotebook()`。\n\n**故障模式**：`stateManager.addNotebook()` 每次都做 load → mutate → atomic save。90 次呼叫 = 90 次 disk I/O。如果過程中 daemon crash，已寫入的 notebooks 不會丟失（atomic write），下次 re-run 會被 URL dedup skip 掉。\n\n**設計取捨**：每筆獨立 persist 而非最後一次 batch write。好處是 crash-safe（partial progress preserved）。壞處是 90 次 file I/O（每次 load + temp file + rename），但實測整個 loop 的 I/O overhead 遠小於 browser click 的時間。\n\n## 白話解析\n\n這段是把拿到的 URL 實際寫進 state.json 的地方。它其實就是在做「查重（URL 有沒有註冊過？alias 有沒有撞名？）→ 寫入」。第二次跑 register_all_notebooks 時，90 個全部被 skip，因為 URL 都已經在 Set 裡了。\n\n## Code Detail\n\n**這段在幹嘛**：alias 生成 + dedup + NotebookEntry 建構 + state 寫入。\n\n**為什麼這樣寫**：\n- 好處：idempotent — 重跑不會重複註冊（URL dedup）\n- 好處：crash-safe — partial progress preserved\n- 壞處：中文 notebook 名字會變成 `notebook-{N}`（`generateAlias` 把非 a-z0-9 全部替換），alias 可讀性差。90 個中文 notebook 可能有 `notebook-2` 到 `notebook-30`\n\n**思考問題**：\n1. 如果使用者 rename 了一個 notebook 然後 re-run register_all，會發生什麼？（URL 相同，name 不同）\n2. `deduplicateAlias` 的 for loop 上限是 1000 — 什麼場景下這會不夠？"
+    }
+  ]
+}
