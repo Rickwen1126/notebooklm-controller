@@ -23,13 +23,9 @@ import type { CopilotClientSingleton } from "./client.js";
 import { buildScriptCatalog, runScript } from "../scripts/index.js";
 import { runRecoverySession } from "./recovery-session.js";
 import { saveRepairLog, saveScreenshot } from "./repair-log.js";
-import { runAgentSession } from "./agent-session.js";
-import { loadAgentConfig } from "./agent-loader.js";
-import { DEFAULT_SESSION_TIMEOUT_MS, PLANNER_MODEL, DEFAULT_AGENT_MODEL, AGENTS_DIR_USER, AGENTS_DIR_BUNDLED } from "../shared/config.js";
+import { DEFAULT_SESSION_TIMEOUT_MS, PLANNER_MODEL, DEFAULT_AGENT_MODEL } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
 import type { ExecutionPlan, ExecutionStep, UIMap } from "../shared/types.js";
-import { join } from "node:path";
-import { existsSync } from "node:fs";
 import type { ScriptContext } from "../scripts/types.js";
 import { findElementByText } from "../scripts/find-element.js";
 import { pollForAnswer, waitForGone, waitForVisible, waitForEnabled, waitForNavigation, waitForCountChange } from "../scripts/wait-primitives.js";
@@ -296,7 +292,6 @@ ${scriptCatalog}
 
 Call the submitPlan tool to submit an execution plan. Each step contains:
 - operation: the name of the operation to run
-- mode: "script" (default) or "agent" — **must match the mode listed in Available Operations**. If an operation has \`mode: agent\`, you MUST set mode to "agent".
 - params: a JSON object with the required parameters for that operation
 
 ## Rules
@@ -321,12 +316,11 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
   // Copilot SDK defineTool does NOT support z.record() — use expanded optional fields.
   // The Planner fills in whichever params the operation needs.
   const submitPlanTool = defineTool("submitPlan", {
-    description: "Submit the execution plan with operations (script or agent mode).",
+    description: "Submit the execution plan with operations.",
     parameters: z.object({
       reasoning: z.string().describe("Brief explanation of why these steps were chosen"),
       steps: z.array(z.object({
         operation: z.string().describe("Name of the operation to run"),
-        mode: z.string().optional().describe("Execution mode: 'script' (default) or 'agent' (LLM with browser tools)"),
         question: z.string().optional().describe("For query: the question to ask"),
         content: z.string().optional().describe("For addSource: the text content (for plain text sources)"),
         newName: z.string().optional().describe("For renameSource/renameNotebook: new name"),
@@ -336,7 +330,7 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
         sourceName: z.string().optional().describe("For addSource: human-readable name for the source (auto-rename after paste)"),
       })),
     }),
-    handler: async (args: { reasoning: string; steps: Array<{ operation: string; mode?: string; question?: string; content?: string; newName?: string; sourceType?: string; sourcePath?: string; sourceUrl?: string; sourceName?: string }> }) => {
+    handler: async (args: { reasoning: string; steps: Array<{ operation: string; question?: string; content?: string; newName?: string; sourceType?: string; sourcePath?: string; sourceUrl?: string; sourceName?: string }> }) => {
       // Convert expanded fields into params Record<string, string>
       const steps: ExecutionStep[] = args.steps.map((s) => {
         const params: Record<string, string> = {};
@@ -347,8 +341,7 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
         if (s.sourcePath) params.sourcePath = s.sourcePath;
         if (s.sourceUrl) params.sourceUrl = s.sourceUrl;
         if (s.sourceName) params.sourceName = s.sourceName;
-        const mode = (s.mode === "agent" ? "agent" : "script") as "script" | "agent";
-        return { operation: s.operation, params, mode };
+        return { operation: s.operation, params };
       });
       capturedPlan = { steps, reasoning: args.reasoning };
       return {
@@ -535,12 +528,10 @@ export async function runPipeline(
     // 2. Execute each step: Script → (fail? Recovery) → continue.
     const stepResults: Array<{ result?: unknown }> = [];
     for (const [i, step] of plan.steps.entries()) {
-      const mode = step.mode ?? "script";
       log.info("Executing step", {
         stepIndex: i + 1,
         totalSteps: plan.steps.length,
         operation: step.operation,
-        mode,
       });
 
       // 2a. Acquire NetworkGate permit (rate-limit protection, per-operation).
@@ -548,63 +539,7 @@ export async function runPipeline(
         await options.networkGate.acquirePermit();
       }
 
-      // 2b. Dispatch by mode: script (deterministic) or agent (LLM).
-      if (mode === "agent") {
-        // --- Agent path: LLM + browser tools ---
-        const agentsDir = existsSync(AGENTS_DIR_USER) ? AGENTS_DIR_USER : AGENTS_DIR_BUNDLED;
-        const agentConfig = await loadAgentConfig(join(agentsDir, `${step.operation}.md`), {}, options.locale);
-        if (!agentConfig) {
-          const durationMs = Date.now() - startTime;
-          return {
-            success: false,
-            error: `Agent config not found: agents/${step.operation}.md`,
-            durationMs,
-          };
-        }
-
-        const goal = `Operation: ${step.operation}, Params: ${JSON.stringify(step.params)}`;
-        const agentResult = await runAgentSession({
-          client: options.client,
-          cdp: options.cdpSession,
-          page: options.page,
-          agentConfig,
-          goal,
-        });
-
-        // Persist screenshot after agent step.
-        if (options.taskId) {
-          try {
-            const ss = await options.cdpSession.send("Page.captureScreenshot", { format: "png" }) as { data: string };
-            saveScreenshot(ss.data, options.taskId, `step${i + 1}_${step.operation}_agent`);
-          } catch { /* non-critical */ }
-        }
-
-        if (agentResult.success) {
-          log.info("Agent succeeded", {
-            stepIndex: i + 1,
-            operation: step.operation,
-            toolCalls: agentResult.toolCalls,
-            durationMs: agentResult.durationMs,
-          });
-          stepResults.push({ result: agentResult.result });
-          continue;
-        }
-
-        // Agent failed → propagate error (no Recovery for agent steps).
-        const durationMs = Date.now() - startTime;
-        log.error("Agent failed", {
-          stepIndex: i + 1,
-          operation: step.operation,
-          toolCalls: agentResult.toolCalls,
-        });
-        return {
-          success: false,
-          error: `Step ${i + 1}/${plan.steps.length} [${step.operation}] agent failed after ${agentResult.toolCalls} tool calls`,
-          durationMs,
-        };
-      }
-
-      // --- Script path: deterministic, 0 LLM ---
+      // 2b. Script path: deterministic, 0 LLM.
       const scriptResult = await runScript(step.operation, step.params, ctx);
 
       // Persist screenshot after each step (if taskId available).
