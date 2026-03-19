@@ -416,10 +416,22 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
 // ---------------------------------------------------------------------------
 
 /**
- * Build a ScriptContext from PipelineOptions.
- * Injects all CDP helpers + wait primitives + ensure helpers into ctx.
+ * Minimal input for building a ScriptContext.
+ * Subset of PipelineOptions — only the fields scripts actually need.
  */
-function buildScriptContext(options: PipelineOptions): ScriptContext {
+export interface ScriptContextOptions {
+  cdpSession: CDPSession;
+  page: Page;
+  uiMap: UIMap;
+}
+
+/**
+ * Build a ScriptContext from minimal options.
+ * Injects all CDP helpers + wait primitives + ensure helpers into ctx.
+ * Exported so non-pipeline callers (e.g. register_all_notebooks) can
+ * run scripts directly without a Planner session.
+ */
+export function buildScriptContext(options: ScriptContextOptions): ScriptContext {
   const { cdpSession: cdp, page, uiMap } = options;
 
   // CDP helpers (imported from tab-manager pattern)
