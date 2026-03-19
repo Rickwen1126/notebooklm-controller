@@ -123,4 +123,11 @@ describe("runRecoverySession", () => {
     expect(result.success).toBe(false);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
+
+  it("creates session with systemMessage mode 'replace'", async () => {
+    await runRecoverySession(makeOptions());
+    expect(mockCreateSession).toHaveBeenCalled();
+    const createArgs = mockCreateSession.mock.calls[0][0];
+    expect(createArgs.systemMessage.mode).toBe("replace");
+  });
 });

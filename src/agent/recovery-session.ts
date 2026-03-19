@@ -163,7 +163,7 @@ scriptStatus: ${scriptResult.status}
     session = await sdkClient.createSession({
       tools: allTools,
       model,
-      systemMessage: { mode: "append" as const, content: systemMessage },
+      systemMessage: { mode: "replace" as const, content: systemMessage },
       onPermissionRequest: () => ({ kind: "approved" as const }),
     });
 
