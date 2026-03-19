@@ -8,7 +8,7 @@
  * T050: list_notebooks    — list all registered notebooks
  * T053: set_default       — set the default notebook alias
  * T054: rename_notebook   — rename a notebook's alias
- * T055: remove_notebook   — remove a notebook from state and close its tab
+ * T055: unregister_notebook — remove a notebook from local registry and cache
  */
 
 import { z } from "zod";
@@ -102,7 +102,7 @@ export function registerNotebookTools(
   registerListNotebooks(server, deps);
   registerSetDefault(server, deps);
   registerRenameNotebook(server, deps);
-  registerRemoveNotebook(server, deps);
+  registerUnregisterNotebook(server, deps);
 }
 
 // ---------------------------------------------------------------------------
@@ -560,20 +560,21 @@ function registerRenameNotebook(
 }
 
 // ---------------------------------------------------------------------------
-// T055: remove_notebook
+// T055: unregister_notebook
 // ---------------------------------------------------------------------------
 
-function registerRemoveNotebook(
+function registerUnregisterNotebook(
   server: NbctlMcpServer,
   deps: NotebookToolDeps,
 ): void {
   server.registerTool(
-    "remove_notebook",
+    "unregister_notebook",
     {
       description:
-        "Remove a notebook from the registry. Closes its browser tab if open and deletes the state entry.",
+        "Remove a notebook from the local registry and clean up cached data. " +
+        "Does not affect the remote NotebookLM notebook or browser state.",
       inputSchema: {
-        alias: z.string().describe("Alias of the notebook to remove"),
+        alias: z.string().describe("Alias of the notebook to unregister"),
       },
       annotations: {
         destructiveHint: true,
@@ -588,18 +589,13 @@ function registerRemoveNotebook(
           return errorResult(`Notebook not found: "${alias}"`);
         }
 
-        // Close any open tab for this alias
-        const tabs = deps.tabManager.listTabs();
-        for (const tab of tabs) {
-          if (tab.notebookAlias === alias) {
-            await deps.tabManager.closeTab(tab.tabId);
-          }
-        }
-
         // Remove from state (also clears default if it matches)
         await deps.stateManager.removeNotebook(alias);
 
-        return jsonResult({ success: true, removed: alias });
+        // Clean up per-notebook cache
+        await deps.cacheManager.clearNotebook(alias);
+
+        return jsonResult({ success: true, unregistered: alias });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         return errorResult(message);

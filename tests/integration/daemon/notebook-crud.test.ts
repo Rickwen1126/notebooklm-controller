@@ -2,7 +2,7 @@
  * T048: Notebook CRUD integration test
  *
  * Verifies the full notebook management flow through MCP tool handlers:
- * register_notebook -> list_notebooks -> set_default -> rename_notebook -> remove_notebook.
+ * register_notebook -> list_notebooks -> set_default -> rename_notebook -> unregister_notebook.
  *
  * Uses a mock server pattern (same as lifecycle.test.ts / reauth.test.ts)
  * with in-memory state for realistic state transition testing.
@@ -128,7 +128,9 @@ function createMockDeps() {
       listTabs: vi.fn().mockReturnValue([]),
       closeTab: vi.fn().mockResolvedValue(undefined),
     },
-    cacheManager: {},
+    cacheManager: {
+      clearNotebook: vi.fn().mockResolvedValue(undefined),
+    },
     _state: inMemoryState, // expose for assertions
   };
 }
@@ -169,7 +171,7 @@ describe("T048: Notebook CRUD integration", () => {
       "list_notebooks",
       "set_default",
       "rename_notebook",
-      "remove_notebook",
+      "unregister_notebook",
     ];
 
     for (const name of expectedTools) {
@@ -185,7 +187,7 @@ describe("T048: Notebook CRUD integration", () => {
   // 2. Full CRUD flow
   // -----------------------------------------------------------------------
 
-  describe("add -> list -> set_default -> rename -> remove flow", () => {
+  describe("add -> list -> set_default -> rename -> unregister flow", () => {
     // -------------------------------------------------------------------
     // register_notebook
     // -------------------------------------------------------------------
@@ -421,12 +423,12 @@ describe("T048: Notebook CRUD integration", () => {
     });
 
     // -------------------------------------------------------------------
-    // remove_notebook
+    // unregister_notebook
     // -------------------------------------------------------------------
 
-    it("remove_notebook removes the notebook", async () => {
+    it("unregister_notebook removes the notebook and cleans cache", async () => {
       const addHandler = server.getHandler("register_notebook");
-      const removeHandler = server.getHandler("remove_notebook");
+      const unregisterHandler = server.getHandler("unregister_notebook");
 
       await addHandler({
         url: "https://notebooklm.google.com/notebook/abc123",
@@ -434,21 +436,24 @@ describe("T048: Notebook CRUD integration", () => {
       });
 
       const result = parseResult(
-        await removeHandler({ alias: "research" }),
+        await unregisterHandler({ alias: "research" }),
       );
 
       expect(result.success).toBe(true);
-      expect(result.removed).toBe("research");
+      expect(result.unregistered).toBe("research");
 
       expect(deps.stateManager.removeNotebook).toHaveBeenCalledWith(
+        "research",
+      );
+      expect(deps.cacheManager.clearNotebook).toHaveBeenCalledWith(
         "research",
       );
       expect(deps._state.notebooks["research"]).toBeUndefined();
     });
 
-    it("remove_notebook closes tab if open", async () => {
+    it("unregister_notebook does NOT close tab even if one is open", async () => {
       const addHandler = server.getHandler("register_notebook");
-      const removeHandler = server.getHandler("remove_notebook");
+      const unregisterHandler = server.getHandler("unregister_notebook");
 
       await addHandler({
         url: "https://notebooklm.google.com/notebook/abc123",
@@ -465,11 +470,13 @@ describe("T048: Notebook CRUD integration", () => {
       ]);
 
       const result = parseResult(
-        await removeHandler({ alias: "research" }),
+        await unregisterHandler({ alias: "research" }),
       );
 
       expect(result.success).toBe(true);
-      expect(deps.tabManager.closeTab).toHaveBeenCalledWith("tab-1");
+      expect(deps.tabManager.closeTab).not.toHaveBeenCalled();
+      expect(deps.stateManager.removeNotebook).toHaveBeenCalledWith("research");
+      expect(deps.cacheManager.clearNotebook).toHaveBeenCalledWith("research");
       expect(deps._state.notebooks["research"]).toBeUndefined();
     });
   });

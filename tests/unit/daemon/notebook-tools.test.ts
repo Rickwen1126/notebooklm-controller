@@ -87,7 +87,9 @@ function createMockDeps(overrides?: Partial<NotebookToolDeps>): NotebookToolDeps
       listTabs: vi.fn().mockReturnValue([]),
       closeTab: vi.fn().mockResolvedValue(undefined),
     } as unknown as NotebookToolDeps["tabManager"],
-    cacheManager: {} as unknown as NotebookToolDeps["cacheManager"],
+    cacheManager: {
+      clearNotebook: vi.fn().mockResolvedValue(undefined),
+    } as unknown as NotebookToolDeps["cacheManager"],
     ...overrides,
   };
 }
@@ -118,7 +120,7 @@ describe("registerNotebookTools", () => {
     expect(server.tools.has("list_notebooks")).toBe(true);
     expect(server.tools.has("set_default")).toBe(true);
     expect(server.tools.has("rename_notebook")).toBe(true);
-    expect(server.tools.has("remove_notebook")).toBe(true);
+    expect(server.tools.has("unregister_notebook")).toBe(true);
     expect(server.tools.has("open_notebook")).toBe(false);
     expect(server.tools.has("close_notebook")).toBe(false);
     expect(server.registerTool).toHaveBeenCalledTimes(7);
@@ -399,26 +401,27 @@ describe("registerNotebookTools", () => {
   });
 
   // -----------------------------------------------------------------------
-  // remove_notebook
+  // unregister_notebook
   // -----------------------------------------------------------------------
 
-  describe("remove_notebook", () => {
-    it("removes the notebook", async () => {
+  describe("unregister_notebook", () => {
+    it("unregisters the notebook and cleans cache", async () => {
       (deps.stateManager.load as ReturnType<typeof vi.fn>).mockResolvedValue(
         makeState({ research: makeEntry("research") }),
       );
 
-      const handler = server.getHandler("remove_notebook");
+      const handler = server.getHandler("unregister_notebook");
       const result = parseResult(
         await handler({ alias: "research" }),
       ) as Record<string, unknown>;
 
       expect(result.success).toBe(true);
-      expect(result.removed).toBe("research");
+      expect(result.unregistered).toBe("research");
       expect(deps.stateManager.removeNotebook).toHaveBeenCalledWith("research");
+      expect(deps.cacheManager.clearNotebook).toHaveBeenCalledWith("research");
     });
 
-    it("closes tab before removing", async () => {
+    it("does NOT close tabs", async () => {
       (deps.stateManager.load as ReturnType<typeof vi.fn>).mockResolvedValue(
         makeState({ research: makeEntry("research") }),
       );
@@ -426,14 +429,14 @@ describe("registerNotebookTools", () => {
         { tabId: "tab-1", notebookAlias: "research" },
       ]);
 
-      const handler = server.getHandler("remove_notebook");
+      const handler = server.getHandler("unregister_notebook");
       await handler({ alias: "research" });
 
-      expect(deps.tabManager.closeTab).toHaveBeenCalledWith("tab-1");
+      expect(deps.tabManager.closeTab).not.toHaveBeenCalled();
     });
 
     it("returns error for non-existent notebook", async () => {
-      const handler = server.getHandler("remove_notebook");
+      const handler = server.getHandler("unregister_notebook");
       const result = parseResult(
         await handler({ alias: "nonexistent" }),
       ) as Record<string, unknown>;
@@ -443,7 +446,7 @@ describe("registerNotebookTools", () => {
     });
 
     it("has destructiveHint annotation", () => {
-      const tool = server.tools.get("remove_notebook")!;
+      const tool = server.tools.get("unregister_notebook")!;
       const options = tool.options as { annotations?: { destructiveHint?: boolean } };
       expect(options.annotations?.destructiveHint).toBe(true);
     });

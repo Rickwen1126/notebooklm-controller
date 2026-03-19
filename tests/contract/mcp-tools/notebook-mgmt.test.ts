@@ -94,16 +94,16 @@ const RenameNotebookSuccessSchema = z.object({
 });
 
 // ===========================================================================
-// remove_notebook
+// unregister_notebook
 // ===========================================================================
 
-const RemoveNotebookInputSchema = z.object({
+const UnregisterNotebookInputSchema = z.object({
   alias: AliasSchema,
 });
 
-const RemoveNotebookSuccessSchema = z.object({
+const UnregisterNotebookSuccessSchema = z.object({
   success: z.literal(true),
-  removed: z.string(),
+  unregistered: z.string(),
 });
 
 // =====================================================================
@@ -670,19 +670,19 @@ describe("rename_notebook contract", () => {
 
 // =====================================================================
 
-describe("remove_notebook contract", () => {
+describe("unregister_notebook contract", () => {
   // ---------------------------------------------------------------
   // Input schema
   // ---------------------------------------------------------------
 
   describe("input schema — valid inputs", () => {
     it("accepts a valid alias", () => {
-      const result = RemoveNotebookInputSchema.safeParse({ alias: "research" });
+      const result = UnregisterNotebookInputSchema.safeParse({ alias: "research" });
       expect(result.success).toBe(true);
     });
 
     it("accepts alias with hyphens", () => {
-      const result = RemoveNotebookInputSchema.safeParse({
+      const result = UnregisterNotebookInputSchema.safeParse({
         alias: "old-project-1",
       });
       expect(result.success).toBe(true);
@@ -691,17 +691,17 @@ describe("remove_notebook contract", () => {
 
   describe("input schema — invalid inputs", () => {
     it("rejects empty alias", () => {
-      const result = RemoveNotebookInputSchema.safeParse({ alias: "" });
+      const result = UnregisterNotebookInputSchema.safeParse({ alias: "" });
       expect(result.success).toBe(false);
     });
 
     it("rejects missing alias", () => {
-      const result = RemoveNotebookInputSchema.safeParse({});
+      const result = UnregisterNotebookInputSchema.safeParse({});
       expect(result.success).toBe(false);
     });
 
     it("rejects alias with underscores", () => {
-      const result = RemoveNotebookInputSchema.safeParse({
+      const result = UnregisterNotebookInputSchema.safeParse({
         alias: "old_project",
       });
       expect(result.success).toBe(false);
@@ -714,22 +714,22 @@ describe("remove_notebook contract", () => {
 
   describe("output — success response", () => {
     it("validates a well-formed success response", () => {
-      const result = RemoveNotebookSuccessSchema.safeParse({
+      const result = UnregisterNotebookSuccessSchema.safeParse({
         success: true,
-        removed: "research",
+        unregistered: "research",
       });
       expect(result.success).toBe(true);
     });
 
-    it("rejects missing removed field", () => {
-      const result = RemoveNotebookSuccessSchema.safeParse({ success: true });
+    it("rejects missing unregistered field", () => {
+      const result = UnregisterNotebookSuccessSchema.safeParse({ success: true });
       expect(result.success).toBe(false);
     });
 
     it("rejects success: false", () => {
-      const result = RemoveNotebookSuccessSchema.safeParse({
+      const result = UnregisterNotebookSuccessSchema.safeParse({
         success: false,
-        removed: "research",
+        unregistered: "research",
       });
       expect(result.success).toBe(false);
     });
