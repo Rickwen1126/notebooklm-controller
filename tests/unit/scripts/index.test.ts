@@ -135,8 +135,8 @@ describe("buildScriptCatalog", () => {
 });
 
 describe("getAvailableOperations", () => {
-  it("returns 9 operations (destructive ops disabled)", () => {
-    expect(getAvailableOperations()).toHaveLength(9);
+  it("returns 8 operations (destructive ops disabled)", () => {
+    expect(getAvailableOperations()).toHaveLength(8);
     expect(getAvailableOperations()).toContain("addSource");
   });
 });

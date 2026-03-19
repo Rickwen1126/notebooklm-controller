@@ -328,10 +328,9 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
         sourcePath: z.string().optional().describe("For addSource with repo/pdf: absolute file path"),
         sourceUrl: z.string().optional().describe("For addSource with url: the URL to fetch and convert"),
         sourceName: z.string().optional().describe("For addSource: human-readable name for the source (auto-rename after paste)"),
-        notebookName: z.string().optional().describe("For getNotebookUrl: exact name of the notebook to click"),
       })),
     }),
-    handler: async (args: { reasoning: string; steps: Array<{ operation: string; question?: string; content?: string; newName?: string; sourceType?: string; sourcePath?: string; sourceUrl?: string; sourceName?: string; notebookName?: string }> }) => {
+    handler: async (args: { reasoning: string; steps: Array<{ operation: string; question?: string; content?: string; newName?: string; sourceType?: string; sourcePath?: string; sourceUrl?: string; sourceName?: string }> }) => {
       // Convert expanded fields into params Record<string, string>
       const steps: ExecutionStep[] = args.steps.map((s) => {
         const params: Record<string, string> = {};
@@ -342,7 +341,6 @@ Call the submitPlan tool to submit an execution plan. Each step contains:
         if (s.sourcePath) params.sourcePath = s.sourcePath;
         if (s.sourceUrl) params.sourceUrl = s.sourceUrl;
         if (s.sourceName) params.sourceName = s.sourceName;
-        if (s.notebookName) params.notebookName = s.notebookName;
         return { operation: s.operation, params };
       });
       capturedPlan = { steps, reasoning: args.reasoning };

@@ -16,7 +16,6 @@ import {
   scriptedCreateNotebook,
   scriptedRenameNotebook,
   // scriptedDeleteNotebook, // DISABLED — destructive
-  scriptedGetNotebookUrl,
 } from "./operations.js";
 import { repoToText } from "../content/repo-to-text.js";
 import { urlToText } from "../content/url-to-text.js";
@@ -206,7 +205,6 @@ const SCRIPT_REGISTRY: Record<string, (ctx: ScriptContext, params: Record<string
   createNotebook: (ctx) => scriptedCreateNotebook(ctx),
   renameNotebook: (ctx, p) => scriptedRenameNotebook(ctx, p.newName ?? ""),
   // deleteNotebook: DISABLED — destructive, manual only
-  getNotebookUrl: (ctx, p) => scriptedGetNotebookUrl(ctx, p.notebookName ?? ""),
 };
 
 /**
@@ -265,7 +263,6 @@ const SCRIPT_CATALOG: ScriptCatalogEntry[] = [
   { operation: "createNotebook", description: "Create a new notebook", params: {}, startPage: "homepage" },
   { operation: "renameNotebook", description: "Rename the first notebook on the homepage", params: { newName: "New name for the notebook" }, startPage: "homepage" },
   // deleteNotebook: DISABLED — destructive operation, manual only
-  { operation: "getNotebookUrl", description: "Click a notebook by name, capture its URL, then go back to homepage", params: { notebookName: "Exact name of the notebook to click" }, startPage: "homepage" },
 ];
 
 /**
