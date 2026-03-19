@@ -100,6 +100,23 @@ describe("Scheduler", () => {
       expect(stored).not.toBeNull();
       expect(stored!.status).toBe("completed");
     });
+
+    it("passes runner and runnerInput to task store", async () => {
+      const runTask = createMockRunTask();
+      const scheduler = new Scheduler({ taskStore, runTask });
+
+      const task = await scheduler.submit({
+        notebookAlias: "nb",
+        command: "test",
+        runner: "scanAllNotebooks",
+        runnerInput: { foo: "bar" },
+      });
+
+      expect(task.runner).toBe("scanAllNotebooks");
+      expect(task.runnerInput).toEqual({ foo: "bar" });
+
+      await scheduler.shutdown();
+    });
   });
 
   // -----------------------------------------------------------------------

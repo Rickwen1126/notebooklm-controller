@@ -81,6 +81,8 @@ export class Scheduler {
     notebookAlias: string;
     command: string;
     context?: string;
+    runner?: string;
+    runnerInput?: Record<string, unknown>;
   }): Promise<AsyncTask> {
     if (this.shuttingDown) {
       throw new Error("Scheduler is shutting down; cannot accept new tasks");
@@ -96,6 +98,8 @@ export class Scheduler {
       notebookAlias: params.notebookAlias,
       command: params.command,
       context: params.context,
+      runner: params.runner,
+      runnerInput: params.runnerInput,
     });
 
     log.info("task submitted", {
