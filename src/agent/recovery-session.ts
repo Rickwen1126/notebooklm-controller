@@ -9,12 +9,13 @@
  * Constrained to 10 tool calls to prevent infinite loops.
  */
 
-import type { CopilotSession, Tool, SessionEvent } from "@github/copilot-sdk";
+import type { CopilotSession, Tool } from "@github/copilot-sdk";
 import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import type { CDPSession, Page } from "puppeteer-core";
 import type { CopilotClientSingleton } from "./client.js";
 import { createBrowserTools } from "./browser-tools-shared.js";
+import { setupSessionEventListeners, disconnectSession } from "./session-helpers.js";
 import type { ScriptResult } from "../scripts/types.js";
 import { formatLogForAgent } from "../scripts/types.js";
 import { RECOVERY_MODEL, RECOVERY_TIMEOUT_MS } from "../shared/config.js";
@@ -144,9 +145,9 @@ scriptStatus: ${scriptResult.status}
 
 請先 screenshot 看當前畫面，然後接續完成任務。`;
 
-  const toolCallLog: RecoveryToolCall[] = [];
-  const agentMessages: string[] = [];
-  let toolCallCount = 0;
+  let toolCallLog: Array<{ tool: string; input: string; output: string }> = [];
+  let agentMessages: string[] = [];
+  let getToolCallCount = () => 0;
 
   log.info("Starting Recovery session", {
     operation: scriptResult.operation,
@@ -166,31 +167,10 @@ scriptStatus: ${scriptResult.status}
       onPermissionRequest: () => ({ kind: "approved" as const }),
     });
 
-    // Capture structured tool call log + agent messages
-    const pendingByCallId = new Map<string, { tool: string; input: string }>();
-
-    session.on((event: SessionEvent) => {
-      if (event.type === "tool.execution_start") {
-        toolCallCount++;
-        const d = event.data as { toolCallId: string; toolName: string; arguments?: Record<string, unknown> };
-        pendingByCallId.set(d.toolCallId, {
-          tool: d.toolName,
-          input: JSON.stringify(d.arguments ?? {}).slice(0, 200),
-        });
-      } else if (event.type === "tool.execution_complete") {
-        const d = event.data as { toolCallId: string; success: boolean; result?: { content: string } };
-        const pending = pendingByCallId.get(d.toolCallId);
-        toolCallLog.push({
-          tool: pending?.tool ?? "unknown",
-          input: pending?.input ?? "{}",
-          output: (d.result?.content ?? "(no content)").slice(0, 300),
-        });
-        pendingByCallId.delete(d.toolCallId);
-      } else if (event.type === "assistant.message") {
-        const d = event.data as { content?: string };
-        if (d.content?.trim()) agentMessages.push(d.content.slice(0, 300));
-      }
-    });
+    const capture = setupSessionEventListeners(session);
+    toolCallLog = capture.toolCallLog;
+    agentMessages = capture.agentMessages;
+    getToolCallCount = capture.getToolCallCount;
 
     await session.sendAndWait({ prompt: userPrompt }, timeoutMs);
   } catch (err) {
@@ -198,14 +178,7 @@ scriptStatus: ${scriptResult.status}
     log.error("Recovery session failed", { error: msg });
   } finally {
     if (session) {
-      try {
-        await Promise.race([
-          session.disconnect(),
-          new Promise<void>((_, reject) => setTimeout(() => reject(new Error("disconnect timeout")), 5_000)),
-        ]);
-      } catch {
-        // swallow disconnect errors
-      }
+      await disconnectSession(session);
     }
   }
 
@@ -223,7 +196,7 @@ scriptStatus: ${scriptResult.status}
     result: capturedResult,
     analysis: capturedAnalysis,
     suggestedPatch: capturedPatch,
-    toolCalls: toolCallCount,
+    toolCalls: getToolCallCount(),
     toolCallLog,
     agentMessages,
     finalScreenshot,
