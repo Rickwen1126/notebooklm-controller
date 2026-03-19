@@ -6,7 +6,7 @@
  * Directory permission: 700, file permission: 600.
  */
 
-import { mkdir, readFile, writeFile, rename, chmod, stat } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rename, chmod, stat, rm } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import type { SourceRecord, ArtifactRecord, OperationLogEntry } from "../shared/types.js";
 import { CACHE_DIR, DIR_PERMISSION, FILE_PERMISSION } from "../shared/config.js";
@@ -132,6 +132,22 @@ class CacheManager {
       return entries.slice(0, options.limit);
     }
     return entries;
+  }
+
+  // ---------------------------------------------------------------------------
+  // clearNotebook — delete entire notebook cache directory
+  // ---------------------------------------------------------------------------
+
+  async clearNotebook(alias: string): Promise<void> {
+    const dir = join(this.baseDir, alias);
+    try {
+      await rm(dir, { recursive: true });
+    } catch (err: unknown) {
+      if (isNodeError(err) && err.code === "ENOENT") {
+        return; // directory doesn't exist — no-op
+      }
+      throw err;
+    }
   }
 
   // ---------------------------------------------------------------------------

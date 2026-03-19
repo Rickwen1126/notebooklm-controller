@@ -277,6 +277,53 @@ describe("CacheManager", () => {
   });
 
   // -------------------------------------------------------------------------
+  // clearNotebook
+  // -------------------------------------------------------------------------
+
+  describe("clearNotebook", () => {
+    it("deletes the notebook cache directory", async () => {
+      // Setup: create a notebook cache with some data
+      await manager.addSource(makeSource({ id: "src-1", notebookAlias: "test-nb" }));
+      await manager.addArtifact(makeArtifact({ id: "art-1", notebookAlias: "test-nb" }));
+      await manager.addOperation(makeOperation({ id: "op-1", notebookAlias: "test-nb" }));
+
+      // Verify files exist
+      const sources = await manager.listSources("test-nb");
+      expect(sources).toHaveLength(1);
+
+      // Act
+      await manager.clearNotebook("test-nb");
+
+      // Assert: directory gone, listing returns empty
+      const sourcesAfter = await manager.listSources("test-nb");
+      expect(sourcesAfter).toHaveLength(0);
+      const artifactsAfter = await manager.listArtifacts("test-nb");
+      expect(artifactsAfter).toHaveLength(0);
+      const opsAfter = await manager.listOperations("test-nb");
+      expect(opsAfter).toHaveLength(0);
+
+      // Assert: directory itself is gone
+      await expect(stat(join(tmpDir, "test-nb"))).rejects.toThrow();
+    });
+
+    it("is a no-op for non-existent notebook", async () => {
+      // Should not throw
+      await expect(manager.clearNotebook("nonexistent")).resolves.toBeUndefined();
+    });
+
+    it("does not affect other notebooks", async () => {
+      await manager.addSource(makeSource({ id: "s1", notebookAlias: "keep-nb" }));
+      await manager.addSource(makeSource({ id: "s2", notebookAlias: "remove-nb" }));
+
+      await manager.clearNotebook("remove-nb");
+
+      const kept = await manager.listSources("keep-nb");
+      expect(kept).toHaveLength(1);
+      expect(kept[0].id).toBe("s1");
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Multiple notebooks isolation
   // -------------------------------------------------------------------------
 
