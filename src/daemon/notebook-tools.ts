@@ -383,200 +383,44 @@ function registerAddNotebook(
 }
 
 // ---------------------------------------------------------------------------
-// T056: register_all_notebooks — batch-scan homepage and register all
+// T056: register_all_notebooks — thin submitter → scanAllNotebooks runner
 // ---------------------------------------------------------------------------
-
-/**
- * Generate a valid alias from a notebook title.
- * Strips non-alphanumeric chars, lowercases, and truncates to 50 chars.
- */
-function generateAlias(title: string): string {
-  return (
-    title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "")
-      .slice(0, 50) || "notebook"
-  );
-}
-
-/**
- * Deduplicate alias by appending a counter suffix.
- */
-function deduplicateAlias(base: string, existing: Set<string>): string {
-  if (!existing.has(base)) return base;
-  for (let i = 2; i < 1000; i++) {
-    const candidate = `${base}-${i}`.slice(0, 50);
-    if (!existing.has(candidate)) return candidate;
-  }
-  return `${base}-${Date.now()}`.slice(0, 50);
-}
 
 function registerAddAllNotebooks(
   server: NbctlMcpServer,
   deps: NotebookToolDeps,
 ): void {
-  const log = logger.child({ module: "register_all_notebooks" });
-
   server.registerTool(
     "register_all_notebooks",
     {
       description:
         "Batch-register all notebooks in the NotebookLM account. " +
-        "Navigates to the homepage, clicks each notebook to capture its URL, " +
-        "then registers it. Skips already-registered notebooks. " +
-        "Returns a summary of registered, skipped, and failed notebooks.",
+        "Scans the homepage, clicks each notebook to capture its URL, " +
+        "and registers it. Skips already-registered notebooks. " +
+        "Uses per-notebook recovery on script failures.",
     },
     async () => {
       try {
-        // 1. Acquire tab on homepage
-        let tabHandle;
-        try {
-          tabHandle = await deps.tabManager.acquireTab({
-            notebookAlias: "__register-all__",
-            url: NOTEBOOKLM_HOMEPAGE,
-          });
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return errorResult(`Tab pool at capacity: ${msg}`);
+        if (!deps.scheduler || !deps.taskStore) {
+          return errorResult("register_all_notebooks requires scheduler");
         }
 
-        try {
-          // 2. Set viewport (contract: 1920x1080)
-          await tabHandle.cdpSession.send("Emulation.setDeviceMetricsOverride", {
-            width: 1920, height: 1080, deviceScaleFactor: 2, mobile: false,
-          });
+        const task = await deps.scheduler.submit({
+          notebookAlias: "__homepage__",
+          command: "register_all_notebooks",
+          runner: "scanAllNotebooks",
+        });
 
-          // 3. Build ScriptContext for direct script calls (0 LLM cost)
-          const { resolveLocale, loadUIMap } = await import("../shared/locale.js");
-          const { buildScriptContext } = await import("../agent/session-runner.js");
-          const { scriptedGetNotebookUrl } = await import("../scripts/operations.js");
+        await deps.scheduler.waitForTask(task.taskId);
 
-          const browserLang = await tabHandle.page.evaluate(`navigator.language`) as string;
-          const locale = resolveLocale(browserLang);
-          const uiMap = loadUIMap(locale);
-          const ctx = buildScriptContext({
-            cdpSession: tabHandle.cdpSession,
-            page: tabHandle.page,
-            uiMap,
-          });
-
-          // 4. Navigate to homepage and wait for rows to stabilize
-          await tabHandle.page.goto(NOTEBOOKLM_HOMEPAGE, { waitUntil: "domcontentloaded" });
-          // Poll until tr[tabindex] count stabilizes (same as waitForRowsStable in operations.ts)
-          let lastCount = 0;
-          let stableRounds = 0;
-          const deadline = Date.now() + 10_000;
-          while (Date.now() < deadline) {
-            const count = await tabHandle.page.evaluate(
-              `document.querySelectorAll('tr[tabindex]').length`,
-            ) as number;
-            if (count === lastCount && count > 0) {
-              stableRounds++;
-              if (stableRounds >= 2) break;
-            } else {
-              stableRounds = 0;
-            }
-            lastCount = count;
-            await new Promise((r) => setTimeout(r, 250));
-          }
-          log.info("Homepage rows stabilized", { rowCount: lastCount });
-
-          // 5. Extract notebook names from .project-table-title
-          const names = await tabHandle.page.evaluate(`(() => {
-            const titles = document.querySelectorAll('.project-table-title');
-            return Array.from(titles).map(t => ({
-              name: t.getAttribute('title') || (t.textContent || '').trim(),
-              sourceCount: t.closest('tr')?.querySelectorAll('td')[1]?.textContent?.trim() || '',
-            }));
-          })()`) as Array<{ name: string; sourceCount: string }>;
-
-          if (names.length === 0) {
-            return jsonResult({ success: true, registered: 0, skipped: 0, failed: 0, total: 0, notebooks: [] });
-          }
-
-          log.info("Extracted notebook names", { count: names.length });
-
-          // 6. Load existing state for dedup
-          const state = await deps.stateManager.load();
-          const existingUrls = new Set(
-            Object.values(state.notebooks).map((nb) => normalizeUrl(nb.url)),
-          );
-          const existingAliases = new Set(Object.keys(state.notebooks));
-
-          // 7. For each notebook: getNotebookUrl → register
-          const registered: Array<{ alias: string; url: string; title: string }> = [];
-          const skipped: Array<{ name: string; reason: string }> = [];
-          const failed: Array<{ name: string; error: string }> = [];
-
-          for (const { name } of names) {
-            if (!name) {
-              skipped.push({ name: "(empty)", reason: "empty name" });
-              continue;
-            }
-
-            // Run scriptedGetNotebookUrl (deterministic, 0 LLM cost)
-            const result = await scriptedGetNotebookUrl(ctx, name);
-            if (result.status !== "success" || !result.result) {
-              log.warn("getNotebookUrl failed", { name, status: result.status });
-              failed.push({ name, error: `script failed at step ${result.failedAtStep}` });
-              continue;
-            }
-
-            const { url } = JSON.parse(result.result) as { name: string; url: string };
-            const normalized = normalizeUrl(url);
-
-            // Skip if URL already registered
-            if (existingUrls.has(normalized)) {
-              skipped.push({ name, reason: "already registered" });
-              continue;
-            }
-
-            // Generate and deduplicate alias
-            const baseAlias = generateAlias(name);
-            const alias = deduplicateAlias(baseAlias, existingAliases);
-            existingAliases.add(alias);
-            existingUrls.add(normalized);
-
-            // Register
-            const now = new Date().toISOString();
-            const entry: NotebookEntry = {
-              alias,
-              url: normalized,
-              title: name,
-              description: "",
-              status: "ready",
-              registeredAt: now,
-              lastAccessedAt: now,
-              sourceCount: 0,
-            };
-
-            await deps.stateManager.addNotebook(entry);
-            registered.push({ alias, url: normalized, title: name });
-            log.info("Notebook registered", { alias, title: name });
-          }
-
-          log.info("Batch registration complete", {
-            registered: registered.length,
-            skipped: skipped.length,
-            failed: failed.length,
-            total: names.length,
-          });
-
-          return jsonResult({
-            success: true,
-            registered: registered.length,
-            skipped: skipped.length,
-            failed: failed.length,
-            total: names.length,
-            notebooks: registered,
-          });
-        } finally {
-          await deps.tabManager.releaseTab(tabHandle.tabId);
+        const completed = await deps.taskStore.get(task.taskId);
+        if (!completed || completed.status !== "completed") {
+          return errorResult(completed?.error ?? "Task failed");
         }
+
+        return jsonResult(completed.result ?? { success: false });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        log.error("register_all_notebooks failed", { error: message });
         return errorResult(message);
       }
     },
