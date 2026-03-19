@@ -266,6 +266,14 @@ vi.mock("../../../src/agent/session-runner.js", () => ({
 }));
 
 // ---------------------------------------------------------------------------
+// Mock: scan-notebooks-runner (runScanAllNotebooksTask)
+// ---------------------------------------------------------------------------
+
+vi.mock("../../../src/agent/scan-notebooks-runner.js", () => ({
+  runScanAllNotebooksTask: vi.fn().mockResolvedValue({ success: true }),
+}));
+
+// ---------------------------------------------------------------------------
 // Mock: agent/tools/index (buildToolsForTab)
 // ---------------------------------------------------------------------------
 
