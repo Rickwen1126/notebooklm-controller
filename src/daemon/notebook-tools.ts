@@ -20,6 +20,7 @@ import type { TaskStore } from "../state/task-store.js";
 import type { CacheManager } from "../state/cache-manager.js";
 import type { NotebookEntry } from "../shared/types.js";
 import { NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
+import { normalizeUrl, generateAlias } from "../shared/notebook-utils.js";
 import { logger } from "../shared/logger.js";
 
 // ---------------------------------------------------------------------------
@@ -27,10 +28,6 @@ import { logger } from "../shared/logger.js";
 // ---------------------------------------------------------------------------
 
 const NOTEBOOK_URL_PREFIX = `${NOTEBOOKLM_HOMEPAGE}/notebook/`;
-
-/** Strip query params, hash fragments, and trailing slash for consistent URL comparison. */
-const normalizeUrl = (u: string) =>
-  u.split("?")[0].split("#")[0].replace(/\/$/, "");
 
 /**
  * Alias validation regex:
@@ -147,13 +144,7 @@ function registerCreateNotebook(
         }
 
         // Generate alias from title if not provided
-        const generated =
-          title
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/^-|-$/g, "")
-            .slice(0, 50) || "notebook";
-        const alias = args.alias ?? generated;
+        const alias = args.alias ?? generateAlias(title);
 
         const aliasError = validateAlias(alias);
         if (aliasError) {

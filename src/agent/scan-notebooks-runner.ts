@@ -12,6 +12,7 @@ import { runRecoverySession } from "./recovery-session.js";
 import { saveRepairLog } from "./repair-log.js";
 import { scriptedExtractNotebookNames, scriptedGetNotebookUrl } from "../scripts/operations.js";
 import { NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
+import { normalizeUrl, generateAlias } from "../shared/notebook-utils.js";
 import { logger } from "../shared/logger.js";
 import type { RunTaskDeps } from "../daemon/index.js";
 import type { AsyncTask, TabHandle, NotebookEntry } from "../shared/types.js";
@@ -45,16 +46,6 @@ export interface ScanAllNotebooksResult {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-function generateAlias(title: string): string {
-  return (
-    title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "")
-      .slice(0, 50) || "notebook"
-  );
-}
-
 function deduplicateAlias(base: string, existing: Set<string>): string {
   if (!existing.has(base)) return base;
   for (let i = 2; i < 1000; i++) {
@@ -63,9 +54,6 @@ function deduplicateAlias(base: string, existing: Set<string>): string {
   }
   return `${base}-${Date.now()}`.slice(0, 50);
 }
-
-const normalizeUrl = (u: string): string =>
-  u.split("?")[0].split("#")[0].replace(/\/$/, "");
 
 // ---------------------------------------------------------------------------
 // Runner entry point

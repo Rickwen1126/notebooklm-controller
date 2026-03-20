@@ -162,10 +162,10 @@ async function runPipelineTask(
 // RUNNER_REGISTRY — maps runner name → TaskRunner function
 // ---------------------------------------------------------------------------
 
-export const RUNNER_REGISTRY: Record<string, TaskRunner> = {
+export const RUNNER_REGISTRY: Readonly<Record<string, TaskRunner>> = Object.freeze({
   pipeline: runPipelineTask,
   scanAllNotebooks: runScanAllNotebooksTask,
-};
+});
 
 // ---------------------------------------------------------------------------
 // T068J: createRunTask — dispatcher (shared concerns + runner dispatch)
