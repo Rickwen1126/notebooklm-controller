@@ -65,7 +65,7 @@ vi.mock("../../../src/scripts/operations.js", () => ({
 import { runScanAllNotebooksTask } from "../../../src/agent/scan-notebooks-runner.js";
 import type { ScanAllNotebooksResult } from "../../../src/agent/scan-notebooks-runner.js";
 import type { AsyncTask, TabHandle } from "../../../src/shared/types.js";
-import type { RunTaskDeps } from "../../../src/daemon/index.js";
+import type { RunTaskDeps } from "../../../src/daemon/types.js";
 
 // ---------------------------------------------------------------------------
 // Factory helpers

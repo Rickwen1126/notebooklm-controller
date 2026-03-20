@@ -27,7 +27,8 @@ import { logger } from "../shared/logger.js";
 import { enforcePermissions } from "../shared/permissions.js";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, unlinkSync } from "node:fs";
-import type { UIMap, AsyncTask, TabHandle, OperationActionType, OperationLogEntry } from "../shared/types.js";
+import type { UIMap, AsyncTask, OperationActionType, OperationLogEntry } from "../shared/types.js";
+import type { RunTaskDeps, TaskRunner } from "./types.js";
 import { TMP_DIR } from "../shared/config.js";
 
 // ---------------------------------------------------------------------------
@@ -48,20 +49,6 @@ export interface DaemonRuntime {
   uiMap: UIMap;
   /** Mutable Google session state — updated by startup check and reauth. */
   googleSession: { valid: boolean };
-}
-
-// ---------------------------------------------------------------------------
-// T068J: runTask factory — wires dual session to scheduler
-// ---------------------------------------------------------------------------
-
-export interface RunTaskDeps {
-  copilotClient: CopilotClientSingleton;
-  tabManager: TabManager;
-  stateManager: StateManager;
-  networkGate: NetworkGate;
-  cacheManager: CacheManager;
-  locale: string;
-  uiMap: UIMap;
 }
 
 // ---------------------------------------------------------------------------
@@ -93,25 +80,14 @@ function inferActionType(command: string): OperationActionType {
 }
 
 // ---------------------------------------------------------------------------
-// TaskRunner type + RUNNER_REGISTRY
-// ---------------------------------------------------------------------------
-
-/** A runner receives a task + acquired tab + deps, returns session result. */
-export type TaskRunner = (
-  task: AsyncTask,
-  tabHandle: TabHandle,
-  deps: RunTaskDeps,
-) => Promise<SchedulerSessionResult>;
-
-// ---------------------------------------------------------------------------
 // runPipelineTask — the default runner (G2 script-first pipeline)
 // ---------------------------------------------------------------------------
 
-async function runPipelineTask(
-  task: AsyncTask,
-  tabHandle: TabHandle,
-  deps: RunTaskDeps,
-): Promise<SchedulerSessionResult> {
+const runPipelineTask: TaskRunner = async (
+  task,
+  tabHandle,
+  deps,
+) => {
   const log = logger.child({ module: "daemon:runPipelineTask" });
 
   // 1. Ensure tab is on the correct page (tab pool reuse may leave

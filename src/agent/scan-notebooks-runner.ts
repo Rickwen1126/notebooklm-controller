@@ -14,7 +14,7 @@ import { scriptedExtractNotebookNames, scriptedGetNotebookUrl } from "../scripts
 import { NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
 import { normalizeUrl, generateAlias } from "../shared/notebook-utils.js";
 import { logger } from "../shared/logger.js";
-import type { RunTaskDeps } from "../daemon/index.js";
+import type { RunTaskDeps } from "../daemon/types.js";
 import type { AsyncTask, TabHandle, NotebookEntry } from "../shared/types.js";
 
 // ---------------------------------------------------------------------------
