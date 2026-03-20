@@ -11,6 +11,7 @@ import { buildScriptContext } from "./session-runner.js";
 import { runRecoverySession } from "./recovery-session.js";
 import { saveRepairLog } from "./repair-log.js";
 import { scriptedExtractNotebookNames, scriptedGetNotebookUrl } from "../scripts/operations.js";
+import { NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
 import type { RunTaskDeps } from "../daemon/index.js";
 import type { AsyncTask, TabHandle, NotebookEntry } from "../shared/types.js";
@@ -229,9 +230,10 @@ export async function runScanAllNotebooksTask(
           });
         }
 
-        // Navigate back to homepage + wait for rows to re-render.
+        // Navigate back to homepage (explicit goto, not goBack — recovery
+        // may have performed multiple navigations making goBack unreliable).
         try {
-          await tabHandle.page.goBack();
+          await tabHandle.page.goto(NOTEBOOKLM_HOMEPAGE, { waitUntil: "domcontentloaded" });
           await new Promise((r) => setTimeout(r, 2000));
         } catch {
           /* best-effort */
@@ -261,9 +263,9 @@ export async function runScanAllNotebooksTask(
         repairLogPath,
       });
 
-      // Best-effort: try navigating back to homepage for next iteration.
+      // Best-effort: navigate back to homepage for next iteration.
       try {
-        await tabHandle.page.goBack();
+        await tabHandle.page.goto(NOTEBOOKLM_HOMEPAGE, { waitUntil: "domcontentloaded" });
         await new Promise((r) => setTimeout(r, 2000));
       } catch {
         /* best-effort */

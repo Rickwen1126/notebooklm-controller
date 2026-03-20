@@ -103,6 +103,7 @@ function createMockTabHandle(overrides?: {
     page: {
       url: overrides?.pageUrlFn ?? vi.fn(() => "https://notebooklm.google.com/notebook/abc123"),
       goBack: vi.fn().mockResolvedValue(undefined),
+      goto: vi.fn().mockResolvedValue(undefined),
     } as any,
   };
 }
@@ -373,8 +374,8 @@ describe("runScanAllNotebooksTask", () => {
       }),
     );
 
-    // goBack called to return to homepage
-    expect(tabHandle.page.goBack).toHaveBeenCalledTimes(1);
+    // goto called to return to homepage (not goBack — recovery may navigate multiple times)
+    expect((tabHandle.page as any).goto).toHaveBeenCalledTimes(1);
   });
 
   // -----------------------------------------------------------------------
@@ -429,8 +430,8 @@ describe("runScanAllNotebooksTask", () => {
     // addNotebook NOT called
     expect(deps.stateManager.addNotebook).not.toHaveBeenCalled();
 
-    // goBack still called (best-effort return to homepage)
-    expect(tabHandle.page.goBack).toHaveBeenCalledTimes(1);
+    // goto still called (best-effort return to homepage)
+    expect((tabHandle.page as any).goto).toHaveBeenCalledTimes(1);
   });
 
   // -----------------------------------------------------------------------
