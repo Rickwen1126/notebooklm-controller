@@ -1,0 +1,82 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Code Review: Runner Registry Implementation 2026-03-20",
+  "steps": [
+    {
+      "title": "Review Summary",
+      "description": "## Review Summary\n\n\ud83d\udd34 Critical: 2 (1 fixed, 1 deferred)\n\ud83d\udfe1 Suggestions: 5 (3 fixed, 1 declined, 1 accepted-low-priority)\n\u2705 Good Practices: 5\n\n### Scope\n8 commits (ebd6031..6a34cdf) + 2 fix commits (58960ed, fc62857) on branch `002-agent-session`.\n19 files changed, +1114/-225 lines.\n\nRefactoring: AsyncTask model extension, RUNNER_REGISTRY dispatcher pattern, scanAllNotebooks runner with per-notebook recovery, collapsed MCP tool, new scriptedExtractNotebookNames, 8 unit tests.\n\n### Verdict\nArchitecture is sound. The runner registry is a clean extension point. The dispatcher correctly separates shared concerns (tab acquisition, viewport, operation log, temp cleanup) from runner-specific logic.\n\n### Post-Review Fixes (commits 58960ed, fc62857)\n- \u2705 **FIXED** \ud83d\udd34 `page.goBack()` \u2192 `page.goto(NOTEBOOKLM_HOMEPAGE)` in both recovery paths\n- \u2705 **FIXED** \ud83d\udfe1 `normalizeUrl` + `generateAlias` extracted to `src/shared/notebook-utils.ts`\n- \u2705 **FIXED** \ud83d\udfe1 `RUNNER_REGISTRY` frozen with `Object.freeze()`\n- \u274c **DECLINED** \ud83d\udfe1 `_task` logging \u2014 scheduler guarantees `__homepage__` serial, taskId adds no value\n- \ud83d\udcdd **DEFERRED** \ud83d\udd34 Circular import (type-only, runtime safe) \u2014 tracked for future shared-types extraction\n- \ud83d\udcdd **ACCEPTED** \ud83d\udfe1 Unknown runner op log gap \u2014 low priority, task store captures the error"
+    },
+    {
+      "file": "src/agent/scan-notebooks-runner.ts",
+      "line": 15,
+      "title": "\ud83d\udd34 Circular import: scan-notebooks-runner \u2194 daemon/index",
+      "description": "## Problem\n\n`scan-notebooks-runner.ts` imports `RunTaskDeps` from `../daemon/index.js` (line 15), while `daemon/index.ts` imports `runScanAllNotebooksTask` from `../agent/scan-notebooks-runner.js` (line 23). This creates a circular dependency.\n\nAlthough the import in scan-notebooks-runner is `import type` (erased at compile time), this is still an architectural smell:\n- It couples the agent layer upward to the daemon layer, violating the layering direction (daemon \u2192 agent, not agent \u2192 daemon).\n- If someone later adds a runtime import here, the cycle becomes real and causes Node.js ESM resolution issues (undefined imports).\n- It signals that `RunTaskDeps` should live in a shared location.\n\n## Fix\nExtract `RunTaskDeps` and `TaskRunner` type to a shared types file (e.g. `src/shared/runner-types.ts` or into `src/shared/types.ts`):\n\n```typescript\n// src/shared/runner-types.ts\nimport type { CopilotClientSingleton } from \"../agent/client.js\";\nimport type { TabManager } from \"../tab-manager/tab-manager.js\";\nimport type { StateManager } from \"../state/state-manager.js\";\nimport type { NetworkGate } from \"../network-gate/network-gate.js\";\nimport type { CacheManager } from \"../state/cache-manager.js\";\nimport type { UIMap, AsyncTask, TabHandle } from \"./types.js\";\n\nexport interface RunTaskDeps {\n  copilotClient: CopilotClientSingleton;\n  tabManager: TabManager;\n  stateManager: StateManager;\n  networkGate: NetworkGate;\n  cacheManager: CacheManager;\n  locale: string;\n  uiMap: UIMap;\n}\n\nexport type TaskRunner = (\n  task: AsyncTask,\n  tabHandle: TabHandle,\n  deps: RunTaskDeps,\n) => Promise<{ success: boolean; result?: object; error?: string }>;\n```\n\nThen both `daemon/index.ts` and `scan-notebooks-runner.ts` import from the shared file.\n\n## Rationale\nLayering discipline prevents accidental runtime cycles as the codebase grows. The runner registry pattern is designed to be extensible \u2014 future runners should not need to import from the daemon entry point."
+    },
+    {
+      "file": "src/agent/scan-notebooks-runner.ts",
+      "line": 234,
+      "title": "\ud83d\udd34 \u2705 FIXED: page.goBack() \u2192 page.goto(NOTEBOOKLM_HOMEPAGE)",
+      "description": "## Problem\n\nAfter recovery (success or failure), the runner called `page.goBack()` to return to the homepage. But recovery may have navigated multiple times, so `goBack()` could land on an intermediate page, causing cascade failures for subsequent notebooks.\n\n## Fix Applied (commit 58960ed)\n\nBoth recovery paths now use explicit `page.goto(NOTEBOOKLM_HOMEPAGE, { waitUntil: 'domcontentloaded' })` instead of `goBack()`. Tests updated to assert `goto` instead of `goBack`.\n\n## Rationale\nIn a 90-notebook scan, a single recovery that leaves the browser on the wrong page can cause cascade failures. Explicit navigation is deterministic; `goBack()` is not."
+    },
+    {
+      "file": "src/agent/scan-notebooks-runner.ts",
+      "line": 47,
+      "title": "\ud83d\udfe1 \u2705 FIXED: Duplicated alias generation \u2192 src/shared/notebook-utils.ts",
+      "description": "## Problem\n\n`generateAlias()` duplicated in scan-notebooks-runner.ts and inline in notebook-tools.ts `create_notebook`.\n\n## Fix Applied (commit fc62857)\n\nExtracted `generateAlias()` to `src/shared/notebook-utils.ts`. Both `notebook-tools.ts` and `scan-notebooks-runner.ts` now import from the shared module. `deduplicateAlias()` stays in the runner (only caller).\n\n## Rationale\nDRY principle. Single source of truth for alias generation rules."
+    },
+    {
+      "file": "src/agent/scan-notebooks-runner.ts",
+      "line": 66,
+      "title": "\ud83d\udfe1 \u2705 FIXED: Duplicated normalizeUrl \u2192 src/shared/notebook-utils.ts",
+      "description": "## Problem\n\n`normalizeUrl` duplicated in notebook-tools.ts and scan-notebooks-runner.ts.\n\n## Fix Applied (commit fc62857)\n\nExtracted to `src/shared/notebook-utils.ts` alongside `generateAlias`. Both consumers now import from the shared module.\n\n## Rationale\nURL normalization is security-adjacent (dedup relies on it). Single source of truth prevents divergence."
+    },
+    {
+      "file": "src/agent/scan-notebooks-runner.ts",
+      "line": 74,
+      "title": "\ud83d\udfe1 \u274c DECLINED: _task parameter unused",
+      "description": "## Problem\n\nThe `_task` parameter is prefixed with `_` indicating it is unused. TaskId not logged.\n\n## Decision: Not fixing\n\nScheduler guarantees `__homepage__` runs serial (per-notebookAlias queue). Only one scanAllNotebooks task runs at a time, so taskId adds no disambiguation value. The `_task` prefix correctly signals \"homepage-level runner, task context not needed\".\n\nWould reconsider if scheduler ever allows same-alias parallelism."
+    },
+    {
+      "file": "src/daemon/index.ts",
+      "line": 165,
+      "title": "\ud83d\udfe1 \u2705 FIXED: RUNNER_REGISTRY frozen with Object.freeze()",
+      "description": "## Problem\n\n`RUNNER_REGISTRY` was exported as a mutable object. Any module could replace runners at runtime.\n\n## Fix Applied (commit fc62857)\n\n```typescript\nexport const RUNNER_REGISTRY: Readonly<Record<string, TaskRunner>> = Object.freeze({\n  pipeline: runPipelineTask,\n  scanAllNotebooks: runScanAllNotebooksTask,\n});\n```\n\n## Rationale\nRunners get access to the browser tab and all deps. Immutability prevents accidental or malicious replacement. If dynamic registration is needed in the future, a `registerRunner()` function with validation would replace the freeze."
+    },
+    {
+      "file": "src/daemon/index.ts",
+      "line": 185,
+      "title": "\ud83d\udfe1 Unknown runner returns success:false but no operation log \u2014 silent failure",
+      "description": "## Problem\n\nWhen an unknown runner name is encountered (lines 187\u2013190), the dispatcher returns `{ success: false, error }` immediately, BEFORE the tab is acquired (line 210). This means:\n1. No operation log is recorded (the log recording is inside the `try` block after tab acquisition, line 234).\n2. The scheduler transitions the task to `failed` but the error is only visible via `taskStore.get()`, not in the operation log.\n\nThis is actually correct behavior (fail fast, no tab acquired = no tab to release), but the lack of an operation log entry means this failure is invisible in the per-notebook operation history.\n\n## Fix\nConsider moving the runner lookup validation inside the `try` block, after tab acquisition but before dispatch. Or, add a separate operation log entry for early failures.\n\nAlternatively, this is acceptable as-is if `taskStore.get()` is the primary debugging path. Document the decision.\n\n## Rationale\nMinor observability gap. The task store captures the error, so it's not lost \u2014 but operation logs provide a different view (per-notebook history) that would miss this."
+    },
+    {
+      "file": "src/daemon/notebook-tools.ts",
+      "line": 402,
+      "title": "\u2705 Clean thin-submitter pattern for register_all_notebooks",
+      "description": "## Good Practice\n\nThe `register_all_notebooks` MCP tool is now a clean 25-line thin submitter:\n1. Validates scheduler dependency (line 404)\n2. Submits task with `runner: \"scanAllNotebooks\"` (line 408\u2013412)\n3. Waits for completion (line 414)\n4. Returns the result (line 421)\n\nThis is a textbook example of the pattern: MCP tool = intent capture + submission, runner = execution logic. The tool no longer contains 173 lines of DOM interaction code. The separation enables:\n- Independent testing of the runner (scan-notebooks-runner.test.ts)\n- Reuse of the runner from other entry points\n- The runner benefits from all dispatcher concerns (viewport, operation log, tab lifecycle)"
+    },
+    {
+      "file": "src/daemon/index.ts",
+      "line": 175,
+      "title": "\u2705 Clean dispatcher separation \u2014 shared concerns before runner dispatch",
+      "description": "## Good Practice\n\n`createRunTask` now has clean separation of concerns:\n1. Runner lookup + fail-fast (lines 185\u2013191)\n2. URL resolution from state (lines 195\u2013205)\n3. Tab acquisition from pool (lines 208\u2013218)\n4. Viewport enforcement \u2014 1920x1080 contract (lines 224\u2013226)\n5. **Runner dispatch** (line 229)\n6. Operation log recording (lines 234\u2013265)\n7. Tab release + temp cleanup (lines 268\u2013282)\n\nSteps 1\u20134 and 6\u20137 are shared across ALL runners. Only step 5 is runner-specific. This means any new runner automatically gets viewport enforcement, tab lifecycle management, operation logging, and temp cleanup for free.\n\nThis is the correct factoring \u2014 runners only implement domain logic."
+    },
+    {
+      "file": "src/shared/types.ts",
+      "line": 129,
+      "title": "\u2705 Backward-compatible AsyncTask extension",
+      "description": "## Good Practice\n\nThe `runner` and `runnerInput` fields (lines 129\u2013131) are added with correct defaults:\n- `runner: string` defaults to `\"pipeline\"` in `task-store.ts` (line 73)\n- `runnerInput: Record<string, unknown> | null` defaults to `null` (line 74)\n\nThis means:\n1. Existing persisted tasks (pre-migration) that lack these fields will get defaults when read (though JSON.parse won't add them \u2014 see note below).\n2. All new tasks get explicit values.\n3. The `runner` field is a simple string, not an enum \u2014 extensible without type changes.\n\nNote: Existing task JSON files on disk won't have `runner`/`runnerInput` fields. The code at `task-store.ts:98` does `JSON.parse(raw) as AsyncTask` which means old tasks will have `undefined` for these fields, not the defaults. The dispatcher handles this gracefully at line 185: `task.runner ?? \"pipeline\"`. Good defensive coding."
+    },
+    {
+      "file": "src/scripts/operations.ts",
+      "line": 951,
+      "title": "\u2705 scriptedExtractNotebookNames uses title attribute for full names",
+      "description": "## Good Practice\n\nThe new `scriptedExtractNotebookNames` (lines 951\u2013985) correctly reads from `.project-table-title` elements, preferring the `title` attribute over `textContent`:\n\n```javascript\nt.getAttribute('title') || (t.textContent || '').trim()\n```\n\nThis is important because NotebookLM truncates long notebook titles in the visible table cell text, but the full title is in the `title` attribute. Using `getAttribute('title')` ensures the runner gets the complete name for accurate matching in `scriptedGetNotebookUrl`.\n\nThe function also reuses `waitForRowsStable` (shared with `scriptedGetNotebookUrl`) to handle the cold-start race condition where rows render progressively."
+    },
+    {
+      "file": "tests/unit/agent/scan-notebooks-runner.test.ts",
+      "line": 188,
+      "title": "\u2705 Thorough test coverage with 8 scenarios",
+      "description": "## Good Practice\n\nThe test suite covers the essential scenarios:\n1. **Happy path** (3 notebooks, all succeed) \u2014 verifies registration, alias generation, state writes\n2. **URL dedup** \u2014 already-registered URL gets skipped\n3. **Script failure + recovery success** \u2014 verifies recovery flow, repair log, goBack\n4. **Script failure + recovery failure** \u2014 verifies errorReport, finalFailures\n5. **Empty list** \u2014 edge case, total: 0\n6. **Alias dedup** \u2014 Chinese names that strip to same base alias\n7. **Extract failure** \u2014 early return with error\n8. **URL normalization** \u2014 query params and hash stripped\n\nMock quality is good: factory helpers (`createMockTask`, `createMockDeps`) keep tests DRY, and mock return value helpers (`mockExtractSuccess`, `mockUrlSuccess`, `mockUrlFailure`) make test intent clear.\n\nSuggested additions for future:\n- Test with a notebook name containing special characters (emoji, quotes)\n- Test where `stateManager.addNotebook` throws (write failure mid-scan)\n- Test with very large name list (90+ notebooks) to verify no memory issues\n- Test the `setTimeout(r, 2000)` delays don't accumulate excessively (this is hard to test but worth noting)"
+    }
+  ]
+}
