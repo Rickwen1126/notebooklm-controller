@@ -2,11 +2,11 @@
  * MCP tool registration for the daemon.
  *
  * Exports `registerDaemonTools()` which registers all daemon-level MCP tools
- * (get_status, shutdown, reauth) on the given NbctlMcpServer.
+ * (get_status, reauth, list_agents) on the given NbctlMcpServer.
  *
  * T043: get_status — daemon status overview or task lookup
- * T044: shutdown   — gracefully stop the daemon
  * T045: reauth     — switch Chrome to headed mode for re-authentication
+ * T100: list_agents — legacy tool name; returns scripted operation catalog
  */
 
 import { z } from "zod";

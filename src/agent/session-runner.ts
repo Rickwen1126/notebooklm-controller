@@ -426,8 +426,8 @@ export interface ScriptContextOptions {
 /**
  * Build a ScriptContext from minimal options.
  * Injects all CDP helpers + wait primitives + ensure helpers into ctx.
- * Exported so non-pipeline callers (e.g. register_all_notebooks) can
- * run scripts directly without a Planner session.
+ * Exported for runner-family callers only. MCP tool handlers must not
+ * construct ScriptContext or run scripts directly.
  */
 export function buildScriptContext(options: ScriptContextOptions): ScriptContext {
   const { cdpSession: cdp, page, uiMap } = options;
