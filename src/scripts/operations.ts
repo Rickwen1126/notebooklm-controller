@@ -14,8 +14,10 @@
  *   scriptedGetNotebookUrl
  */
 
-import type { ScriptContext, ScriptLogEntry, ScriptResult } from "./types.js";
+import type { ScriptContext, ScriptLogEntry, ScriptResult, FoundElement } from "./types.js";
 import { createLogEntry } from "./types.js";
+
+const HOMEPAGE_URL = "https://notebooklm.google.com";
 
 // =============================================================================
 // makeFail / makeSuccess helpers
@@ -43,6 +45,300 @@ function makeSuccess(
     totalMs: Date.now() - t0,
     failedAtStep: null, failedSelector: null,
   };
+}
+
+async function findInteractiveByPatterns(
+  ctx: ScriptContext,
+  patterns: string[],
+  options?: { xMin?: number; yMax?: number },
+): Promise<FoundElement | null> {
+  const { page } = ctx;
+  const xMin = options?.xMin ?? 0;
+  const yMax = options?.yMax ?? Number.POSITIVE_INFINITY;
+
+  const result = await page.evaluate(
+    `(() => {
+      const patterns = ${JSON.stringify(patterns.map((p) => p.toLowerCase()))};
+      const xMin = ${JSON.stringify(xMin)};
+      const yMax = ${Number.isFinite(yMax) ? JSON.stringify(yMax) : "Infinity"};
+      const INTERACTIVE = [
+        "button", "a", "input", "textarea", "select",
+        "[role=button]", "[role=link]", "[role=tab]", "[role=menuitem]",
+        "[role=option]", "[tabindex]:not([tabindex='-1'])"
+      ].join(", ");
+
+      const normalize = (value) => (value || "").replace(/\\s+/g, " ").trim().toLowerCase();
+      const matches = [];
+      for (const el of document.querySelectorAll(INTERACTIVE)) {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        const s = getComputedStyle(el);
+        if (s.display === "none" || s.visibility === "hidden") continue;
+        const centerX = Math.round(r.x + r.width / 2);
+        const centerY = Math.round(r.y + r.height / 2);
+        if (centerX < xMin || centerY > yMax) continue;
+
+        const text = normalize(el.textContent);
+        const aria = normalize(el.getAttribute("aria-label"));
+        const matched = patterns.some((p) => text.includes(p) || aria.includes(p));
+        if (!matched) continue;
+
+        const score =
+          (patterns.some((p) => text === p || aria === p) ? 20 : 0) +
+          (aria.length > 0 ? 5 : 0) +
+          Math.max(0, 2000 - centerY);
+
+        matches.push({
+          tag: el.tagName,
+          text: ((el.textContent || "").trim()).slice(0, 80),
+          disabled: el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true",
+          center: { x: centerX, y: centerY },
+          rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+          score,
+        });
+      }
+
+      matches.sort((a, b) => b.score - a.score);
+      return matches[0] || null;
+    })()`,
+  ) as (FoundElement & { score?: number }) | null;
+
+  if (!result) return null;
+  const { score: _score, ...element } = result;
+  return element;
+}
+
+async function readSourceTitles(
+  ctx: ScriptContext,
+): Promise<{ count: number; sources: string[] }> {
+  const { page, uiMap } = ctx;
+  return await page.evaluate(
+    `(() => {
+      const panel = document.querySelector(${JSON.stringify(uiMap.selectors.source_panel ?? ".source-panel")});
+      if (!panel) return { count: 0, sources: [] };
+
+      const noise = new Set([
+        "more_vert",
+        "來源",
+        "docs",
+        "dock_to_right",
+        "已儲存的來源會顯示在這裡",
+        "點選上方的「新增來源」即可新增 PDF、網站、文字、影片或音訊檔案。你也可以直接從 Google 雲端硬碟匯入檔案。",
+      ]);
+      const normalize = (value) => (value || "").replace(/\\s+/g, " ").trim();
+      const sources = [];
+
+      const cards = panel.querySelectorAll("[class*='source-item'], [class*='source-card'], .source");
+      for (const card of cards) {
+        const lines = normalize(card.textContent).split(/\\n+/).map((line) => line.trim()).filter(Boolean);
+        const firstMeaningful = lines.find((line) => !noise.has(line) && line.length > 1);
+        if (firstMeaningful) sources.push(firstMeaningful.slice(0, 100));
+      }
+
+      const deduped = [];
+      const seen = new Set();
+      for (const source of sources) {
+        if (seen.has(source)) continue;
+        seen.add(source);
+        deduped.push(source);
+      }
+
+      return { count: deduped.length, sources: deduped };
+    })()`,
+  ) as { count: number; sources: string[] };
+}
+
+async function completeNotebookRenameDialog(
+  ctx: ScriptContext,
+  newName: string,
+  log: ScriptLogEntry[],
+  startStep: number,
+): Promise<{ ok: boolean; failedStep?: number; failedSelector?: string; stepNum: number }> {
+  const { cdp, page, uiMap, helpers } = ctx;
+  let stepNum = startStep;
+
+  // Wait for dialog with input to appear.
+  let stepStart = Date.now();
+  const dialogReady = await helpers.waitForVisible(
+    page,
+    '.cdk-overlay-pane input, [role=dialog] input, mat-dialog-container input',
+    { timeoutMs: 8_000 },
+  );
+  log.push(createLogEntry(
+    stepNum,
+    "wait_dialog",
+    dialogReady.visible ? "ok" : "fail",
+    dialogReady.visible ? `Dialog ready in ${dialogReady.elapsedMs}ms` : "Dialog not detected",
+    stepStart,
+  ));
+  if (!dialogReady.visible) {
+    return { ok: false, failedStep: stepNum, failedSelector: "dialog_input", stepNum };
+  }
+
+  // Set input value via native setter + input/change events.
+  stepNum++;
+  stepStart = Date.now();
+  const inputSet = await page.evaluate(`((newName) => {
+    const sels = ['.cdk-overlay-pane input', '[role=dialog] input', 'mat-dialog-container input', 'input:not([type])'];
+    for (const sel of sels) {
+      const el = document.querySelector(sel);
+      if (el && el.getBoundingClientRect().width > 0) {
+        el.focus();
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        setter.call(el, newName);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      }
+    }
+    return false;
+  })(${JSON.stringify(newName)})`) as boolean;
+  if (!inputSet) {
+    return { ok: false, failedStep: stepNum, failedSelector: "dialog_input", stepNum };
+  }
+  log.push(createLogEntry(stepNum, "type_new_name", "ok", `Set value "${newName}" via native setter`, stepStart));
+
+  // Find save button inside the latest visible overlay.
+  stepNum++;
+  stepStart = Date.now();
+  const savePos = await page.evaluate(`(() => {
+    const targetText = ${JSON.stringify(uiMap.elements.save_button?.text ?? "儲存")};
+    const scopes = [
+      ...Array.from(document.querySelectorAll('.cdk-overlay-pane, [role=dialog], mat-dialog-container')).reverse(),
+      document,
+    ];
+    for (const scope of scopes) {
+      const btns = scope.querySelectorAll('button, [role=button], a');
+      for (const b of btns) {
+        const text = (b.textContent || '').replace(/\\s+/g, ' ').trim();
+        const aria = (b.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
+        if (!text.includes(targetText) && !aria.includes(targetText)) continue;
+        const r = b.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0 && !b.disabled) {
+          return {
+            x: Math.round(r.x + r.width / 2),
+            y: Math.round(r.y + r.height / 2),
+          };
+        }
+      }
+    }
+    return null;
+  })()`) as { x: number; y: number } | null;
+  if (!savePos) {
+    return { ok: false, failedStep: stepNum, failedSelector: "save_button", stepNum };
+  }
+
+  await helpers.dispatchClick(cdp, savePos.x, savePos.y);
+  await helpers.waitForGone(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 5_000 });
+  log.push(createLogEntry(stepNum, "click_save", "ok", `Saved at (${savePos.x},${savePos.y}), dialog closed`, stepStart));
+
+  return { ok: true, stepNum };
+}
+
+async function completeNotebookRenameInline(
+  ctx: ScriptContext,
+  newName: string,
+  log: ScriptLogEntry[],
+  startStep: number,
+): Promise<{ ok: boolean; failedStep?: number; failedSelector?: string; stepNum: number }> {
+  const { cdp, page, uiMap, helpers } = ctx;
+  let stepNum = startStep;
+
+  let stepStart = Date.now();
+  const inputReady = await helpers.waitForVisible(page, "input.title-input", { timeoutMs: 8_000 });
+  log.push(createLogEntry(
+    stepNum,
+    "wait_title_input",
+    inputReady.visible ? "ok" : "fail",
+    inputReady.visible ? `Title input ready in ${inputReady.elapsedMs}ms` : "Notebook title input not detected",
+    stepStart,
+  ));
+  if (!inputReady.visible) {
+    return { ok: false, failedStep: stepNum, failedSelector: "title_input", stepNum };
+  }
+
+  stepNum++;
+  stepStart = Date.now();
+  const inputSet = await page.evaluate(`((newName) => {
+    const input = document.querySelector('input.title-input');
+    if (!input || input.getBoundingClientRect().width === 0) return false;
+    input.focus();
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+    if (!setter) return false;
+    setter.call(input, newName);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }));
+    input.blur();
+    return true;
+  })(${JSON.stringify(newName)})`) as boolean;
+  if (!inputSet) {
+    return { ok: false, failedStep: stepNum, failedSelector: "title_input", stepNum };
+  }
+  log.push(createLogEntry(stepNum, "type_new_name_inline", "ok", `Set inline title to "${newName}"`, stepStart));
+
+  stepNum++;
+  stepStart = Date.now();
+  const savePos = await page.evaluate(`(() => {
+    const targetText = ${JSON.stringify(uiMap.elements.save_button?.text ?? "儲存")};
+    const btns = Array.from(document.querySelectorAll('button, [role=button], a'));
+    for (const b of btns) {
+      const text = (b.textContent || '').replace(/\\s+/g, ' ').trim();
+      const aria = (b.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
+      if (!text.includes(targetText) && !aria.includes(targetText)) continue;
+      const r = b.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && !b.disabled) {
+        return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+      }
+    }
+    return null;
+  })()`) as { x: number; y: number } | null;
+  if (savePos) {
+    await helpers.dispatchClick(cdp, savePos.x, savePos.y);
+    log.push(createLogEntry(stepNum, "click_inline_save", "ok", `Clicked save at (${savePos.x},${savePos.y})`, stepStart));
+  } else {
+    log.push(createLogEntry(stepNum, "click_inline_save", "warn", "No dedicated save button rendered; relying on inline commit", stepStart));
+  }
+
+  stepNum++;
+  stepStart = Date.now();
+  const committed = await page.evaluate(`((expectedName) => new Promise((resolve) => {
+    const deadline = Date.now() + 8000;
+    const readValues = () => {
+      const values = [
+        document.querySelector('input.title-input')?.value || '',
+        document.querySelector('h1.notebook-title')?.textContent || '',
+        document.querySelector('.title-label-inner')?.textContent || '',
+      ].map((value) => value.replace(/\\s+/g, ' ').trim());
+      return values;
+    };
+    const tick = () => {
+      const values = readValues();
+      if (values.some((value) => value === expectedName)) {
+        resolve(true);
+        return;
+      }
+      if (Date.now() >= deadline) {
+        resolve(false);
+        return;
+      }
+      setTimeout(tick, 200);
+    };
+    tick();
+  }))(${JSON.stringify(newName)})`) as boolean;
+  log.push(createLogEntry(
+    stepNum,
+    "verify_inline_title",
+    committed ? "ok" : "fail",
+    committed ? `Notebook title now reads "${newName}"` : `Notebook title did not settle on "${newName}"`,
+    stepStart,
+  ));
+  if (!committed) {
+    return { ok: false, failedStep: stepNum, failedSelector: "title_input", stepNum };
+  }
+
+  return { ok: true, stepNum };
 }
 
 // =============================================================================
@@ -435,12 +731,8 @@ export async function scriptedAddSource(
     // Step 12: Verify source was added by reading source panel
     stepNum = 12;
     stepStart = Date.now();
-    const sourceCount = await page.evaluate(`(() => {
-      const panel = document.querySelector(${JSON.stringify(uiMap.selectors.source_panel ?? ".source-panel")});
-      if (!panel) return -1;
-      const items = panel.querySelectorAll("[class*='source-item'], [class*='source-card'], li, .source");
-      return items.length || -1;
-    })()`) as number;
+    const sourceResult = await readSourceTitles(ctx);
+    const sourceCount = sourceResult.count;
     log.push(createLogEntry(12, "verify_source_added", sourceCount > 0 ? "ok" : "warn",
       sourceCount > 0 ? `Source panel has ${sourceCount} items` : `Could not verify source count`, stepStart));
 
@@ -458,7 +750,7 @@ export async function scriptedAddSource(
 export async function scriptedListSources(
   ctx: ScriptContext,
 ): Promise<ScriptResult> {
-  const { page, helpers } = ctx;
+  const { helpers } = ctx;
   const log: ScriptLogEntry[] = [];
   const t0 = Date.now();
   const fail = makeFail("listSources", log, t0);
@@ -470,17 +762,7 @@ export async function scriptedListSources(
 
     // Step 1: Read source panel contents
     const stepStart = Date.now();
-    const result = await page.evaluate(`(() => {
-      const panel = document.querySelector('.source-panel');
-      if (!panel) return { count: 0, sources: [] };
-      const items = panel.querySelectorAll('[class*="source-item"], [class*="source-card"], li, [role="listitem"]');
-      const sources = [];
-      for (const item of items) {
-        const text = (item.textContent || '').trim();
-        if (text) sources.push(text.slice(0, 100));
-      }
-      return { count: sources.length, sources };
-    })()`) as { count: number; sources: string[] };
+    const result = await readSourceTitles(ctx);
 
     log.push(createLogEntry(1, "read_sources", "ok",
       `Found ${result.count} source(s)`, stepStart));
@@ -797,22 +1079,50 @@ export async function scriptedCreateNotebook(
     if (!homeOk) return fail(0, "ensure_homepage", "Could not navigate to homepage");
     const initialUrl = page.url();
 
-    // Step 1: find "新建" button
+    // Give the homepage a chance to fully render rows / controls before lookup.
+    await waitForRowsStable(page, 5_000);
+
+    // Step 1: find the top-right create launcher ("新建")
     let stepStart = Date.now();
-    const createEl = await helpers.findElementByText(page, uiMap.elements.create_notebook?.text ?? "新建");
+    const createEl = await findInteractiveByPatterns(
+      ctx,
+      [
+        uiMap.elements.create_notebook?.text ?? "新建",
+        "建立新的筆記本",
+        "create new notebook",
+      ],
+      { xMin: 1200, yMax: 220 },
+    );
     if (!createEl) return fail(1, "find_create_button", `Not found`, "create_notebook");
     log.push(createLogEntry(1, "find_create_button", "ok", `Found at (${createEl.center.x}, ${createEl.center.y})`, stepStart));
 
-    // Step 2: click create
+    // Step 2: click create launcher
     stepNum = 2;
     stepStart = Date.now();
     await helpers.dispatchClick(cdp, createEl.center.x, createEl.center.y);
     log.push(createLogEntry(2, "click_create", "ok", `Clicked`, stepStart));
 
-    // Step 3: wait for navigation to new notebook
+    // Step 3: current NotebookLM UI may require a second "建立筆記本" click.
+    // First try direct navigation; if that does not happen, look for the follow-up action.
     stepNum = 3;
     stepStart = Date.now();
-    const nav = await helpers.waitForNavigation(page, { notUrl: initialUrl, timeoutMs: 15_000 });
+    let nav = await helpers.waitForNavigation(page, { notUrl: initialUrl, timeoutMs: 3_000 });
+    if (!nav.navigated) {
+      const confirmEl = await findInteractiveByPatterns(
+        ctx,
+        [
+          "建立筆記本",
+          "建立新的筆記本",
+          "create notebook",
+        ],
+        { xMin: 1100, yMax: 180 },
+      );
+      if (!confirmEl) return fail(3, "find_create_confirm", "Create confirmation action not found", "create_notebook");
+
+      await helpers.dispatchClick(cdp, confirmEl.center.x, confirmEl.center.y);
+      log.push(createLogEntry(3, "click_create_confirm", "ok", `Clicked follow-up action`, stepStart));
+      nav = await helpers.waitForNavigation(page, { notUrl: initialUrl, timeoutMs: 15_000 });
+    }
     if (!nav.navigated) return fail(3, "wait_navigation", `URL did not change`, "navigation");
     log.push(createLogEntry(3, "wait_navigation", "ok", `Navigated to ${nav.url} in ${nav.elapsedMs}ms`, stepStart));
 
@@ -823,12 +1133,32 @@ export async function scriptedCreateNotebook(
     log.push(createLogEntry(4, "wait_page_load", h1.visible ? "ok" : "warn",
       h1.visible ? `Page loaded in ${h1.elapsedMs}ms` : `h1 not visible yet`, stepStart));
 
+    // Step 5: NotebookLM may briefly navigate to /notebook/creating before the
+    // final notebook ID URL is assigned. Wait for the final URL when needed.
+    let finalUrl = nav.url;
+    if (finalUrl.endsWith("/creating")) {
+      stepNum = 5;
+      stepStart = Date.now();
+      const finalNav = await helpers.waitForNavigation(page, {
+        notUrl: finalUrl,
+        timeoutMs: 20_000,
+      });
+      if (finalNav.navigated) {
+        finalUrl = finalNav.url;
+        log.push(createLogEntry(5, "wait_final_notebook_url", "ok",
+          `Resolved final URL ${finalUrl} in ${finalNav.elapsedMs}ms`, stepStart));
+      } else {
+        log.push(createLogEntry(5, "wait_final_notebook_url", "warn",
+          "Still on /notebook/creating after timeout", stepStart));
+      }
+    }
+
     const title = await page.evaluate(`(() => {
       const h1 = document.querySelector('h1');
       return h1 ? h1.textContent.trim() : null;
     })()`) as string | null;
 
-    return makeSuccess("createNotebook", log, t0, JSON.stringify({ url: nav.url, title }));
+    return makeSuccess("createNotebook", log, t0, JSON.stringify({ url: finalUrl, title }));
   } catch (err) {
     return fail(stepNum, "exception", err instanceof Error ? err.message : String(err));
   }
@@ -999,83 +1329,50 @@ export async function scriptedRenameNotebook(
   const fail = makeFail("renameNotebook", log, t0);
 
   try {
-    // Step 0: Ensure homepage
-    const homeOk = await helpers.ensureHomepage(ctx, log, t0);
-    if (!homeOk) return fail(0, "ensure_homepage", "Could not navigate to homepage");
+    const currentUrl = page.url();
+    const onHomepage = currentUrl === HOMEPAGE_URL || currentUrl === HOMEPAGE_URL + "/";
 
-    // Step 1: open notebook context menu
-    const menu = await openNotebookMenu(ctx, log, 1);
-    if (!menu.ok) return fail(menu.stepNum, "open_notebook_menu", "Failed", "notebook_menu");
-    stepNum = menu.stepNum + 1;
+    if (onHomepage) {
+      // Step 0: Ensure homepage
+      const homeOk = await helpers.ensureHomepage(ctx, log, t0);
+      if (!homeOk) return fail(0, "ensure_homepage", "Could not navigate to homepage");
 
-    // Find "編輯標題" and click immediately (menu may auto-close on focus loss)
-    let stepStart = Date.now();
-    const editEl = await helpers.findElementByText(page, uiMap.elements.edit_title?.text ?? "編輯標題");
-    if (!editEl) return fail(stepNum, "find_edit_title", `Not found`, "edit_title");
-    await helpers.dispatchClick(cdp, editEl.center.x, editEl.center.y);
-    log.push(createLogEntry(stepNum, "click_edit_title", "ok", `Found and clicked`, stepStart));
+      // Step 1: open notebook context menu on homepage list
+      const menu = await openNotebookMenu(ctx, log, 1);
+      if (!menu.ok) return fail(menu.stepNum, "open_notebook_menu", "Failed", "notebook_menu");
+      stepNum = menu.stepNum + 1;
 
-    // Wait for dialog with input to appear
-    stepNum++;
-    stepStart = Date.now();
-    const dialogReady = await helpers.waitForVisible(page, '.cdk-overlay-pane input, [role=dialog] input, mat-dialog-container input', { timeoutMs: 8000 });
-    if (!dialogReady.visible) {
-      // Retry: re-open menu and click again
-      const retry = await openNotebookMenu(ctx, log, stepNum);
-      if (retry.ok) {
-        const retryEdit = await helpers.findElementByText(page, uiMap.elements.edit_title?.text ?? "編輯標題");
-        if (retryEdit) {
-          await helpers.dispatchClick(cdp, retryEdit.center.x, retryEdit.center.y);
-          await helpers.waitForVisible(page, '.cdk-overlay-pane input, [role=dialog] input', { timeoutMs: 5000 });
-        }
+      let stepStart = Date.now();
+      const editEl = await helpers.findElementByText(page, uiMap.elements.edit_title?.text ?? "編輯標題");
+      if (!editEl) return fail(stepNum, "find_edit_title", `Not found`, "edit_title");
+      await helpers.dispatchClick(cdp, editEl.center.x, editEl.center.y);
+      log.push(createLogEntry(stepNum, "click_edit_title", "ok", `Found and clicked`, stepStart));
+      const rename = await completeNotebookRenameDialog(ctx, newName, log, stepNum + 1);
+      if (!rename.ok) {
+        return fail(
+          rename.failedStep ?? stepNum + 1,
+          rename.failedSelector === "save_button" ? "find_save" : "rename_dialog",
+          rename.failedSelector === "save_button"
+            ? "Save button not found in dialog overlay"
+            : "Rename dialog flow failed",
+          rename.failedSelector,
+        );
       }
+
+      return makeSuccess("renameNotebook", log, t0, `Notebook renamed to "${newName}"`);
     }
-    log.push(createLogEntry(stepNum, "wait_dialog", dialogReady.visible ? "ok" : "warn",
-      dialogReady.visible ? `Dialog ready in ${dialogReady.elapsedMs}ms` : "Dialog not detected, retried", stepStart));
 
-    // Find input in dialog, set value via JS native setter + input event.
-    // CDP Input.insertText does NOT trigger Angular Material change detection.
-    // Must use HTMLInputElement.prototype.value setter + dispatchEvent('input').
-    stepNum++;
-    stepStart = Date.now();
-    await helpers.waitForVisible(page, '[role=dialog] input, mat-dialog-container input, [role=dialog] textarea, .cdk-overlay-pane input', { timeoutMs: 5000 });
-    const inputSet = await page.evaluate(`((newName) => {
-      const sels = ['.cdk-overlay-pane input', '[role=dialog] input', 'mat-dialog-container input', 'input:not([type])'];
-      for (const sel of sels) {
-        const el = document.querySelector(sel);
-        if (el && el.getBoundingClientRect().width > 0) {
-          el.focus();
-          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-          setter.call(el, newName);
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-          return true;
-        }
-      }
-      return false;
-    })(${JSON.stringify(newName)})`) as boolean;
-    if (!inputSet) return fail(stepNum, "find_dialog_input", `No input in dialog or value set failed`, "dialog_input");
-    log.push(createLogEntry(stepNum, "type_new_name", "ok", `Set value "${newName}" via native setter`, stepStart));
-
-    // Find save button INSIDE dialog (not full page — "儲存" may appear in notebook titles)
-    stepNum++;
-    stepStart = Date.now();
-    const savePos = await page.evaluate(`(() => {
-      const overlay = document.querySelector('.cdk-overlay-pane, [role=dialog], mat-dialog-container');
-      if (!overlay) return null;
-      const btns = overlay.querySelectorAll('button, [role=button]');
-      for (const b of btns) {
-        if (b.textContent.trim() === '${uiMap.elements.save_button?.text ?? "儲存"}') {
-          const r = b.getBoundingClientRect();
-          if (r.width > 0 && !b.disabled) return { x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2) };
-        }
-      }
-      return null;
-    })()`) as { x: number; y: number } | null;
-    if (!savePos) return fail(stepNum, "find_save", `Save button not found in dialog overlay`, "save_button");
-    await helpers.dispatchClick(cdp, savePos.x, savePos.y);
-    await helpers.waitForGone(page, '[role=dialog], .cdk-overlay-pane', { timeoutMs: 5000 });
-    log.push(createLogEntry(stepNum, "click_save", "ok", `Saved at (${savePos.x},${savePos.y}), dialog closed`, stepStart));
+    const rename = await completeNotebookRenameInline(ctx, newName, log, stepNum);
+    if (!rename.ok) {
+      return fail(
+        rename.failedStep ?? stepNum,
+        rename.failedSelector === "save_button" ? "find_save" : "rename_inline",
+        rename.failedSelector === "save_button"
+          ? "Save button not found after inline rename"
+          : "Inline notebook title rename failed",
+        rename.failedSelector,
+      );
+    }
 
     return makeSuccess("renameNotebook", log, t0, `Notebook renamed to "${newName}"`);
   } catch (err) {

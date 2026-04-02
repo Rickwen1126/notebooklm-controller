@@ -4,11 +4,13 @@
  * Exports `registerNotebookTools()` which registers all notebook-level MCP tools
  * on the given NbctlMcpServer.
  *
- * T049: add_notebook      — register a new NotebookLM notebook
- * T050: list_notebooks    — list all registered notebooks
- * T053: set_default       — set the default notebook alias
- * T054: rename_notebook   — rename a notebook's alias
+ * T049: register_notebook   — register an existing NotebookLM notebook by URL
+ * T050: list_notebooks      — list all registered notebooks
+ * T053: set_default         — set the default notebook alias
+ * T054: rename_notebook     — rename a notebook's alias
  * T055: unregister_notebook — remove a notebook from local registry and cache
+ * T056: register_all_notebooks — scan homepage and batch-register notebooks
+ * T057: create_notebook     — create a new notebook via homepage runner
  */
 
 import { z } from "zod";
@@ -21,7 +23,6 @@ import type { CacheManager } from "../state/cache-manager.js";
 import type { NotebookEntry } from "../shared/types.js";
 import { NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
 import { normalizeUrl, generateAlias } from "../shared/notebook-utils.js";
-import { logger } from "../shared/logger.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -103,15 +104,13 @@ export function registerNotebookTools(
 }
 
 // ---------------------------------------------------------------------------
-// create_notebook — create a new notebook on NotebookLM and auto-register
+// create_notebook — thin submitter → createNotebook runner
 // ---------------------------------------------------------------------------
 
 function registerCreateNotebook(
   server: NbctlMcpServer,
   deps: NotebookToolDeps,
 ): void {
-  const log = logger.child({ module: "create_notebook" });
-
   server.registerTool(
     "create_notebook",
     {
@@ -157,16 +156,11 @@ function registerCreateNotebook(
           return errorResult(`Alias already exists: "${alias}"`);
         }
 
-        // 1. Agent creates + renames the notebook on NotebookLM
-        log.info("Creating notebook via agent", { title, alias });
-
         const task = await deps.scheduler.submit({
           notebookAlias: "__homepage__",
-          command:
-            `建立一本新的筆記本，標題設定為「${title}」。` +
-            `步驟：先點「新建」建立筆記本，然後回首頁用「編輯標題」改名為「${title}」。` +
-            `改名時用 paste(text="${title}", clear=true) 取代舊標題。` +
-            `最後驗證首頁上的標題完全正確。`,
+          command: "create_notebook",
+          runner: "createNotebook",
+          runnerInput: { title, alias },
         });
 
         await deps.scheduler.waitForTask(task.taskId);
@@ -176,104 +170,7 @@ function registerCreateNotebook(
           const err = completed?.error ?? "Task failed";
           return errorResult(`Failed to create notebook: ${err}`);
         }
-
-        // 2. Extract notebook URL by clicking into it from the homepage.
-        //    The click may open a new tab (target=_blank) — handle both cases.
-        //    Uses acquireTab/releaseTab so this tab participates in the pool.
-        log.info("Extracting notebook URL: navigate into notebook from homepage");
-
-        let tabHandle;
-        try {
-          tabHandle = await deps.tabManager.acquireTab({
-            notebookAlias: "__create-extract__",
-            url: NOTEBOOKLM_HOMEPAGE,
-          });
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return errorResult(`Tab pool at capacity during URL extraction: ${msg}`);
-        }
-
-        let notebookUrl: string;
-        try {
-          await new Promise((resolve) => setTimeout(resolve, 4_000));
-
-          // Track pages before click so we can detect new tabs
-          const browser = tabHandle.page.browser();
-          const pagesBefore = await browser.pages();
-
-          // Click on the notebook row matching the title (or first row if title not found)
-          const clicked = await tabHandle.page.evaluate((searchTitle: string) => {
-            const rows = document.querySelectorAll("tr[tabindex], [role='row'], a[href*='/notebook/']");
-            for (const row of rows) {
-              if (row.textContent?.includes(searchTitle)) {
-                (row as HTMLElement).click();
-                return "title-match";
-              }
-            }
-            if (rows.length > 0) {
-              (rows[0] as HTMLElement).click();
-              return "first-row";
-            }
-            return null;
-          }, title);
-
-          if (!clicked) {
-            return errorResult("Could not find any notebook on the homepage to extract URL");
-          }
-
-          await new Promise((resolve) => setTimeout(resolve, 5_000));
-
-          // Check if a new tab was opened
-          const pagesAfter = await browser.pages();
-          const newPage = pagesAfter.find((p) => !pagesBefore.includes(p));
-
-          if (newPage && newPage.url().includes("/notebook/")) {
-            // New tab opened — get URL from it, close it
-            notebookUrl = newPage.url();
-            await newPage.close();
-          } else {
-            // Same-tab navigation
-            notebookUrl = tabHandle.page.url();
-          }
-        } finally {
-          await deps.tabManager.releaseTab(tabHandle.tabId);
-        }
-
-        // Normalize: strip query params, hash, trailing slash
-        notebookUrl = normalizeUrl(notebookUrl);
-
-        log.info("URL extracted", { url: notebookUrl });
-
-        if (!notebookUrl) {
-          return errorResult(
-            `Notebook "${title}" was created but could not find its URL on the homepage. ` +
-            `Use register_notebook to manually register it.`,
-          );
-        }
-
-        // 3. Auto-register
-        const now = new Date().toISOString();
-        const entry: NotebookEntry = {
-          alias,
-          url: notebookUrl,
-          title,
-          description: "",
-          status: "ready",
-          registeredAt: now,
-          lastAccessedAt: now,
-          sourceCount: 0,
-        };
-
-        await deps.stateManager.addNotebook(entry);
-
-        log.info("Notebook created and registered", { alias, url: notebookUrl, title });
-
-        return jsonResult({
-          success: true,
-          alias,
-          url: notebookUrl,
-          title,
-        });
+        return jsonResult(completed.result ?? { success: false });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         return errorResult(message);
@@ -296,7 +193,7 @@ function registerAddNotebook(
       description:
         "Register an existing NotebookLM notebook by URL. " +
         "Provide the notebook URL and a short alias for future reference. " +
-        "To create a new notebook, use exec(prompt='建立新筆記本') instead.",
+        "To create a new notebook in NotebookLM, use create_notebook instead.",
       inputSchema: {
         url: z
           .string()

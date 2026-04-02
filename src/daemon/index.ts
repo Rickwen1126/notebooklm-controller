@@ -21,6 +21,7 @@ import { NetworkGate } from "../network-gate/network-gate.js";
 import { resolveLocale, loadUIMap } from "../shared/locale.js";
 import { runPipeline } from "../agent/session-runner.js";
 import { runScanAllNotebooksTask } from "../agent/scan-notebooks-runner.js";
+import { runCreateNotebookTask } from "../agent/create-notebook-runner.js";
 import { buildToolsForTab } from "../agent/tools/index.js";
 import { MCP_PORT, NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
 import { logger } from "../shared/logger.js";
@@ -141,6 +142,7 @@ const runPipelineTask: TaskRunner = async (
 export const RUNNER_REGISTRY: Readonly<Record<string, TaskRunner>> = Object.freeze({
   pipeline: runPipelineTask,
   scanAllNotebooks: runScanAllNotebooksTask,
+  createNotebook: runCreateNotebookTask,
 });
 
 // ---------------------------------------------------------------------------

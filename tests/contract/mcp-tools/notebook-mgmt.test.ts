@@ -31,6 +31,22 @@ const ErrorOutputSchema = z.object({
 });
 
 // ===========================================================================
+// create_notebook
+// ===========================================================================
+
+const CreateNotebookInputSchema = z.object({
+  title: z.string().min(1),
+  alias: AliasSchema.optional(),
+});
+
+const CreateNotebookSuccessSchema = z.object({
+  success: z.literal(true),
+  alias: z.string(),
+  url: NotebookUrlSchema,
+  title: z.string().min(1),
+});
+
+// ===========================================================================
 // register_notebook
 // ===========================================================================
 
@@ -109,6 +125,62 @@ const UnregisterNotebookSuccessSchema = z.object({
 // =====================================================================
 // Tests
 // =====================================================================
+
+describe("create_notebook contract", () => {
+  describe("input schema — valid inputs", () => {
+    it("accepts title only", () => {
+      const result = CreateNotebookInputSchema.safeParse({
+        title: "My Research",
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts title with explicit alias", () => {
+      const result = CreateNotebookInputSchema.safeParse({
+        title: "My Research",
+        alias: "my-research",
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe("input schema — invalid inputs", () => {
+    it("rejects empty title", () => {
+      const result = CreateNotebookInputSchema.safeParse({
+        title: "",
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects invalid alias when provided", () => {
+      const result = CreateNotebookInputSchema.safeParse({
+        title: "My Research",
+        alias: "Bad Alias",
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("output schema", () => {
+    it("accepts success output", () => {
+      const result = CreateNotebookSuccessSchema.safeParse({
+        success: true,
+        alias: "my-research",
+        url: "https://notebooklm.google.com/notebook/abc123",
+        title: "My Research",
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts standard error output", () => {
+      const result = ErrorOutputSchema.safeParse({
+        success: false,
+        error: "Failed to create notebook",
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+});
 
 describe("register_notebook contract", () => {
   // ---------------------------------------------------------------

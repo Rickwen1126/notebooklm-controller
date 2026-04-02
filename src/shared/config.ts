@@ -110,9 +110,15 @@ export const NOTEBOOKLM_HOMEPAGE = "https://notebooklm.google.com" as const;
 
 export const NOTEBOOKLM_URL_PATTERN =
   /^https:\/\/notebooklm\.google\.com\/notebook\/.+/;
+export const NOTEBOOKLM_FINAL_URL_PATTERN =
+  /^https:\/\/notebooklm\.google\.com\/notebook\/(?!creating(?:\/|$))[^/?#]+(?:[/?#].*)?$/;
 
 export function isValidNotebookUrl(url: string): boolean {
   return NOTEBOOKLM_URL_PATTERN.test(url);
+}
+
+export function isFinalNotebookUrl(url: string): boolean {
+  return NOTEBOOKLM_FINAL_URL_PATTERN.test(url);
 }
 
 // ---------------------------------------------------------------------------

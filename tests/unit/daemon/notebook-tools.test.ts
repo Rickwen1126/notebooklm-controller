@@ -86,10 +86,50 @@ function createMockDeps(overrides?: Partial<NotebookToolDeps>): NotebookToolDeps
     tabManager: {
       listTabs: vi.fn().mockReturnValue([]),
       closeTab: vi.fn().mockResolvedValue(undefined),
+      acquireTab: vi.fn(),
+      releaseTab: vi.fn(),
     } as unknown as NotebookToolDeps["tabManager"],
     cacheManager: {
       clearNotebook: vi.fn().mockResolvedValue(undefined),
     } as unknown as NotebookToolDeps["cacheManager"],
+    scheduler: {
+      submit: vi.fn().mockResolvedValue({
+        taskId: "task-create-001",
+        notebookAlias: "__homepage__",
+        runner: "createNotebook",
+        runnerInput: { title: "My Research", alias: "my-research" },
+        command: "create_notebook",
+        context: null,
+        status: "queued",
+        result: null,
+        error: null,
+        errorScreenshot: null,
+        history: [],
+        createdAt: "2026-01-01T00:00:00Z",
+      }),
+      waitForTask: vi.fn().mockResolvedValue(undefined),
+    } as unknown as NotebookToolDeps["scheduler"],
+    taskStore: {
+      get: vi.fn().mockResolvedValue({
+        taskId: "task-create-001",
+        notebookAlias: "__homepage__",
+        runner: "createNotebook",
+        runnerInput: { title: "My Research", alias: "my-research" },
+        command: "create_notebook",
+        context: null,
+        status: "completed",
+        result: {
+          success: true,
+          alias: "my-research",
+          url: "https://notebooklm.google.com/notebook/new123",
+          title: "My Research",
+        },
+        error: null,
+        errorScreenshot: null,
+        history: [],
+        createdAt: "2026-01-01T00:00:00Z",
+      }),
+    } as unknown as NotebookToolDeps["taskStore"],
     ...overrides,
   };
 }
@@ -124,6 +164,54 @@ describe("registerNotebookTools", () => {
     expect(server.tools.has("open_notebook")).toBe(false);
     expect(server.tools.has("close_notebook")).toBe(false);
     expect(server.registerTool).toHaveBeenCalledTimes(7);
+  });
+
+  // -----------------------------------------------------------------------
+  // create_notebook
+  // -----------------------------------------------------------------------
+
+  describe("create_notebook", () => {
+    it("submits createNotebook runner and formats the completed result", async () => {
+      const handler = server.getHandler("create_notebook");
+      const result = parseResult(
+        await handler({ title: "My Research" }),
+      ) as Record<string, unknown>;
+
+      expect(result).toEqual({
+        success: true,
+        alias: "my-research",
+        url: "https://notebooklm.google.com/notebook/new123",
+        title: "My Research",
+      });
+      expect(deps.scheduler!.submit).toHaveBeenCalledWith({
+        notebookAlias: "__homepage__",
+        command: "create_notebook",
+        runner: "createNotebook",
+        runnerInput: { title: "My Research", alias: "my-research" },
+      });
+      expect(deps.scheduler!.waitForTask).toHaveBeenCalledWith("task-create-001");
+    });
+
+    it("uses provided alias in runnerInput", async () => {
+      const handler = server.getHandler("create_notebook");
+      await handler({ title: "My Research", alias: "custom-alias" });
+
+      expect(deps.scheduler!.submit).toHaveBeenCalledWith({
+        notebookAlias: "__homepage__",
+        command: "create_notebook",
+        runner: "createNotebook",
+        runnerInput: { title: "My Research", alias: "custom-alias" },
+      });
+    });
+
+    it("does not orchestrate browser execution in the MCP tool handler", async () => {
+      const handler = server.getHandler("create_notebook");
+      await handler({ title: "My Research" });
+
+      expect(deps.tabManager.acquireTab).not.toHaveBeenCalled();
+      expect(deps.tabManager.releaseTab).not.toHaveBeenCalled();
+      expect(deps.stateManager.addNotebook).not.toHaveBeenCalled();
+    });
   });
 
   // -----------------------------------------------------------------------

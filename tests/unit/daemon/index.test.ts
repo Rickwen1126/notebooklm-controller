@@ -273,6 +273,10 @@ vi.mock("../../../src/agent/scan-notebooks-runner.js", () => ({
   runScanAllNotebooksTask: vi.fn().mockResolvedValue({ success: true }),
 }));
 
+vi.mock("../../../src/agent/create-notebook-runner.js", () => ({
+  runCreateNotebookTask: vi.fn().mockResolvedValue({ success: true }),
+}));
+
 // ---------------------------------------------------------------------------
 // Mock: agent/tools/index (buildToolsForTab)
 // ---------------------------------------------------------------------------

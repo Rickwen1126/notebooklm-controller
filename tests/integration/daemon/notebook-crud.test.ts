@@ -127,9 +127,49 @@ function createMockDeps() {
     tabManager: {
       listTabs: vi.fn().mockReturnValue([]),
       closeTab: vi.fn().mockResolvedValue(undefined),
+      acquireTab: vi.fn(),
+      releaseTab: vi.fn(),
     },
     cacheManager: {
       clearNotebook: vi.fn().mockResolvedValue(undefined),
+    },
+    scheduler: {
+      submit: vi.fn().mockResolvedValue({
+        taskId: "task-create-001",
+        notebookAlias: "__homepage__",
+        runner: "createNotebook",
+        runnerInput: { title: "My Research", alias: "my-research" },
+        command: "create_notebook",
+        context: null,
+        status: "queued",
+        result: null,
+        error: null,
+        errorScreenshot: null,
+        history: [],
+        createdAt: "2026-01-01T00:00:00Z",
+      }),
+      waitForTask: vi.fn().mockResolvedValue(undefined),
+    },
+    taskStore: {
+      get: vi.fn().mockResolvedValue({
+        taskId: "task-create-001",
+        notebookAlias: "__homepage__",
+        runner: "createNotebook",
+        runnerInput: { title: "My Research", alias: "my-research" },
+        command: "create_notebook",
+        context: null,
+        status: "completed",
+        result: {
+          success: true,
+          alias: "my-research",
+          url: "https://notebooklm.google.com/notebook/new123",
+          title: "My Research",
+        },
+        error: null,
+        errorScreenshot: null,
+        history: [],
+        createdAt: "2026-01-01T00:00:00Z",
+      }),
     },
     _state: inMemoryState, // expose for assertions
   };
@@ -188,6 +228,28 @@ describe("T048: Notebook CRUD integration", () => {
   // -----------------------------------------------------------------------
 
   describe("add -> list -> set_default -> rename -> unregister flow", () => {
+    it("create_notebook submits the createNotebook runner and returns its result", async () => {
+      const createHandler = server.getHandler("create_notebook");
+      const result = parseResult(
+        await createHandler({ title: "My Research" }),
+      );
+
+      expect(result).toEqual({
+        success: true,
+        alias: "my-research",
+        url: "https://notebooklm.google.com/notebook/new123",
+        title: "My Research",
+      });
+      expect(deps.scheduler.submit).toHaveBeenCalledWith({
+        notebookAlias: "__homepage__",
+        command: "create_notebook",
+        runner: "createNotebook",
+        runnerInput: { title: "My Research", alias: "my-research" },
+      });
+      expect(deps.tabManager.acquireTab).not.toHaveBeenCalled();
+      expect(deps.stateManager.addNotebook).not.toHaveBeenCalled();
+    });
+
     // -------------------------------------------------------------------
     // register_notebook
     // -------------------------------------------------------------------
