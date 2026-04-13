@@ -125,9 +125,21 @@ const runPipelineTask: TaskRunner = async (
   );
 
   // 4. Map pipeline result to scheduler result.
+  const resultPayload = result.plannerFallback
+    ? (typeof result.result === "object" && result.result !== null
+        ? {
+            ...result.result as Record<string, unknown>,
+            plannerFallback: result.plannerFallback,
+          }
+        : {
+            message: String(result.result ?? "completed"),
+            plannerFallback: result.plannerFallback,
+          })
+    : result.result as object | undefined;
+
   return {
     success: result.success,
-    result: result.result as object | undefined,
+    result: resultPayload,
     error: result.error
       ?? (result.rejected
         ? `Rejected (${result.rejectionCategory}): ${result.rejectionReason}`

@@ -50,6 +50,7 @@ describe("loadUIMap", () => {
     expect(map.elements["create_notebook"].text).toBe("新建");
     expect(map.elements).toHaveProperty("submit_button");
     expect(map.elements["submit_button"].text).toBe("提交");
+    expect(map.elements["submit_button"].match).toBe("aria-label");
   });
 
   it('loadUIMap("zh-TW") has expected selectors (answer, source_panel)', () => {

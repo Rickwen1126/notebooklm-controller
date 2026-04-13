@@ -6,7 +6,7 @@
     "paste_source_type": { "text": "Copied text" },
     "paste_textarea": { "text": "Paste text here", "match": "placeholder" },
     "insert_button": { "text": "Insert" },
-    "submit_button": { "text": "Submit", "disambiguate": "y > 400" },
+    "submit_button": { "text": "Submit", "match": "aria-label", "disambiguate": "y > 400" },
     "chat_input": { "text": "Start typing", "match": "placeholder" },
     "add_source": { "text": "Add source" },
     "collapse_source": { "text": "collapse_content" },

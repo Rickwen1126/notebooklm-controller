@@ -65,6 +65,21 @@ const AddNotebookSuccessSchema = z.object({
 });
 
 // ===========================================================================
+// register_all_notebooks
+// ===========================================================================
+
+const RegisterAllNotebooksInputSchema = z.object({
+  async: z.boolean().default(false).optional(),
+});
+
+const RegisterAllNotebooksAsyncSchema = z.object({
+  taskId: z.string().min(1),
+  status: z.literal("queued"),
+  notebook: z.literal("__homepage__"),
+  next_action: z.string().min(1),
+});
+
+// ===========================================================================
 // list_notebooks
 // ===========================================================================
 
@@ -80,6 +95,63 @@ const NotebookEntrySchema = z.object({
 });
 
 const ListNotebooksOutputSchema = z.array(NotebookEntrySchema);
+
+// ===========================================================================
+// list_notebook_index
+// ===========================================================================
+
+const CatalogRoleSchema = z.enum([
+  "canonical",
+  "reference",
+  "practice",
+  "guide",
+  "idioms",
+  "blueprint",
+  "strategy",
+  "source",
+  "core",
+  "book",
+  "implementation",
+]).nullable();
+
+const ListNotebookIndexInputSchema = z.object({
+  domain: z.string().optional(),
+  flat: z.boolean().default(false).optional(),
+});
+
+const NotebookIndexItemSchema = z.object({
+  alias: z.string(),
+  title: z.string(),
+  url: z.string(),
+  description: z.string(),
+  status: NotebookStatusSchema,
+  sourceCount: z.number(),
+  domain: z.string(),
+  topic: z.string(),
+  role: CatalogRoleSchema,
+  isDefault: z.boolean(),
+});
+
+const GroupedIndexOutputSchema = z.object({
+  mode: z.literal("grouped"),
+  total: z.number(),
+  defaultNotebook: z.string().nullable(),
+  domains: z.array(z.object({
+    domain: z.string(),
+    topics: z.array(z.object({
+      topic: z.string(),
+      canonicalAlias: z.string().nullable(),
+      notebooks: z.array(NotebookIndexItemSchema),
+    })),
+  })),
+});
+
+const FlatIndexOutputSchema = z.object({
+  mode: z.literal("flat"),
+  total: z.number(),
+  defaultNotebook: z.string().nullable(),
+  notebooks: z.array(NotebookIndexItemSchema),
+});
 
 // ===========================================================================
 // set_default
@@ -431,6 +503,40 @@ describe("register_notebook contract", () => {
   });
 });
 
+describe("register_all_notebooks contract", () => {
+  describe("input schema", () => {
+    it("accepts empty input", () => {
+      const result = RegisterAllNotebooksInputSchema.safeParse({});
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts async=true", () => {
+      const result = RegisterAllNotebooksInputSchema.safeParse({ async: true });
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe("output schema", () => {
+    it("accepts async queued output", () => {
+      const result = RegisterAllNotebooksAsyncSchema.safeParse({
+        taskId: "task-scan-001",
+        status: "queued",
+        notebook: "__homepage__",
+        next_action: "Call get_status(taskId='task-scan-001') every 15-20 seconds.",
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts standard error output", () => {
+      const result = ErrorOutputSchema.safeParse({
+        success: false,
+        error: "Task failed",
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+});
+
 // =====================================================================
 
 describe("list_notebooks contract", () => {
@@ -590,6 +696,84 @@ describe("set_default contract", () => {
       const result = ErrorOutputSchema.safeParse({
         success: false,
         error: "Notebook 'research' is not registered",
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+});
+
+// =====================================================================
+
+describe("list_notebook_index contract", () => {
+  describe("input schema", () => {
+    it("accepts empty input", () => {
+      const result = ListNotebookIndexInputSchema.safeParse({});
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts domain filter and flat mode", () => {
+      const result = ListNotebookIndexInputSchema.safeParse({
+        domain: "go",
+        flat: true,
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe("output schema", () => {
+    it("accepts grouped output", () => {
+      const result = GroupedIndexOutputSchema.safeParse({
+        mode: "grouped",
+        total: 2,
+        defaultNotebook: "go-concurrency-canonical",
+        domains: [
+          {
+            domain: "go",
+            topics: [
+              {
+                topic: "concurrency",
+                canonicalAlias: "go-concurrency-canonical",
+                notebooks: [
+                  {
+                    alias: "go-concurrency-canonical",
+                    title: "Go Concurrency",
+                    url: "https://notebooklm.google.com/notebook/abc123",
+                    description: "",
+                    status: "ready",
+                    sourceCount: 0,
+                    domain: "go",
+                    topic: "concurrency",
+                    role: "canonical",
+                    isDefault: true,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts flat output", () => {
+      const result = FlatIndexOutputSchema.safeParse({
+        mode: "flat",
+        total: 1,
+        defaultNotebook: null,
+        notebooks: [
+          {
+            alias: "ai-tool-codex-guide",
+            title: "Codex Guide",
+            url: "https://notebooklm.google.com/notebook/abc123",
+            description: "",
+            status: "ready",
+            sourceCount: 0,
+            domain: "ai-tool",
+            topic: "codex",
+            role: "guide",
+            isDefault: false,
+          },
+        ],
       });
       expect(result.success).toBe(true);
     });

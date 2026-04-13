@@ -8,6 +8,28 @@ export type NotebookStatus =
   | "error";
 
 /** A notebook entry embedded in DaemonState.notebooks. */
+export type NotebookCatalogRole =
+  | "canonical"
+  | "reference"
+  | "practice"
+  | "guide"
+  | "idioms"
+  | "blueprint"
+  | "strategy"
+  | "source"
+  | "core"
+  | "book"
+  | "implementation";
+
+export interface NotebookCatalogMetadata {
+  domain: string | null;
+  topic: string | null;
+  role: NotebookCatalogRole | null;
+  status: "keep" | "review-needed" | "deprecated" | null;
+  canonicalFor: string | null;
+  notes: string | null;
+}
+
 export interface NotebookEntry {
   alias: string;
   url: string;
@@ -19,6 +41,8 @@ export interface NotebookEntry {
   /** ISO 8601 */
   lastAccessedAt: string;
   sourceCount: number;
+  /** Optional local curation metadata for notebook catalog/index views. */
+  catalog?: NotebookCatalogMetadata;
 }
 
 /** Singleton daemon state, persisted at ~/.nbctl/state.json. */

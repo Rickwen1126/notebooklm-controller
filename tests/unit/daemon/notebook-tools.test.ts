@@ -153,17 +153,18 @@ describe("registerNotebookTools", () => {
     registerNotebookTools(server as never, deps);
   });
 
-  it("registers all 7 notebook management tools", () => {
+  it("registers all 8 notebook management tools", () => {
     expect(server.tools.has("create_notebook")).toBe(true);
     expect(server.tools.has("register_notebook")).toBe(true);
     expect(server.tools.has("register_all_notebooks")).toBe(true);
     expect(server.tools.has("list_notebooks")).toBe(true);
+    expect(server.tools.has("list_notebook_index")).toBe(true);
     expect(server.tools.has("set_default")).toBe(true);
     expect(server.tools.has("rename_notebook")).toBe(true);
     expect(server.tools.has("unregister_notebook")).toBe(true);
     expect(server.tools.has("open_notebook")).toBe(false);
     expect(server.tools.has("close_notebook")).toBe(false);
-    expect(server.registerTool).toHaveBeenCalledTimes(7);
+    expect(server.registerTool).toHaveBeenCalledTimes(8);
   });
 
   // -----------------------------------------------------------------------
@@ -211,6 +212,45 @@ describe("registerNotebookTools", () => {
       expect(deps.tabManager.acquireTab).not.toHaveBeenCalled();
       expect(deps.tabManager.releaseTab).not.toHaveBeenCalled();
       expect(deps.stateManager.addNotebook).not.toHaveBeenCalled();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // register_all_notebooks
+  // -----------------------------------------------------------------------
+
+  describe("register_all_notebooks", () => {
+    it("submits scanAllNotebooks runner and waits in sync mode", async () => {
+      const handler = server.getHandler("register_all_notebooks");
+      const result = parseResult(await handler({})) as Record<string, unknown>;
+
+      expect(deps.scheduler!.submit).toHaveBeenCalledWith({
+        notebookAlias: "__homepage__",
+        command: "register_all_notebooks",
+        runner: "scanAllNotebooks",
+      });
+      expect(deps.scheduler!.waitForTask).toHaveBeenCalledWith("task-create-001");
+      expect(result.success).toBe(true);
+    });
+
+    it("returns taskId immediately in async mode", async () => {
+      const handler = server.getHandler("register_all_notebooks");
+      const result = parseResult(
+        await handler({ async: true }),
+      ) as Record<string, unknown>;
+
+      expect(deps.scheduler!.submit).toHaveBeenCalledWith({
+        notebookAlias: "__homepage__",
+        command: "register_all_notebooks",
+        runner: "scanAllNotebooks",
+      });
+      expect(deps.scheduler!.waitForTask).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        taskId: "task-create-001",
+        status: "queued",
+        notebook: "__homepage__",
+        next_action: "Call get_status(taskId='task-create-001') every 15-20 seconds. Stop when status is 'completed' or 'failed'.",
+      });
     });
   });
 
@@ -377,6 +417,66 @@ describe("registerNotebookTools", () => {
 
     it("has readOnlyHint annotation", () => {
       const tool = server.tools.get("list_notebooks")!;
+      const options = tool.options as { annotations?: { readOnlyHint?: boolean } };
+      expect(options.annotations?.readOnlyHint).toBe(true);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // list_notebook_index
+  // -----------------------------------------------------------------------
+
+  describe("list_notebook_index", () => {
+    it("returns grouped notebook index with canonical alias per topic", async () => {
+      (deps.stateManager.load as ReturnType<typeof vi.fn>).mockResolvedValue(
+        makeState({
+          "go-concurrency-canonical": makeEntry("go-concurrency-canonical"),
+          "go-concurrency-reference": makeEntry("go-concurrency-reference"),
+          "ai-tool-codex-guide": makeEntry("ai-tool-codex-guide"),
+        }, "go-concurrency-canonical"),
+      );
+
+      const handler = server.getHandler("list_notebook_index");
+      const result = parseResult(await handler({})) as Record<string, unknown>;
+
+      expect(result.mode).toBe("grouped");
+      expect(result.total).toBe(3);
+      expect(result.defaultNotebook).toBe("go-concurrency-canonical");
+      const domains = result.domains as Array<Record<string, unknown>>;
+      expect(domains.map((d) => d.domain)).toEqual(["ai-tool", "go"]);
+
+      const goDomain = domains.find((d) => d.domain === "go")!;
+      const topics = goDomain.topics as Array<Record<string, unknown>>;
+      expect(topics).toHaveLength(1);
+      expect(topics[0].topic).toBe("concurrency");
+      expect(topics[0].canonicalAlias).toBe("go-concurrency-canonical");
+    });
+
+    it("returns flat notebook index filtered by domain", async () => {
+      (deps.stateManager.load as ReturnType<typeof vi.fn>).mockResolvedValue(
+        makeState({
+          "go-concurrency-canonical": makeEntry("go-concurrency-canonical"),
+          "go-concurrency-reference": makeEntry("go-concurrency-reference"),
+          "ai-tool-codex-guide": makeEntry("ai-tool-codex-guide"),
+        }),
+      );
+
+      const handler = server.getHandler("list_notebook_index");
+      const result = parseResult(
+        await handler({ flat: true, domain: "go" }),
+      ) as Record<string, unknown>;
+
+      expect(result.mode).toBe("flat");
+      expect(result.total).toBe(2);
+      const notebooks = result.notebooks as Array<Record<string, unknown>>;
+      expect(notebooks).toHaveLength(2);
+      expect(notebooks.every((nb) => nb.domain === "go")).toBe(true);
+      expect(notebooks[0].role).toBe("canonical");
+      expect(notebooks[1].role).toBe("reference");
+    });
+
+    it("has readOnlyHint annotation", () => {
+      const tool = server.tools.get("list_notebook_index")!;
       const options = tool.options as { annotations?: { readOnlyHint?: boolean } };
       expect(options.annotations?.readOnlyHint).toBe(true);
     });

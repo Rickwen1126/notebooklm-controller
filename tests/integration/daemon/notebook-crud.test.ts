@@ -203,12 +203,13 @@ describe("T048: Notebook CRUD integration", () => {
   // 1. All 7 notebook management tools are registered
   // -----------------------------------------------------------------------
 
-  it("registers all 7 notebook management tools", () => {
+  it("registers all 8 notebook management tools", () => {
     const expectedTools = [
       "create_notebook",
       "register_notebook",
       "register_all_notebooks",
       "list_notebooks",
+      "list_notebook_index",
       "set_default",
       "rename_notebook",
       "unregister_notebook",
@@ -220,7 +221,7 @@ describe("T048: Notebook CRUD integration", () => {
 
     expect(server.tools.has("open_notebook")).toBe(false);
     expect(server.tools.has("close_notebook")).toBe(false);
-    expect(server.registerTool).toHaveBeenCalledTimes(7);
+    expect(server.registerTool).toHaveBeenCalledTimes(8);
   });
 
   // -----------------------------------------------------------------------
@@ -248,6 +249,24 @@ describe("T048: Notebook CRUD integration", () => {
       });
       expect(deps.tabManager.acquireTab).not.toHaveBeenCalled();
       expect(deps.stateManager.addNotebook).not.toHaveBeenCalled();
+    });
+
+    it("register_all_notebooks supports async mode for large scans", async () => {
+      const handler = server.getHandler("register_all_notebooks");
+      const result = parseResult(await handler({ async: true }));
+
+      expect(result).toEqual({
+        taskId: "task-create-001",
+        status: "queued",
+        notebook: "__homepage__",
+        next_action: "Call get_status(taskId='task-create-001') every 15-20 seconds. Stop when status is 'completed' or 'failed'.",
+      });
+      expect(deps.scheduler.submit).toHaveBeenCalledWith({
+        notebookAlias: "__homepage__",
+        command: "register_all_notebooks",
+        runner: "scanAllNotebooks",
+      });
+      expect(deps.tabManager.acquireTab).not.toHaveBeenCalled();
     });
 
     // -------------------------------------------------------------------
@@ -402,6 +421,50 @@ describe("T048: Notebook CRUD integration", () => {
       const aliases = notebooks.map((n) => n.alias);
       expect(aliases).toContain("research");
       expect(aliases).toContain("ml-papers");
+    });
+
+    // -------------------------------------------------------------------
+    // list_notebook_index
+    // -------------------------------------------------------------------
+
+    it("list_notebook_index returns grouped topics and canonical aliases", async () => {
+      const addHandler = server.getHandler("register_notebook");
+      const renameHandler = server.getHandler("rename_notebook");
+      const indexHandler = server.getHandler("list_notebook_index");
+
+      await addHandler({
+        url: "https://notebooklm.google.com/notebook/abc123",
+        alias: "go-a",
+      });
+      await addHandler({
+        url: "https://notebooklm.google.com/notebook/def456",
+        alias: "go-b",
+      });
+
+      await renameHandler({
+        oldAlias: "go-a",
+        newAlias: "go-concurrency-canonical",
+      });
+      await renameHandler({
+        oldAlias: "go-b",
+        newAlias: "go-concurrency-reference",
+      });
+
+      const r = await indexHandler({});
+      const content = (r as { content: Array<{ text: string }> }).content[0].text;
+      const index = JSON.parse(content) as {
+        mode: string;
+        domains: Array<{
+          domain: string;
+          topics: Array<{ topic: string; canonicalAlias: string | null }>;
+        }>;
+      };
+
+      expect(index.mode).toBe("grouped");
+      const goDomain = index.domains.find((d) => d.domain === "go");
+      expect(goDomain).toBeDefined();
+      expect(goDomain?.topics[0].topic).toBe("concurrency");
+      expect(goDomain?.topics[0].canonicalAlias).toBe("go-concurrency-canonical");
     });
 
     // -------------------------------------------------------------------

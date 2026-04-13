@@ -132,7 +132,7 @@ export const CIRCUIT_BREAKER_THRESHOLD = 3 as const;
 // Agent model
 // ---------------------------------------------------------------------------
 
-export const PLANNER_MODEL = "gpt-4.1" as const;
+export const PLANNER_MODEL = "gpt-5-mini" as const;
 export const RECOVERY_MODEL = "gpt-5-mini" as const;
 export const DEFAULT_AGENT_MODEL = RECOVERY_MODEL;
 export const RECOVERY_TIMEOUT_MS = 120_000 as const; // 2 min

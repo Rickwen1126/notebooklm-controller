@@ -733,7 +733,7 @@ describe("runPipeline", () => {
     expect(mockRunRecoverySession).not.toHaveBeenCalled();
   });
 
-  it("planner fails → error", async () => {
+  it("planner no-plan → fallback to single query", async () => {
     // Planner doesn't call submitPlan
     mockCreateSession.mockResolvedValue({
       sessionId: "planner-session",
@@ -741,11 +741,22 @@ describe("runPipeline", () => {
       disconnect: mockDisconnect,
     });
 
-    const result = await runPipeline(makeDualOptions(), "天氣如何？");
+    mockRunScript.mockResolvedValue(makeScriptSuccess("Fallback answer"));
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain("Planner did not submit a plan");
-    expect(mockRunScript).not.toHaveBeenCalled();
+    const result = await runPipeline(makeDualOptions(), "這本 notebook 主要在講什麼？");
+
+    expect(result.success).toBe(true);
+    expect(result.result).toBe("Fallback answer");
+    expect(result.plannerFallback).toEqual({
+      strategy: "query",
+      reason: "Planner did not submit a plan — request may be outside NotebookLM scope",
+    });
+    expect(mockRunScript).toHaveBeenCalledOnce();
+    expect(mockRunScript).toHaveBeenCalledWith(
+      "query",
+      { question: "這本 notebook 主要在講什麼？" },
+      expect.any(Object),
+    );
     expect(mockRunRecoverySession).not.toHaveBeenCalled();
   });
 });

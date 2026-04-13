@@ -11,6 +11,7 @@
  * T055: unregister_notebook — remove a notebook from local registry and cache
  * T056: register_all_notebooks — scan homepage and batch-register notebooks
  * T057: create_notebook     — create a new notebook via homepage runner
+ * T058: list_notebook_index — grouped notebook catalog/index view
  */
 
 import { z } from "zod";
@@ -22,6 +23,7 @@ import type { TaskStore } from "../state/task-store.js";
 import type { CacheManager } from "../state/cache-manager.js";
 import type { NotebookEntry } from "../shared/types.js";
 import { NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
+import { buildNotebookIndex } from "../shared/notebook-index.js";
 import { normalizeUrl, generateAlias } from "../shared/notebook-utils.js";
 
 // ---------------------------------------------------------------------------
@@ -98,6 +100,7 @@ export function registerNotebookTools(
   registerAddNotebook(server, deps);
   registerAddAllNotebooks(server, deps);
   registerListNotebooks(server, deps);
+  registerListNotebookIndex(server, deps);
   registerSetDefault(server, deps);
   registerRenameNotebook(server, deps);
   registerUnregisterNotebook(server, deps);
@@ -285,9 +288,20 @@ function registerAddAllNotebooks(
         "Batch-register all notebooks in the NotebookLM account. " +
         "Scans the homepage, clicks each notebook to capture its URL, " +
         "and registers it. Skips already-registered notebooks. " +
-        "Uses per-notebook recovery on script failures.",
+        "Uses per-notebook recovery on script failures. " +
+        "Set async=true for large accounts to avoid client-side timeout; " +
+        "poll get_status(taskId) until completion.",
+      inputSchema: {
+        async: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "Return immediately with taskId instead of waiting for the full scan to complete",
+          ),
+      },
     },
-    async () => {
+    async (args: { async?: boolean }) => {
       try {
         if (!deps.scheduler || !deps.taskStore) {
           return errorResult("register_all_notebooks requires scheduler");
@@ -298,6 +312,15 @@ function registerAddAllNotebooks(
           command: "register_all_notebooks",
           runner: "scanAllNotebooks",
         });
+
+        if (args.async) {
+          return jsonResult({
+            taskId: task.taskId,
+            status: "queued",
+            notebook: "__homepage__",
+            next_action: `Call get_status(taskId='${task.taskId}') every 15-20 seconds. Stop when status is 'completed' or 'failed'.`,
+          });
+        }
 
         await deps.scheduler.waitForTask(task.taskId);
 
@@ -345,6 +368,72 @@ function registerListNotebooks(
         }));
 
         return jsonResult(notebooks);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return errorResult(message);
+      }
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// T058: list_notebook_index
+// ---------------------------------------------------------------------------
+
+function registerListNotebookIndex(
+  server: NbctlMcpServer,
+  deps: NotebookToolDeps,
+): void {
+  server.registerTool(
+    "list_notebook_index",
+    {
+      description:
+        "Return a grouped notebook catalog/index view derived from local notebook aliases " +
+        "and optional catalog metadata. Supports grouped output by default, or flat output.",
+      inputSchema: {
+        domain: z
+          .string()
+          .optional()
+          .describe("Optional domain filter, e.g. 'go', 'ai-tool', 'arch'"),
+        flat: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("When true, return a flat notebook list with domain/topic/role columns"),
+      },
+      annotations: {
+        readOnlyHint: true,
+      },
+    },
+    async (args: { domain?: string; flat?: boolean }) => {
+      try {
+        const state = await deps.stateManager.load();
+        const index = buildNotebookIndex(state.notebooks, state.defaultNotebook);
+        const filteredDomains = args.domain
+          ? index.domains.filter((group) => group.domain === args.domain)
+          : index.domains;
+
+        if (args.flat) {
+          const notebooks = filteredDomains.flatMap((domain) =>
+            domain.topics.flatMap((topic) => topic.notebooks),
+          );
+          return jsonResult({
+            mode: "flat",
+            total: notebooks.length,
+            defaultNotebook: index.defaultNotebook,
+            notebooks,
+          });
+        }
+
+        return jsonResult({
+          mode: "grouped",
+          total: filteredDomains.reduce(
+            (sum, domain) => sum + domain.topics.reduce((topicSum, topic) => topicSum + topic.notebooks.length, 0),
+            0,
+          ),
+          defaultNotebook: index.defaultNotebook,
+          domains: filteredDomains,
+        });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         return errorResult(message);

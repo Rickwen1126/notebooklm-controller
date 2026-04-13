@@ -6,7 +6,7 @@
     "paste_source_type": { "text": "複製的文字" },
     "paste_textarea": { "text": "在這裡貼上文字", "match": "placeholder" },
     "insert_button": { "text": "插入" },
-    "submit_button": { "text": "提交", "disambiguate": "y > 400" },
+    "submit_button": { "text": "提交", "match": "aria-label", "disambiguate": "y > 400" },
     "chat_input": { "text": "開始輸入", "match": "placeholder" },
     "add_source": { "text": "新增來源" },
     "collapse_source": { "text": "collapse_content" },

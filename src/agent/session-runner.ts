@@ -64,6 +64,11 @@ export interface SessionResult {
   rejectionCategory?: string;
   /** Human-readable explanation of why the input was rejected. */
   rejectionReason?: string;
+  /** Present when the Planner failed to emit a plan and the pipeline downgraded to a single query step. */
+  plannerFallback?: {
+    strategy: "query";
+    reason: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -516,25 +521,52 @@ export async function runPipeline(
 
   try {
     // 1. Planner: parse intent → ExecutionPlan or rejection.
-    const plannerResult = await runPlannerSession(options, prompt);
+    let plannerFallback: SessionResult["plannerFallback"];
+    let plan: ExecutionPlan;
+    try {
+      const plannerResult = await runPlannerSession(options, prompt);
 
-    if (plannerResult.kind === "rejected") {
-      const durationMs = Date.now() - startTime;
-      log.info("Planner rejected input", {
-        category: plannerResult.category,
-        reason: plannerResult.reason,
-        durationMs,
-      });
-      return {
-        success: false,
-        rejected: true,
-        rejectionCategory: plannerResult.category,
-        rejectionReason: plannerResult.reason,
-        durationMs,
+      if (plannerResult.kind === "rejected") {
+        const durationMs = Date.now() - startTime;
+        log.info("Planner rejected input", {
+          category: plannerResult.category,
+          reason: plannerResult.reason,
+          durationMs,
+        });
+        return {
+          success: false,
+          rejected: true,
+          rejectionCategory: plannerResult.category,
+          rejectionReason: plannerResult.reason,
+          durationMs,
+        };
+      }
+
+      plan = plannerResult.plan;
+    } catch (plannerErr: unknown) {
+      const plannerError =
+        plannerErr instanceof Error ? plannerErr.message : String(plannerErr);
+
+      if (plannerError !== "Planner did not submit a plan — request may be outside NotebookLM scope") {
+        throw plannerErr;
+      }
+
+      plannerFallback = {
+        strategy: "query",
+        reason: plannerError,
       };
+      plan = {
+        reasoning: `Planner fallback to single query. Original planner error: ${plannerError}`,
+        steps: [{ operation: "query", params: { question: prompt } }],
+      };
+
+      log.warn("Planner produced no plan, falling back to single query", {
+        notebookAlias: options.notebookAlias,
+        reason: plannerError,
+        promptLength: prompt.length,
+      });
     }
 
-    const plan = plannerResult.plan;
     const ctx = buildScriptContext(options);
 
     // 2. Execute each step: Script → (fail? Recovery) → continue.
@@ -633,6 +665,7 @@ export async function runPipeline(
       success: true,
       result: lastResult?.result,
       durationMs,
+      ...(plannerFallback ? { plannerFallback } : {}),
     };
   } catch (err: unknown) {
     const durationMs = Date.now() - startTime;
