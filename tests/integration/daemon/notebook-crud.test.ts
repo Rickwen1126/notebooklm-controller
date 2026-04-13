@@ -200,16 +200,17 @@ describe("T048: Notebook CRUD integration", () => {
   });
 
   // -----------------------------------------------------------------------
-  // 1. All 7 notebook management tools are registered
+  // 1. All notebook management tools are registered
   // -----------------------------------------------------------------------
 
-  it("registers all 8 notebook management tools", () => {
+  it("registers all 9 notebook management tools", () => {
     const expectedTools = [
       "create_notebook",
       "register_notebook",
       "register_all_notebooks",
       "list_notebooks",
       "list_notebook_index",
+      "set_notebook_catalog",
       "set_default",
       "rename_notebook",
       "unregister_notebook",
@@ -221,7 +222,7 @@ describe("T048: Notebook CRUD integration", () => {
 
     expect(server.tools.has("open_notebook")).toBe(false);
     expect(server.tools.has("close_notebook")).toBe(false);
-    expect(server.registerTool).toHaveBeenCalledTimes(8);
+    expect(server.registerTool).toHaveBeenCalledTimes(9);
   });
 
   // -----------------------------------------------------------------------
@@ -465,6 +466,69 @@ describe("T048: Notebook CRUD integration", () => {
       expect(goDomain).toBeDefined();
       expect(goDomain?.topics[0].topic).toBe("concurrency");
       expect(goDomain?.topics[0].canonicalAlias).toBe("go-concurrency-canonical");
+    });
+
+    it("set_notebook_catalog persists metadata and list_notebook_index prefers it over alias inference", async () => {
+      const addHandler = server.getHandler("register_notebook");
+      const setCatalogHandler = server.getHandler("set_notebook_catalog");
+      const indexHandler = server.getHandler("list_notebook_index");
+
+      await addHandler({
+        url: "https://notebooklm.google.com/notebook/xyz123",
+        alias: "misc-notes",
+      });
+
+      const catalogResult = parseResult(
+        await setCatalogHandler({
+          alias: "misc-notes",
+          domain: "go",
+          topic: "concurrency",
+          role: "reference",
+          status: "keep",
+          notes: "Manually curated into go/concurrency",
+        }),
+      );
+
+      expect(catalogResult).toEqual({
+        success: true,
+        alias: "misc-notes",
+        catalog: {
+          domain: "go",
+          topic: "concurrency",
+          role: "reference",
+          status: "keep",
+          canonicalFor: null,
+          notes: "Manually curated into go/concurrency",
+        },
+      });
+
+      const r = await indexHandler({ flat: true, domain: "go" });
+      const content = (r as { content: Array<{ text: string }> }).content[0].text;
+      const index = JSON.parse(content) as {
+        mode: string;
+        notebooks: Array<{
+          alias: string;
+          domain: string;
+          topic: string;
+          role: string | null;
+          catalogStatus: string | null;
+          notes: string | null;
+          catalogSource: string;
+        }>;
+      };
+
+      expect(index.mode).toBe("flat");
+      expect(index.notebooks).toEqual([
+        expect.objectContaining({
+          alias: "misc-notes",
+          domain: "go",
+          topic: "concurrency",
+          role: "reference",
+          catalogStatus: "keep",
+          notes: "Manually curated into go/concurrency",
+          catalogSource: "metadata",
+        }),
+      ]);
     });
 
     // -------------------------------------------------------------------

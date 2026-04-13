@@ -46,6 +46,10 @@ export interface NotebookIndexItem {
   domain: string;
   topic: string;
   role: NotebookCatalogRole | null;
+  catalogStatus: NotebookCatalogMetadata["status"];
+  canonicalFor: string | null;
+  notes: string | null;
+  catalogSource: "alias" | "metadata";
   isDefault: boolean;
 }
 
@@ -104,6 +108,10 @@ function getNotebookCatalog(entry: NotebookEntry): {
   domain: string;
   topic: string;
   role: NotebookCatalogRole | null;
+  catalogStatus: NotebookCatalogMetadata["status"];
+  canonicalFor: string | null;
+  notes: string | null;
+  catalogSource: "alias" | "metadata";
 } {
   const catalog = entry.catalog as NotebookCatalogMetadata | undefined;
   if (catalog?.domain || catalog?.topic || catalog?.role) {
@@ -111,9 +119,20 @@ function getNotebookCatalog(entry: NotebookEntry): {
       domain: catalog.domain ?? "uncategorized",
       topic: catalog.topic ?? catalog.domain ?? entry.alias,
       role: catalog.role ?? null,
+      catalogStatus: catalog.status ?? null,
+      canonicalFor: catalog.canonicalFor ?? null,
+      notes: catalog.notes ?? null,
+      catalogSource: "metadata",
     };
   }
-  return parseAliasCatalog(entry.alias);
+  const parsed = parseAliasCatalog(entry.alias);
+  return {
+    ...parsed,
+    catalogStatus: catalog?.status ?? null,
+    canonicalFor: catalog?.canonicalFor ?? null,
+    notes: catalog?.notes ?? null,
+    catalogSource: "alias",
+  };
 }
 
 function compareRole(a: NotebookCatalogRole | null, b: NotebookCatalogRole | null): number {
@@ -155,6 +174,10 @@ export function buildNotebookIndex(
       domain: catalog.domain,
       topic: catalog.topic,
       role: catalog.role,
+      catalogStatus: catalog.catalogStatus,
+      canonicalFor: catalog.canonicalFor,
+      notes: catalog.notes,
+      catalogSource: catalog.catalogSource,
       isDefault: entry.alias === defaultNotebook,
     };
 

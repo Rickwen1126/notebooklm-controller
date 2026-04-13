@@ -153,18 +153,19 @@ describe("registerNotebookTools", () => {
     registerNotebookTools(server as never, deps);
   });
 
-  it("registers all 8 notebook management tools", () => {
+  it("registers all 9 notebook management tools", () => {
     expect(server.tools.has("create_notebook")).toBe(true);
     expect(server.tools.has("register_notebook")).toBe(true);
     expect(server.tools.has("register_all_notebooks")).toBe(true);
     expect(server.tools.has("list_notebooks")).toBe(true);
     expect(server.tools.has("list_notebook_index")).toBe(true);
+    expect(server.tools.has("set_notebook_catalog")).toBe(true);
     expect(server.tools.has("set_default")).toBe(true);
     expect(server.tools.has("rename_notebook")).toBe(true);
     expect(server.tools.has("unregister_notebook")).toBe(true);
     expect(server.tools.has("open_notebook")).toBe(false);
     expect(server.tools.has("close_notebook")).toBe(false);
-    expect(server.registerTool).toHaveBeenCalledTimes(8);
+    expect(server.registerTool).toHaveBeenCalledTimes(9);
   });
 
   // -----------------------------------------------------------------------
@@ -479,6 +480,112 @@ describe("registerNotebookTools", () => {
       const tool = server.tools.get("list_notebook_index")!;
       const options = tool.options as { annotations?: { readOnlyHint?: boolean } };
       expect(options.annotations?.readOnlyHint).toBe(true);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // set_notebook_catalog
+  // -----------------------------------------------------------------------
+
+  describe("set_notebook_catalog", () => {
+    it("updates notebook catalog metadata", async () => {
+      (deps.stateManager.load as ReturnType<typeof vi.fn>).mockResolvedValue(
+        makeState({
+          "go-concurrency-canonical": makeEntry("go-concurrency-canonical"),
+        }),
+      );
+
+      const handler = server.getHandler("set_notebook_catalog");
+      const result = parseResult(
+        await handler({
+          alias: "go-concurrency-canonical",
+          domain: "go",
+          topic: "concurrency",
+          role: "canonical",
+          status: "keep",
+          notes: "Primary notebook for this topic",
+        }),
+      ) as Record<string, unknown>;
+
+      expect(result).toEqual({
+        success: true,
+        alias: "go-concurrency-canonical",
+        catalog: {
+          domain: "go",
+          topic: "concurrency",
+          role: "canonical",
+          status: "keep",
+          canonicalFor: null,
+          notes: "Primary notebook for this topic",
+        },
+      });
+      expect(deps.stateManager.updateNotebook).toHaveBeenCalledWith(
+        "go-concurrency-canonical",
+        {
+          catalog: {
+            domain: "go",
+            topic: "concurrency",
+            role: "canonical",
+            status: "keep",
+            canonicalFor: null,
+            notes: "Primary notebook for this topic",
+          },
+        },
+      );
+    });
+
+    it("clears catalog metadata when all fields are set to null", async () => {
+      (deps.stateManager.load as ReturnType<typeof vi.fn>).mockResolvedValue(
+        makeState({
+          "go-concurrency-canonical": makeEntry("go-concurrency-canonical", {
+            catalog: {
+              domain: "go",
+              topic: "concurrency",
+              role: "canonical",
+              status: "keep",
+              canonicalFor: null,
+              notes: "Primary notebook",
+            },
+          }),
+        }),
+      );
+
+      const handler = server.getHandler("set_notebook_catalog");
+      const result = parseResult(
+        await handler({
+          alias: "go-concurrency-canonical",
+          domain: null,
+          topic: null,
+          role: null,
+          status: null,
+          canonicalFor: null,
+          notes: null,
+        }),
+      ) as Record<string, unknown>;
+
+      expect(result).toEqual({
+        success: true,
+        alias: "go-concurrency-canonical",
+        catalog: null,
+      });
+      expect(deps.stateManager.updateNotebook).toHaveBeenCalledWith(
+        "go-concurrency-canonical",
+        { catalog: undefined },
+      );
+    });
+
+    it("rejects requests without any catalog fields", async () => {
+      (deps.stateManager.load as ReturnType<typeof vi.fn>).mockResolvedValue(
+        makeState({ research: makeEntry("research") }),
+      );
+
+      const handler = server.getHandler("set_notebook_catalog");
+      const result = parseResult(
+        await handler({ alias: "research" }),
+      ) as Record<string, unknown>;
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("At least one catalog field");
     });
   });
 

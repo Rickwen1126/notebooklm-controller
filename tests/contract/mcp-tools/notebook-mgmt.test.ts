@@ -129,6 +129,10 @@ const NotebookIndexItemSchema = z.object({
   domain: z.string(),
   topic: z.string(),
   role: CatalogRoleSchema,
+  catalogStatus: z.enum(["keep", "review-needed", "deprecated"]).nullable(),
+  canonicalFor: z.string().nullable(),
+  notes: z.string().nullable(),
+  catalogSource: z.enum(["alias", "metadata"]),
   isDefault: z.boolean(),
 });
 
@@ -151,6 +155,33 @@ const FlatIndexOutputSchema = z.object({
   total: z.number(),
   defaultNotebook: z.string().nullable(),
   notebooks: z.array(NotebookIndexItemSchema),
+});
+
+// ===========================================================================
+// set_notebook_catalog
+// ===========================================================================
+
+const SetNotebookCatalogInputSchema = z.object({
+  alias: AliasSchema,
+  domain: z.string().nullable().optional(),
+  topic: z.string().nullable().optional(),
+  role: CatalogRoleSchema.optional(),
+  status: z.enum(["keep", "review-needed", "deprecated"]).nullable().optional(),
+  canonicalFor: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+});
+
+const SetNotebookCatalogSuccessSchema = z.object({
+  success: z.literal(true),
+  alias: z.string(),
+  catalog: z.object({
+    domain: z.string().nullable(),
+    topic: z.string().nullable(),
+    role: CatalogRoleSchema,
+    status: z.enum(["keep", "review-needed", "deprecated"]).nullable(),
+    canonicalFor: z.string().nullable(),
+    notes: z.string().nullable(),
+  }).nullable(),
 });
 
 // ===========================================================================
@@ -740,12 +771,16 @@ describe("list_notebook_index contract", () => {
                     url: "https://notebooklm.google.com/notebook/abc123",
                     description: "",
                     status: "ready",
-                    sourceCount: 0,
-                    domain: "go",
-                    topic: "concurrency",
-                    role: "canonical",
-                    isDefault: true,
-                  },
+                  sourceCount: 0,
+                  domain: "go",
+                  topic: "concurrency",
+                  role: "canonical",
+                  catalogStatus: null,
+                  canonicalFor: null,
+                  notes: null,
+                  catalogSource: "alias",
+                  isDefault: true,
+                },
                 ],
               },
             ],
@@ -771,9 +806,71 @@ describe("list_notebook_index contract", () => {
             domain: "ai-tool",
             topic: "codex",
             role: "guide",
+            catalogStatus: null,
+            canonicalFor: null,
+            notes: null,
+            catalogSource: "alias",
             isDefault: false,
           },
         ],
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+});
+
+// =====================================================================
+
+describe("set_notebook_catalog contract", () => {
+  describe("input schema", () => {
+    it("accepts a metadata patch", () => {
+      const result = SetNotebookCatalogInputSchema.safeParse({
+        alias: "go-concurrency-canonical",
+        domain: "go",
+        topic: "concurrency",
+        role: "canonical",
+        status: "keep",
+        notes: "Primary notebook",
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts nulls for clearing fields", () => {
+      const result = SetNotebookCatalogInputSchema.safeParse({
+        alias: "go-concurrency-canonical",
+        domain: null,
+        topic: null,
+        role: null,
+        status: null,
+        canonicalFor: null,
+        notes: null,
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe("output schema", () => {
+    it("accepts a populated catalog response", () => {
+      const result = SetNotebookCatalogSuccessSchema.safeParse({
+        success: true,
+        alias: "go-concurrency-canonical",
+        catalog: {
+          domain: "go",
+          topic: "concurrency",
+          role: "canonical",
+          status: "keep",
+          canonicalFor: null,
+          notes: "Primary notebook",
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts a cleared catalog response", () => {
+      const result = SetNotebookCatalogSuccessSchema.safeParse({
+        success: true,
+        alias: "go-concurrency-canonical",
+        catalog: null,
       });
       expect(result.success).toBe(true);
     });

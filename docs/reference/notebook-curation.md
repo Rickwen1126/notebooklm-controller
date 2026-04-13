@@ -100,6 +100,21 @@ Recommended role markers:
 - `prompt-`: prompt / instruction / chat-mode workflow
 - `mcp-`: MCP-specific protocol or implementation references
 
+## Catalog Metadata
+
+`list_notebook_index` now supports a metadata-backed catalog layer.
+
+- Alias remains the fallback taxonomy.
+- `set_notebook_catalog` is the local mutation tool for curation metadata.
+- `list_notebook_index` prefers explicit metadata over alias inference for `domain`, `topic`, and `role`.
+- Index items expose `catalogSource` so we can see whether a grouping came from alias inference or stored metadata.
+
+Recommended migration path:
+
+1. Use alias taxonomy for fast first-pass cleanup.
+2. Add metadata when alias alone is not expressive enough.
+3. Gradually move durable `canonical/reference/practice` relationships into metadata instead of encoding everything in alias.
+
 ## Current Heuristics
 
 ### Async Scan and Inventory

@@ -1,8 +1,8 @@
 # Notebook Catalog Feature
 
 Created: 2026-04-13
-Last Updated: 2026-04-13
-Status: draft
+Last Updated: 2026-04-14
+Status: in progress
 
 ## Why This Exists
 
@@ -22,6 +22,8 @@ Right now the project has:
 - curated aliases in local `nbctl` state
 - a working curation rulebook in [notebook-curation.md](/Users/rickwen/code/notebooklm-controller/docs/reference/notebook-curation.md)
 - implicit notebook grouping encoded into alias prefixes and role markers
+- a read-only grouped index via `list_notebook_index`
+- a local metadata mutation tool via `set_notebook_catalog`
 
 This is already useful, but it has clear limits:
 - the grouping is only visible if someone manually inspects aliases
@@ -103,12 +105,21 @@ Keep it local and lightweight:
 - do not change remote NotebookLM
 - do not block existing tools if metadata is missing
 
+Status:
+- done
+
 ### Phase 2
 
 Expose read-only catalog output:
 - grouped notebook listing
 - canonical notebook per domain
 - overlap visibility
+
+Status:
+- partially done through `list_notebook_index`
+- currently grouped by `domain -> topic -> notebooks`
+- currently derives canonical notebook from `role=canonical`, else `role=core`
+- now exposes `catalogSource` so alias-inferred vs metadata-backed grouping is visible
 
 ### Phase 3
 
@@ -117,6 +128,10 @@ Add mutation tools:
 - set notebook domain
 - set canonical notebook
 - attach local notes
+
+Status:
+- first mutation tool done: `set_notebook_catalog`
+- still missing bulk operations, promotion helpers, and higher-level curation flows
 
 ## Important Design Constraint
 

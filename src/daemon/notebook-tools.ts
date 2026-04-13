@@ -12,6 +12,7 @@
  * T056: register_all_notebooks — scan homepage and batch-register notebooks
  * T057: create_notebook     — create a new notebook via homepage runner
  * T058: list_notebook_index — grouped notebook catalog/index view
+ * T059: set_notebook_catalog — persist local notebook catalog metadata
  */
 
 import { z } from "zod";
@@ -21,7 +22,11 @@ import type { TabManager } from "../tab-manager/tab-manager.js";
 import type { StateManager } from "../state/state-manager.js";
 import type { TaskStore } from "../state/task-store.js";
 import type { CacheManager } from "../state/cache-manager.js";
-import type { NotebookEntry } from "../shared/types.js";
+import type {
+  NotebookCatalogMetadata,
+  NotebookCatalogRole,
+  NotebookEntry,
+} from "../shared/types.js";
 import { NOTEBOOKLM_HOMEPAGE } from "../shared/config.js";
 import { buildNotebookIndex } from "../shared/notebook-index.js";
 import { normalizeUrl, generateAlias } from "../shared/notebook-utils.js";
@@ -38,6 +43,24 @@ const NOTEBOOK_URL_PREFIX = `${NOTEBOOKLM_HOMEPAGE}/notebook/`;
  * - 1 char: single [a-z0-9]
  */
 const ALIAS_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?$/;
+const CATALOG_ROLES = [
+  "canonical",
+  "reference",
+  "practice",
+  "guide",
+  "idioms",
+  "blueprint",
+  "strategy",
+  "source",
+  "core",
+  "book",
+  "implementation",
+] as const satisfies readonly NotebookCatalogRole[];
+const CATALOG_STATUSES = [
+  "keep",
+  "review-needed",
+  "deprecated",
+] as const satisfies readonly NonNullable<NotebookCatalogMetadata["status"]>[];
 
 // ---------------------------------------------------------------------------
 // Types
@@ -101,6 +124,7 @@ export function registerNotebookTools(
   registerAddAllNotebooks(server, deps);
   registerListNotebooks(server, deps);
   registerListNotebookIndex(server, deps);
+  registerSetNotebookCatalog(server, deps);
   registerSetDefault(server, deps);
   registerRenameNotebook(server, deps);
   registerUnregisterNotebook(server, deps);
@@ -433,6 +457,125 @@ function registerListNotebookIndex(
           ),
           defaultNotebook: index.defaultNotebook,
           domains: filteredDomains,
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return errorResult(message);
+      }
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// T059: set_notebook_catalog
+// ---------------------------------------------------------------------------
+
+function registerSetNotebookCatalog(
+  server: NbctlMcpServer,
+  deps: NotebookToolDeps,
+): void {
+  server.registerTool(
+    "set_notebook_catalog",
+    {
+      description:
+        "Update local notebook catalog metadata for a single notebook. " +
+        "This only affects local curation/index views and does not modify the remote NotebookLM notebook.",
+      inputSchema: {
+        alias: z
+          .string()
+          .describe("Alias of the notebook to update"),
+        domain: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("Logical catalog domain, e.g. 'go', 'arch', 'ai-tool'. Use null to clear."),
+        topic: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("Catalog topic within the domain. Use null to clear."),
+        role: z
+          .enum(CATALOG_ROLES)
+          .nullable()
+          .optional()
+          .describe("Notebook role inside its topic group. Use null to clear."),
+        status: z
+          .enum(CATALOG_STATUSES)
+          .nullable()
+          .optional()
+          .describe("Local curation status. Use null to clear."),
+        canonicalFor: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("Optional human-readable note for what this notebook is canonical for. Use null to clear."),
+        notes: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("Optional local notes for future curation. Use null to clear."),
+      },
+    },
+    async (
+      args: {
+        alias?: string;
+        domain?: string | null;
+        topic?: string | null;
+        role?: NotebookCatalogRole | null;
+        status?: NotebookCatalogMetadata["status"];
+        canonicalFor?: string | null;
+        notes?: string | null;
+      },
+    ) => {
+      try {
+        const alias = args.alias ?? "";
+        if (!alias) {
+          return errorResult("'alias' parameter is required");
+        }
+
+        const state = await deps.stateManager.load();
+        const existing = state.notebooks[alias];
+        if (!existing) {
+          return errorResult(`Notebook not found: "${alias}"`);
+        }
+
+        const hasPatch =
+          args.domain !== undefined ||
+          args.topic !== undefined ||
+          args.role !== undefined ||
+          args.status !== undefined ||
+          args.canonicalFor !== undefined ||
+          args.notes !== undefined;
+        if (!hasPatch) {
+          return errorResult(
+            "At least one catalog field must be provided: domain, topic, role, status, canonicalFor, or notes",
+          );
+        }
+
+        const nextCatalog: NotebookCatalogMetadata = {
+          domain: existing.catalog?.domain ?? null,
+          topic: existing.catalog?.topic ?? null,
+          role: existing.catalog?.role ?? null,
+          status: existing.catalog?.status ?? null,
+          canonicalFor: existing.catalog?.canonicalFor ?? null,
+          notes: existing.catalog?.notes ?? null,
+        };
+
+        if (args.domain !== undefined) nextCatalog.domain = args.domain;
+        if (args.topic !== undefined) nextCatalog.topic = args.topic;
+        if (args.role !== undefined) nextCatalog.role = args.role;
+        if (args.status !== undefined) nextCatalog.status = args.status;
+        if (args.canonicalFor !== undefined) nextCatalog.canonicalFor = args.canonicalFor;
+        if (args.notes !== undefined) nextCatalog.notes = args.notes;
+
+        const hasCatalogValue = Object.values(nextCatalog).some((value) => value !== null);
+        const catalog = hasCatalogValue ? nextCatalog : undefined;
+        await deps.stateManager.updateNotebook(alias, { catalog });
+
+        return jsonResult({
+          success: true,
+          alias,
+          catalog: catalog ?? null,
         });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
