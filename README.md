@@ -49,7 +49,7 @@ npm run build
 For the first login, start the daemon in headed mode:
 
 ```bash
-npx tsx src/daemon/launcher.ts --no-headless
+npm run daemon:headed
 ```
 
 Then:
@@ -60,7 +60,7 @@ Then:
 4. Restart it in the default headless mode:
 
 ```bash
-npx tsx src/daemon/launcher.ts
+npm run daemon
 ```
 
 If your Google session expires later, use `reauth`:
@@ -90,6 +90,11 @@ The daemon must already be running before your MCP client connects.
 2. Bring notebooks under management.
 3. Optionally set a default notebook.
 4. Use `exec` for day-to-day work.
+
+Recommended commands:
+
+- `npm run daemon`
+- `npm run daemon:headed`
 
 Bring notebooks under management in one of these ways:
 

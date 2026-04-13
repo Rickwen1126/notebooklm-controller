@@ -12,7 +12,9 @@
   "scripts": {
     "build": "tsc && cp -r src/config dist/config 2>/dev/null || true",
     "dev": "tsc --watch",
-    "start": "npx tsx dist/daemon/launcher.js",
+    "daemon": "node --import tsx src/daemon/launcher.ts",
+    "daemon:headed": "node --import tsx src/daemon/launcher.ts --no-headless",
+    "start": "npm run daemon",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run --project unit",
@@ -47,6 +49,7 @@
     "@typescript-eslint/parser": "^8.57.0",
     "eslint": "^10.0.3",
     "prettier": "^3.8.1",
+    "tsx": "^4.21.0",
     "typescript": "~5.8",
     "vitest": "^4.0.18"
   }
