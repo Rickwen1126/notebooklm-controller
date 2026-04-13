@@ -1,73 +1,76 @@
 # notebooklm-controller
 
-MCP Server for automating Google NotebookLM via Chrome. Feed repos, URLs, and PDFs as knowledge sources, then query them — all from your AI coding tool.
+`notebooklm-controller` is an MCP daemon for operating Google NotebookLM through Chrome automation.
 
-## What It Does
+It exposes notebook management and natural-language execution tools over MCP, so an AI coding client can:
 
-Your AI tool (Claude Code, etc.) connects to this daemon via MCP protocol and can:
+- bring existing NotebookLM notebooks under management,
+- create new notebooks,
+- add sources from repos, URLs, PDFs, or plain text,
+- query NotebookLM and inspect notebook state,
+- run long operations asynchronously.
 
-- **Add sources** — paste text, import git repos (via repomix), crawl URLs, convert PDFs. Large content auto-splits into multiple sources.
-- **Query notebooks** — ask questions grounded in your uploaded sources (no hallucination).
-- **Manage notebooks** — create, rename, delete, list. Multi-notebook parallel operations.
-- **Async operations** — submit long tasks, poll for completion, cancel if needed.
+Current status: usable MVP for day-to-day NotebookLM workflows. Some advanced capabilities are still incomplete.
 
-All through natural language: `"把 ~/code/my-project 加入 NotebookLM 來源"` → Planner selects operation → deterministic script executes.
+## What is this
 
-## Architecture
+This project runs a local daemon that launches Chrome, connects to NotebookLM, and exposes MCP tools at `http://127.0.0.1:19224/mcp`.
 
-```
-User NL prompt
-    ↓
-Planner LLM (gpt-4.1) — selects operation + params
-    ↓
-Deterministic Script — DOM automation via CDP (0 LLM cost)
-    ├── success → return result
-    └── failure ↓
-        Recovery LLM (gpt-5-mini) — completes task from current state
-            ├── success → return result + save repair log
-            └── analysis → UIMap patch suggestion (self-healing)
-                           saved to ~/.nbctl/repair-logs/
-```
+The public API is MCP-first:
 
-**G2 Script-first**: happy path uses zero LLM tokens for execution. Scripts handle all 10 NotebookLM operations (query, addSource, listSources, removeSource, renameSource, clearChat, listNotebooks, createNotebook, renameNotebook, deleteNotebook).
+- notebook management tools such as `register_all_notebooks` and `create_notebook`,
+- `exec` for natural-language operations,
+- task/status tools such as `get_status` and `cancel_task`.
 
-### Modules
+Internally, execution follows:
 
-| Module | Responsibility |
-|--------|---------------|
-| `daemon/` | MCP Server (Streamable HTTP), scheduler, task management |
-| `tab-manager/` | Chrome tab pool (max 10), CDP session management |
-| `scripts/` | 10 deterministic DOM operations + wait primitives |
-| `agent/` | Planner session, Recovery session, repair log |
-| `content/` | repo→text (repomix), URL→text (readability), PDF→text |
-| `network-gate/` | Rate limit protection (permit-based backoff) |
-| `state/` | JSON persistence (~/.nbctl/), cache, task store |
+`MCP tool -> Scheduler -> dispatcher -> runner -> deterministic script -> recovery on failure`
 
-## Quick Start
+The happy path is deterministic browser automation. Recovery LLM is fallback-only.
+
+## How to use
 
 ### Prerequisites
 
-- Node.js 22 LTS
-- Google Chrome installed
-- GitHub Copilot license (required for `@github/copilot-sdk` — the Planner and Recovery LLM sessions run through Copilot's agent runtime)
+- Node.js 22+
+- Google Chrome installed locally
+- A usable GitHub Copilot account for `@github/copilot-sdk`
 - A Google account with access to [NotebookLM](https://notebooklm.google.com)
 
-### Setup
+### Install
 
 ```bash
-# Install
 npm install
+npm run build
+```
 
-# First run — opens Chrome for Google login
-npx tsx src/daemon/launcher.ts
+### First run
 
-# Complete Google login in the Chrome window, then restart headless
+For the first login, start the daemon in headed mode:
+
+```bash
+npx tsx src/daemon/launcher.ts --no-headless
+```
+
+Then:
+
+1. Complete Google / NotebookLM login in the Chrome window.
+2. Confirm you can access NotebookLM normally.
+3. Stop the daemon.
+4. Restart it in the default headless mode:
+
+```bash
 npx tsx src/daemon/launcher.ts
 ```
 
-### Connect from Claude Code
+If your Google session expires later, use `reauth`:
 
-Add to your project's `.mcp.json`:
+- `reauth(headless=false)` to switch to headed mode and log in again
+- `reauth(headless=true)` to switch back to headless mode
+
+### Connect your MCP client
+
+Add this MCP server to your client configuration:
 
 ```json
 {
@@ -79,72 +82,134 @@ Add to your project's `.mcp.json`:
 }
 ```
 
-Then use natural language: `"把 ~/code/my-project 加入 NotebookLM 來源"`
+The daemon must already be running before your MCP client connects.
 
-### MCP Tools
+### Basic workflow
+
+1. Start the daemon.
+2. Bring notebooks under management.
+3. Optionally set a default notebook.
+4. Use `exec` for day-to-day work.
+
+Bring notebooks under management in one of these ways:
+
+- `register_all_notebooks` scans existing notebooks from your NotebookLM account.
+- `register_notebook` registers a notebook when you already know its URL.
+- `create_notebook` creates and registers a new notebook.
+
+If you already use NotebookLM, start with `register_all_notebooks`.
+
+### Minimal examples
+
+Scan existing notebooks:
+
+- `register_all_notebooks`
+
+Create a notebook:
+
+- `create_notebook(title="My Research", alias="my-research")`
+
+Set a default notebook:
+
+- `set_default(alias="my-research")`
+
+Use `exec` for daily work:
+
+- `exec(prompt="把 ~/code/my-project 加入來源")`
+- `exec(prompt="這個專案的認證流程是什麼？")`
+
+Exact tool-call syntax depends on your MCP client, but the tool names and parameters are the same.
+
+## MCP tools
+
+### Notebook management
 
 | Tool | Description |
 |------|-------------|
-| `exec` | Execute NL command (query, add source, etc.) |
-| `list_notebooks` | List registered notebooks |
-| `register_notebook` | Register existing NotebookLM notebook by URL |
-| `set_default` | Set default notebook |
-| `get_status` | Daemon + task status |
-| `cancel_task` | Cancel async task |
-| `list_agents` | List available scripted operations |
+| `create_notebook` | Create a new NotebookLM notebook, register it locally, and return its alias, URL, and title. |
+| `register_notebook` | Register an existing NotebookLM notebook by URL. |
+| `register_all_notebooks` | Scan the NotebookLM homepage and batch-register notebooks from your account. |
+| `list_notebooks` | List all locally registered notebooks. |
+| `set_default` | Set the default notebook alias used by `exec` when `notebook` is omitted. |
+| `rename_notebook` | Rename a local notebook alias. |
+| `unregister_notebook` | Remove a notebook from local registry and cache without deleting the remote notebook. |
 
-## Design Decisions
+### Execution and tasks
 
-1. **Script-first, not Agent-first** — deterministic scripts for happy path (15-20s per query vs 70s with LLM executor). LLM only recovers failures and produces repair logs for self-healing.
+| Tool | Description |
+|------|-------------|
+| `exec` | Execute a natural-language instruction against a notebook. |
+| `get_status` | Show daemon health, queue state, active notebooks, or inspect a specific task. |
+| `cancel_task` | Cancel a queued or running task. |
 
-2. **Viewport is a contract** — 1920x1080. All scripts tested at this resolution. Changing it breaks coordinate-based interactions.
+### Session and discovery
 
-3. **UIMap i18n** — all UI text from locale JSON files (`src/config/ui-maps/`). Supports zh-TW, zh-CN, en. No hardcoded strings in scripts.
+| Tool | Description |
+|------|-------------|
+| `reauth` | Switch Chrome to headed mode for Google re-authentication, then back to headless mode. |
+| `list_agents` | Legacy tool name. Returns the scripted operation catalog used behind `exec`. |
 
-4. **Content auto-split** — sources > 100K chars split into multiple chunks, each pasted as separate source with auto-naming (`"my-project (repo) (part 1/20)"`).
+## Architecture
+
+Current execution chain:
+
+`MCP tool` -> `Scheduler` -> `createRunTask()` dispatcher -> `TaskRunner` -> deterministic script -> `runRecoverySession()` on failure
+
+Key modules:
+
+| Module | Responsibility |
+|--------|---------------|
+| `daemon/` | MCP server, scheduler, dispatcher, tool registration |
+| `tab-manager/` | Single Chrome multi-tab management and CDP sessions |
+| `agent/` | Pipeline runner, specialized runners, recovery session, repair logs |
+| `scripts/` | Deterministic DOM operations and wait primitives |
+| `content/` | repo / URL / PDF to NotebookLM-ready text |
+| `state/` | JSON persistence under `~/.nbctl/` |
+| `network-gate/` | Rate-limit / backoff protection |
+
+Happy path = deterministic execution. Recovery is failure-only.
+
+## Limitations
+
+- Viewport is a contract: scripts are tested at `1920x1080`.
+- Recovery is fallback, not the primary execution path.
+- Google login and a usable local Chrome session are required.
+- Some capabilities are still incomplete:
+  - audio generation / download workflows
+  - query-result export to files
+  - smart notebook selection
 
 ## Testing
 
 ```bash
-# Unit + integration tests (45 files, 688 test cases)
+npm run build
 npm test
-
-# Lint
 npm run lint
+```
 
-# E2E against live daemon (requires Chrome + Google login)
-# Uses ISO Browser for independent DOM verification
+For live verification against NotebookLM:
+
+```bash
 /test-real
 ```
 
-| Layer | Where | When |
-|-------|-------|------|
-| `npm test` + lint | GitHub Actions CI | Every push/PR |
-| `/test-real` (8-phase E2E) | Local | Core changes + before release |
+Use `/test-real` before release or after changing scripts, runners, dispatcher wiring, or UI-sensitive flows.
 
-## Tech Stack
+## Runtime data
 
-TypeScript 5.x, Node.js 22 LTS, @github/copilot-sdk, puppeteer-core (CDP), @modelcontextprotocol/sdk, repomix, zod, Vitest
-
-## Runtime Data
-
-All persistent data lives in `~/.nbctl/` (outside the repo):
+All persistent runtime data lives in `~/.nbctl/`:
 
 | Path | Purpose |
 |------|---------|
-| `state.json` | Daemon state, registered notebooks |
-| `config.json` | User config (locale override) |
+| `state.json` | Daemon state and registered notebooks |
+| `config.json` | User config (for example locale override) |
 | `tasks/` | Async task records |
-| `cache/<alias>/` | Per-notebook sources, artifacts, operation logs |
-| `screenshots/` | Operation screenshots (auto-cleanup, 200 max) |
-| `repair-logs/` | Recovery failure analysis + UIMap patch suggestions |
-| `ui-maps/` | User UIMap overrides (repair agent editable) |
-| `tmp/` | Content pipeline temp files (auto-cleaned) |
-| `chrome-profile/` | Chrome session (Google login cookies) |
-
-## Roadmap
-
-**Self-repair CLI** (`nbctl repair`) — When Recovery Agent fails, it produces a repair log with root cause analysis and a `suggestedPatch`. The CLI reads these logs and auto-patches the failing script, hot-swapping the happy path. Feasible because scripts use ctx injection (zero imports) and can be replaced at runtime. Intentionally not an MCP tool — modifying happy path scripts requires human-in-the-loop.
+| `cache/<alias>/` | Per-notebook sources, artifacts, and operation logs |
+| `screenshots/` | Operation screenshots |
+| `repair-logs/` | Recovery analysis and suggested fixes |
+| `ui-maps/` | User UI-map overrides |
+| `tmp/` | Content-pipeline temp files |
+| `chrome-profile/` | Chrome profile and Google login session |
 
 ## License
 
