@@ -123,6 +123,12 @@ Use `exec` for daily work:
 - `exec(prompt="把 ~/code/my-project 加入來源")`
 - `exec(prompt="這個專案的認證流程是什麼？")`
 
+Curate your local notebook catalog:
+
+- `list_notebook_index()`
+- `list_notebook_index(flat=true, domain="go")`
+- `set_notebook_catalog(alias="go-concurrency-canonical", domain="go", topic="concurrency", role="canonical", status="keep")`
+
 Exact tool-call syntax depends on your MCP client, but the tool names and parameters are the same.
 
 ## MCP tools
@@ -135,6 +141,8 @@ Exact tool-call syntax depends on your MCP client, but the tool names and parame
 | `register_notebook` | Register an existing NotebookLM notebook by URL. |
 | `register_all_notebooks` | Scan the NotebookLM homepage and batch-register notebooks from your account. |
 | `list_notebooks` | List all locally registered notebooks. |
+| `list_notebook_index` | Return a grouped or flat local notebook index derived from alias taxonomy and optional catalog metadata. |
+| `set_notebook_catalog` | Update local catalog metadata such as `domain`, `topic`, `role`, `status`, and `notes` for one notebook. |
 | `set_default` | Set the default notebook alias used by `exec` when `notebook` is omitted. |
 | `rename_notebook` | Rename a local notebook alias. |
 | `unregister_notebook` | Remove a notebook from local registry and cache without deleting the remote notebook. |
