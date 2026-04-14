@@ -129,6 +129,14 @@ Curate your local notebook catalog:
 - `list_notebook_index(flat=true, domain="go")`
 - `set_notebook_catalog(alias="go-concurrency-canonical", domain="go", topic="concurrency", role="canonical", status="keep")`
 
+Catalog status meanings:
+
+- `keep`: confirmed member of the curated working set
+- `review-needed`: useful candidate, but classification or overlap still needs follow-up
+- `deprecated`: still registered locally, but no longer preferred for active use
+
+For the full curation model and alias/catalog guidance, see [notebook-curation.md](/Users/rickwen/code/notebooklm-controller/docs/reference/notebook-curation.md).
+
 Exact tool-call syntax depends on your MCP client, but the tool names and parameters are the same.
 
 ## MCP tools
@@ -142,7 +150,7 @@ Exact tool-call syntax depends on your MCP client, but the tool names and parame
 | `register_all_notebooks` | Scan the NotebookLM homepage and batch-register notebooks from your account. |
 | `list_notebooks` | List all locally registered notebooks. |
 | `list_notebook_index` | Return a grouped or flat local notebook index derived from alias taxonomy and optional catalog metadata. |
-| `set_notebook_catalog` | Update local catalog metadata such as `domain`, `topic`, `role`, `status`, and `notes` for one notebook. |
+| `set_notebook_catalog` | Update local catalog metadata such as `domain`, `topic`, `role`, `status`, and `notes` for one notebook. Status values are `keep`, `review-needed`, and `deprecated`. |
 | `set_default` | Set the default notebook alias used by `exec` when `notebook` is omitted. |
 | `rename_notebook` | Rename a local notebook alias. |
 | `unregister_notebook` | Remove a notebook from local registry and cache without deleting the remote notebook. |

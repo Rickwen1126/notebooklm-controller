@@ -479,7 +479,10 @@ function registerSetNotebookCatalog(
     {
       description:
         "Update local notebook catalog metadata for a single notebook. " +
-        "This only affects local curation/index views and does not modify the remote NotebookLM notebook.",
+        "This only affects local curation/index views and does not modify the remote NotebookLM notebook. " +
+        "Catalog status meanings: keep = confirmed member of the working set, " +
+        "review-needed = needs follow-up before final placement, " +
+        "deprecated = still registered locally but no longer preferred.",
       inputSchema: {
         alias: z
           .string()
@@ -503,7 +506,9 @@ function registerSetNotebookCatalog(
           .enum(CATALOG_STATUSES)
           .nullable()
           .optional()
-          .describe("Local curation status. Use null to clear."),
+          .describe(
+            "Local curation status: keep, review-needed, or deprecated. Use null to clear.",
+          ),
         canonicalFor: z
           .string()
           .nullable()
